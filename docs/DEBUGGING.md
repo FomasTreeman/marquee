@@ -79,6 +79,12 @@ Three real bugs so far, and all three were silent:
 3. Pooled grid slots were created without being parked, so ~48 empty cards sat
    stacked at 0,0 on top of the first card. This one was looked at directly,
    in three separate screenshots, and misread as an artwork bug every time.
+4. With exactly one game, the initial selection was never announced. `focus(0)`
+   returns early when the index has not changed, and the nudge that worked
+   around it (`move(1,0)` then `move(-1,0)`) clamps straight back to 0 in a
+   one-item library. The hero and backdrop stayed empty. Every test until then
+   had used forty mock games, so the case never arose — **the library size the
+   developer's machine actually has was the one size never tested.**
 
 Nothing throws in any of these, so nothing logs. The only conventional way to
 find them is for a human to look at the screen and correctly interpret what
@@ -88,6 +94,10 @@ So `src/selfcheck.ts` asserts the invariants that would have failed, and it
 **hit-tests what is actually painted** rather than trusting the DOM:
 
 - Cover art is the topmost thing at its own centre.
+- The first card, the hero and the top bar share a left edge — the design's
+  most load-bearing rule, and the one a report like "the card is halfway down
+  on the right" is describing.
+- The hero identifies the selected game and shows its facts. Bug 4, asserted.
 - The focused card has a visible ring, and no ancestor has paint containment
   that would clip it.
 - The shell's four bands are laid out with non-zero height.

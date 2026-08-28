@@ -172,7 +172,9 @@ async function main(): Promise<void> {
     art: art[i]?.cover,
   }))
 
-  shell.count.textContent = games.length ? `${games.length} games` : ''
+  shell.count.textContent = games.length
+    ? `${games.length} ${games.length === 1 ? 'game' : 'games'}`
+    : ''
 
   const grid = createGrid(shell.gridViewport, (index) => {
     const game = games[index]
@@ -187,6 +189,9 @@ async function main(): Promise<void> {
     if (logo && shell.heroLogo.getAttribute('src') !== logo) {
       shell.heroLogo.src = logo
       shell.heroLogo.onerror = () => {
+        // Falling back to type is correct; doing it silently is not, because
+        // it looks identical to a game that simply has no wordmark.
+        logWarn('art', `hero logo failed for ${game.title}`, logo)
         shell.heroLogo.hidden = true
         shell.heroTitle.hidden = false
       }
@@ -210,12 +215,9 @@ async function main(): Promise<void> {
   if (!games.length) {
     renderEmpty(shell.gridViewport, scan)
   } else {
+    // setItems announces the initial selection itself, so the hero and the
+    // backdrop populate on load without nudging focus back and forth.
     grid.setItems(items)
-    grid.focus(0)
-    // setItems clamps rather than moving, so the first selection has to be
-    // announced explicitly for the hero to populate on load.
-    grid.move(1, 0)
-    grid.move(-1, 0)
   }
 
   const NAV: Partial<Record<Action, [number, number]>> = {

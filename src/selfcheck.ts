@@ -127,6 +127,43 @@ export function runSelfCheck(): Check[] {
     ),
   )
 
+  // --- the design's alignment invariants ------------------------------
+  // The hero, the top bar and the first card share a left edge. That is the
+  // single most load-bearing rule in the design -- it took many iterations to
+  // get right in the Playnite theme -- and it is exactly the kind of thing a
+  // description like "the card is halfway down on the right" is reporting.
+  const firstCard = document.querySelector<HTMLElement>('.card[data-focus="1"]')
+    ?? document.querySelector<HTMLElement>('.card')
+  const heroInner = document.querySelector<HTMLElement>('.hero-inner')
+  const brand = document.querySelector<HTMLElement>('.brand')
+  if (firstCard && heroInner && brand && firstCard.style.visibility !== 'hidden') {
+    const card = firstCard.getBoundingClientRect()
+    const hero = heroInner.getBoundingClientRect()
+    const bar = brand.getBoundingClientRect()
+    out.push(check('first card aligns with the hero', Math.abs(card.left - hero.left) <= 2,
+      `card ${Math.round(card.left)} vs hero ${Math.round(hero.left)}`))
+    out.push(check('hero aligns with the top bar', Math.abs(hero.left - bar.left) <= 2,
+      `hero ${Math.round(hero.left)} vs bar ${Math.round(bar.left)}`))
+    out.push(check('first card is on screen', card.top >= 0 && card.bottom <= window.innerHeight + 1,
+      `top ${Math.round(card.top)} bottom ${Math.round(card.bottom)} of ${window.innerHeight}`))
+  }
+
+  // --- the hero actually says something --------------------------------
+  // With one game in the library the initial selection was never announced,
+  // so the hero stayed empty and the screen was black but for a lone card.
+  // Nothing errored. This is that bug, as an assertion.
+  const logo = document.querySelector<HTMLImageElement>('.hero-logo')
+  const heroTitle = document.querySelector<HTMLElement>('.hero-title')
+  const heroMeta = document.querySelector<HTMLElement>('.hero-meta')
+  if (document.querySelector('.card')) {
+    const hasLogo = !!logo && !logo.hidden && logo.naturalWidth > 0
+    const hasTitle = !!heroTitle && !heroTitle.hidden && (heroTitle.textContent ?? '').trim().length > 0
+    out.push(check('hero identifies the selected game', hasLogo || hasTitle,
+      `logo=${hasLogo} title=${hasTitle}`))
+    out.push(check('hero shows facts', (heroMeta?.childElementCount ?? 0) > 0,
+      `${heroMeta?.childElementCount ?? 0} facts`))
+  }
+
   // --- the shell is present -------------------------------------------
   for (const sel of ['.topbar', '.hero', '.grid-viewport', '.hints']) {
     const el = document.querySelector(sel)

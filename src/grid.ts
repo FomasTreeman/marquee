@@ -1,3 +1,5 @@
+import { logWarn } from './log'
+
 /**
  * Virtualised cover grid.
  *
@@ -42,6 +44,22 @@ interface Slot {
 }
 
 const OVERSCAN_ROWS = 2
+
+/** Artwork failures are summarised rather than logged one per card: a blocked
+ *  host would otherwise write one line per visible cover, every scroll. */
+let artFailures = 0
+let artReportTimer: number | undefined
+let firstArtFailure = ''
+
+function reportArtFailure(url: string): void {
+  if (!artFailures) firstArtFailure = url
+  artFailures++
+  window.clearTimeout(artReportTimer)
+  artReportTimer = window.setTimeout(() => {
+    logWarn('art', `${artFailures} cover image(s) failed to load`, firstArtFailure)
+    artFailures = 0
+  }, 1000)
+}
 
 export interface Grid {
   setItems(items: GridItem[]): void
@@ -113,8 +131,13 @@ export function createGrid(
     img.decoding = 'async'
     img.draggable = false
     // Not every appid has every asset on the CDN. A missing cover reveals the
-    // tinted fallback underneath rather than a broken image frame.
-    img.addEventListener('error', () => { img.style.display = 'none' })
+    // tinted fallback underneath rather than a broken image frame -- but it is
+    // reported, because a *silently* missing cover is indistinguishable from a
+    // CSP rule quietly blocking every image in the library.
+    img.addEventListener('error', () => {
+      img.style.display = 'none'
+      reportArtFailure(img.getAttribute('src') ?? '(no src)')
+    })
     const fallback = document.createElement('div')
     fallback.className = 'card-fallback'
     const ring = document.createElement('div')
@@ -244,8 +267,24 @@ export function createGrid(
     onFocusChange?.(focused, items[focused])
   }
 
+  /** Announce the current selection unconditionally.
+   *
+   *  setFocus() returns early when the index has not changed, which is right
+   *  for navigation and wrong for the initial selection -- and catastrophically
+   *  wrong for a one-game library, where every move clamps back to 0 and the
+   *  hero was therefore never populated at all. The initial announcement is a
+   *  separate concern from a focus *change*, so it gets its own path. */
+  function announce(): void {
+    onFocusChange?.(focused, items[focused])
+  }
+
   return {
-    setItems(next) { items = next; focused = Math.min(focused, next.length - 1); layout() },
+    setItems(next) {
+      items = next
+      focused = Math.max(0, Math.min(focused, next.length - 1))
+      layout()
+      if (next.length) announce()
+    },
     focus(i) { setFocus(i) },
     move(dx, dy) { setFocus(focused + dx + dy * cols) },
     get focused() { return focused },
