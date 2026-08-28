@@ -61,6 +61,36 @@ between a year and a decade.
 
 Nothing occupies the top-right of that table. That is the whole thesis.
 
+### The reference is Playnite
+
+Playnite is the thing to beat, and it is worth being precise about why, because
+"build a better Playnite" is otherwise just enthusiasm.
+
+**What it got right, and we should copy without ego:**
+
+- One library across every store, with the store as an implementation detail
+  rather than a top-level concept the user has to navigate.
+- Clean separation of scanned data from user data — playtime, favourites and
+  categories survive a store client being uninstalled.
+- A metadata flow built around *search and pick* rather than *guess and hope*.
+- Filters, categories, tags and completion status that are actually used.
+- A fullscreen mode designed for a pad, not a desktop mode with bigger buttons.
+- Emulator support that does not feel bolted on.
+
+**Where it leaves room, which is the entire reason this exists:**
+
+- **Theming.** WPF resource dictionaries mean overriding a key replaces the
+  whole style including its template, one malformed file silently drops the
+  entire theme to default, storyboards cannot resolve dynamic resources, and
+  there is no letter-spacing and no saturation filter in the platform at all.
+  Two sibling repositories document this in detail; it is the reason for CSS.
+- **Weight.** A .NET desktop stack idling in the background of a television.
+- **Windows only**, which rules out handhelds and the machine this is being
+  written on.
+
+So: the same library model, a fraction of the footprint, and an interface that
+can be changed by editing a stylesheet.
+
 ## 2. The priorities, made numeric
 
 Vague priorities lose arguments to whoever speaks last. These are the budgets.
@@ -230,7 +260,7 @@ carelessly. Non-negotiable rules:
 ---
 
 ## 5. The library problem
-### Steam is automated. Everything else is a path to an executable.
+### Steam is automated. Everything else is a name you type.
 
 Two providers, and only two:
 
@@ -244,55 +274,65 @@ trait LibraryProvider {
 ```
 
 **Steam** reads `steamapps/libraryfolders.vdf` for the library roots, then
-`appmanifest_*.acf` in each. Plain-text VDF, needs a parser of roughly 150
-lines, and — importantly — **the format is identical on Windows, macOS and
-Linux.** Only the base path differs. Launch by `steam://rungameid/<appid>`.
+`appmanifest_*.acf` in each. Plain-text VDF, a parser of roughly 150 lines, and
+the format is byte-identical on Windows, macOS and Linux — only the base path
+differs. Launch by `steam://rungameid/<appid>`.
 
-**Manual** is our own table. Title, executable, working directory, arguments,
-art. Launch by spawning the process.
+**Manual** is our own table, and it is **name-first**.
 
-### What that deletes
+### Adding a game is one search field
+
+Not a file picker. Not a form. You type *"Hollow Knight"* and everything else
+happens:
+
+```
+  type a name  →  live results with cover art  →  pick one
+                                                    ↓
+       title, description, genres, developer, publisher, release date,
+       score, cover, hero backdrop, transparent logo — all attached
+```
+
+The game is in your library, looking exactly right, before you have told us
+anything about where it lives on disk.
+
+**Pointing at the executable is a separate, later, one-click action** on the
+detail page. A game without one is in the library and looks finished; it just
+says *Set executable* where it would say *Play*. That split is deliberate: the
+interesting part of adding a game is identifying it, and identifying it is the
+part we can do for you.
+
+There is no title-guessing from folder names, no stripping `bin/x64/Binaries`,
+no matching heuristics to get wrong. §6 explains why that entire class of
+problem disappeared.
+
+### What this scope deletes
 
 The original plan had a five-tier difficulty table ending in EA's
-hardware-key-encrypted catalogue file, which Playnite reverse-engineers and
-which breaks whenever EA changes the derivation. Also GOG's undocumented SQLite
+hardware-key-encrypted catalogue, which Playnite reverse-engineers and which
+breaks whenever EA changes the derivation. Also GOG's undocumented SQLite
 schema, Battle.net's protobuf `product.db`, Ubisoft's registry keys, and the
 Windows-only package APIs behind Xbox.
 
 All of it is gone. Not deferred — **gone from the roadmap.** With it goes every
-Windows-only code path in the library layer, which is most of why §7 no longer
-needs to sequence platforms.
+Windows-only code path in the library layer, which is why §7 no longer needs to
+sequence platforms.
 
-### What it costs, honestly
+### What it costs
 
-Three things, and none of them are dealbreakers:
+**One search per non-Steam game, once.** Thirty games is a few minutes, one
+time, and it is pleasant rather than tedious because the covers appear as you
+type.
 
-**1. Adding games is manual work, once per game.** Fifteen seconds each. For a
-library of thirty non-Steam games that is under ten minutes, one time. This is
-the trade and it is a good one.
-
-**2. An executable has no identity.** This is the real cost, and it is a UI
-problem rather than a plumbing one. `bf2042.exe` is not a title, so the
-add-a-game flow needs a matching step: pick the executable → guess a title from
-the folder and file name → search the metadata sources → **the user picks the
-right game from a short list** → art and metadata attach. That overlay is new
-work that did not exist when every game arrived with a store ID. It is one
-screen, and the prototype already has the overlay patterns for it.
-
-Make the guess good. Folder name beats executable name almost always
-(`.../Cyberpunk 2077/bin/x64/Cyberpunk2077.exe`), and stripping the usual
-`bin`, `x64`, `retail`, `Binaries`, `Win64` segments gets you most of the way.
-
-**3. Some executables are launcher stubs.** Starting an EA or Ubisoft game
+**Some executables are launcher stubs.** Starting an EA or Ubisoft game
 directly will often bootstrap that store's client anyway, and a few titles
-refuse to run without it. That is the same visible handoff as the Steam case
-below, not a new problem — but it is not magic either.
+refuse to run without it. Same visible handoff as the Steam case below, not a
+new problem — but not magic either.
 
 ### One thing it makes *better*
 
 Playtime. When we spawn the executable ourselves we own the child process and
-can time the session exactly. With the Steam URI handoff our child exits
-immediately and the game is Steam's, so Steam playtime needs process-name
+time the session exactly. With the Steam URI handoff our child exits
+immediately and the game belongs to Steam, so Steam playtime needs process-name
 watching or reading Steam's own records. The manual path is the accurate one.
 
 ### The Steam caveat that does not go away
@@ -304,76 +344,65 @@ not pretend it is solved. Put it in the README.
 ### Leaving the door open
 
 The provider trait means adding Epic later is **additive, not a rewrite** — a
-new module, a registry entry, done. Epic in particular is nearly free: plain
-JSON manifests in `Data/Manifests/*.item`, maybe a hundred lines. If the manual
-flow proves annoying for a store with a lot of games, that store gets a
-provider. The architecture does not need to change for it, which is precisely
-why it is safe to not build it now.
+new module, a registry entry, done. Epic is nearly free: plain JSON manifests in
+`Data/Manifests/*.item`, maybe a hundred lines. But a store earns a provider
+only when the manual flow has proven annoying for it **in practice, not in
+anticipation.** That rule is the guard against drifting back into five
+undocumented parsers.
 
-## 6. Metadata and art
-### IGDB is out
+## 6. Metadata and art — no keys, ever
+### The whole thing runs on Steam, and Steam asks for nothing
 
-IGDB requires a Twitch client secret, and a client secret cannot ship inside a
-distributed desktop application — it violates the developer agreement, and an
-app access token is a password. IGDB only accepts app access tokens. Using it
-would mean running a proxy server to hold the secret.
+Install it, sign into Steam, done. No API keys, no accounts, no Twitch
+developer application, no proxy server, no settings screen with two empty
+fields on it. This is a hard requirement, not an aspiration, and it is
+achievable because three public Steam endpoints need no authentication at all.
 
-There is no need to. Three sources cover everything, and **not one of them
-requires a secret or any server-side infrastructure.**
+**Verified working, no key, no headers:**
 
-### The stack
+| Need | Endpoint | Returns |
+|---|---|---|
+| name → id | `store.steampowered.com/api/storesearch/?term=&cc=us&l=en` | appid, name, thumbnail |
+| name → id (alt) | `steamcommunity.com/actions/SearchApps/<term>` | appid, name |
+| id → metadata | `store.steampowered.com/api/appdetails?appids=` | description, genres, developer, publisher, release date, Metacritic |
+| id → art | `cdn.cloudflare.steamstatic.com/steam/apps/<id>/` | `library_600x900.jpg`, `library_hero.jpg`, **`logo.png`** |
 
-**1. Steam Store API** — `store.steampowered.com/api/appdetails?appids=<id>`.
-**No API key at all.** Descriptions, genres, developer, publisher, release date,
-Metacritic score, screenshots. Rate-limited to roughly 200 requests per five
-minutes, which matters only on a first scan and is trivially handled with a
-queue and a cache. This is a different host from `api.steampowered.com`, which
-does need a key — we do not use that one.
+That last one is the important one. `logo.png` is the **transparent wordmark**
+the whole design is built around, and it is a plain public image.
 
-For Steam games, this is the whole answer.
+Note this is `store.steampowered.com`, not `api.steampowered.com` — the latter
+does need a key, and we never touch it. Rate limit on the store host is roughly
+200 requests per five minutes, which matters only during a first scan and is
+handled by a queue plus a cache that never re-fetches.
 
-**2. Steam's public CDN** — no key, no auth:
-   - `library_600x900.jpg` — portrait cover
-   - `library_hero.jpg` — wide key art for the backdrop
-   - `logo.png` — **transparent wordmark**
+### Why a Steam-only metadata source is not the compromise it sounds like
 
-   The prototype already proves the design works on exactly these three assets,
-   and they exist for a large fraction of any library — including many games
-   bought elsewhere, because Steam has a page for them regardless.
+Because a Steam **store page** exists for the overwhelming majority of PC
+games, whoever you bought the game from. Cyberpunk on GOG, Battlefield on EA,
+Hogwarts Legacy on Epic — all of them have Steam pages with full metadata and
+all three art assets. We are using Steam as a games database that happens to be
+free and open, not as a storefront.
 
-**3. SteamGridDB** — grids, heroes, logos and icons for everything the CDN does
-not have. API key is generated from a profile page, free, per-user, **no
-secret.** This is what makes a manually-added GOG game look as good as a Steam
-one, and given §5 it is now load-bearing rather than a nicety.
+### The gaps, and the optional fallback
 
-**4. RAWG** — descriptions, genres, release dates and Metacritic scores for
-non-Steam games. Free key from `rawg.io/apidocs`, again **a plain key with no
-secret**, 20,000 requests a month. That is generous for a personal library
-provided we cache and never re-fetch, and it is nowhere near enough to be
-careless with.
+Genuinely absent from Steam: Epic exclusives that never came across, Game Pass
+and Xbox-only titles, most console emulation, and some itch releases.
 
-Two conditions attach to RAWG and both are easy: attribution is required
-wherever their data appears, so the detail view carries a discreet source line;
-and the free tier is bounded by monthly active users, which a private tool
-never approaches.
+For those, **and only those**, two optional keys can be pasted into settings:
+SteamGridDB for art and RAWG for text. Both are plain per-user keys with no
+client secret, so neither needs a proxy. Both are strictly opt-in, and the
+settings screen must present them as *"if you have games Steam has never heard
+of"* rather than as setup.
 
-**5. Manual override**, always. Any user-supplied title, description or image
-wins over every source above and is never overwritten by a rescan.
+IGDB is out entirely: it requires a Twitch client secret, which cannot ship in
+a distributed application, which would force us to run a server. Keep the
+metadata layer behind one interface so it could slot in later — but the goal is
+that no one ever needs it.
 
-### The property to protect
+### Manual override, always
 
-**The app must look finished with no keys entered at all.** Steam appdetails
-and the Steam CDN need nothing, and between them they cover the automated half
-of the library completely. SteamGridDB and RAWG keys improve coverage for
-manually-added games; they are never a gate on first run, and the settings
-screen should say so rather than presenting two empty fields on a wizard.
-
-### Keep it swappable
-
-RAWG is the practical choice, not the best-curated database — IGDB's data is
-better maintained. Keep the metadata layer behind one interface so that if this
-ever goes public and a proxy becomes worth running, IGDB slots in as a source
-rather than a rewrite.
+Any user-supplied title, description or image wins over every source above and
+is never overwritten by a rescan.
 
 ### Licensing note
 
@@ -550,35 +579,40 @@ touched, without instructions.
 ## 11. Risks and caveats
 For whoever picks this up later, including us in six months.
 
-**Three webview engines.** The defining risk, and the one the scope decision did
-not shrink. §3 covers the mitigation. Do not let it slide, because the failure
+**Three webview engines.** The defining risk, and the one no scope decision
+shrinks. §3 covers the mitigation. Do not let it slide, because the failure
 mode is "works on my Mac" — and the daily driver is Windows, the one engine
 that is not WebKit.
 
-**Steam's manifest format is undocumented.** Only one parser now reads a private
-format, which is a large improvement over five, but Valve still owes us nothing.
-Golden-file tests against captured `.acf` and `.vdf` files catch regressions;
-they cannot prevent breakage. A failed Steam scan must degrade to a visible
-warning with the manual path still available, never a crash.
+**Everything depends on undocumented Steam endpoints.** The store search,
+appdetails and CDN paths in §6 are public and stable in practice, but none of
+them is a contract. Valve owes us nothing and could change any of them. This is
+the price of needing no keys, and it is worth paying — but it means the
+metadata layer must sit behind one interface with a real fallback path, and a
+failed fetch must degrade to *"no artwork yet, retry"* rather than a broken
+card. Cache permanently so an outage is invisible to anyone with an existing
+library.
 
-**Match quality is the new failure mode.** With most of the library added by
-hand, a bad title guess or a wrong metadata match is the thing that will
-actually annoy a user day to day. It replaces "EA integration broke" as the
-top support issue. Treat the matching overlay as a first-class surface, not
-plumbing, and always allow a manual search and a manual art override.
+**Steam's manifest format is undocumented too.** One parser now reads a private
+format, which is a large improvement over five. Golden-file tests against
+captured `.acf` and `.vdf` files catch regressions; they cannot prevent
+breakage. A failed scan degrades to a visible warning with the manual path
+still available, never a crash.
 
-**RAWG's free tier is 20,000 requests a month** and attribution is required.
-Fine for a personal library, but only if the cache is genuinely permanent and
-nothing re-fetches on a rescan. Get that right early; it is painful to retrofit.
+**Games Steam has never heard of.** Epic exclusives, Game Pass titles, console
+emulation. The optional keys in §6 cover them, but the first-run experience for
+somebody whose library is mostly Game Pass will be worse than for somebody on
+Steam. Know that; do not pretend otherwise in the README.
 
 **Anti-cheat.** Some games check their parent process or refuse to run outside
 their launcher. Launching Steam titles by URI avoids most of this. Manually
 launched executables from other stores may hit it, and there is no general fix.
 
 **Store terms of service.** Reading files a store wrote on the user's own
-machine is fine. Automating a store client, scraping web pages, or
-redistributing store assets is not. Stay on the first side of that line and
-never scrape when an API exists.
+machine is fine, and so is calling a public endpoint at a human rate. Automating
+a store *client*, scraping web pages, or redistributing store assets is not.
+Stay on the first side of that line, respect the rate limit, and identify
+ourselves honestly in the user agent.
 
 **"It still opens Steam."** Structural, not a bug. Documented in §5.
 
@@ -591,7 +625,7 @@ all.
 subtler: it will be tempting to add Epic "because it is easy", then GOG
 "because it is only SQLite", and end up maintaining five undocumented parsers
 again. The rule from §5 holds — a store earns a provider only when the manual
-flow has proven annoying for it in practice, not in anticipation.
+flow has proven annoying for it in practice.
 
 ## 12. Open decisions
 Most of what was open here has been settled: Steam is the only automated
