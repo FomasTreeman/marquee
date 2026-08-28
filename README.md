@@ -35,10 +35,34 @@ games Steam has never heard of, and they are strictly optional.
 
 ## Status
 
-**Nothing is built yet.** Planning is done.
+**Phase 0 — the spike.** The shell runs, the design renders, a grid of 2,000
+cards scrolls without 2,000 DOM nodes, and the pad is read natively in Rust.
+No library, no metadata, no launching yet.
 
 - **[docs/PLAN.md](docs/PLAN.md)** — scope, stack, architecture, phasing, and
   the risks worth knowing before starting.
+- **[docs/PHASE-0.md](docs/PHASE-0.md)** — the spike's exit criteria and the
+  numbers, per platform.
+
+## Running it
+
+```bash
+pnpm install
+pnpm app        # the real thing: Tauri window, real numbers
+pnpm dev        # plain browser tab, fast loop for CSS work only
+pnpm tokens     # regenerate src/css/tokens.css from design/tokens.json
+```
+
+`pnpm app` puts a HUD in the bottom right with frame rate, input latency, IPC
+round trip and the webview that drew it. It is there because priority #1 is
+performance and [a budget nobody can see is a budget nobody keeps](docs/PLAN.md).
+
+Do not trust frame numbers from `pnpm dev` — a backgrounded browser tab has
+`requestAnimationFrame` throttled and will report nonsense.
+
+Design tokens live in `design/tokens.json` and are generated into CSS. Never
+edit `src/css/tokens.css` by hand; the header says so and the next build will
+overwrite it.
 
 ## Why
 
