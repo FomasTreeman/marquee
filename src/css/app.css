@@ -50,7 +50,7 @@ body::after {
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 0 var(--pad-edge);
+  padding: 0 calc(var(--pad-edge) * var(--s));
   overscroll-behavior: contain;
   scrollbar-width: none;
 }
@@ -62,9 +62,9 @@ body::after {
   position: absolute;
   top: 0;
   left: 0;
-  width: var(--card-w);
-  height: var(--card-h);
-  border-radius: var(--r-card);
+  width: calc(var(--card-w) * var(--s));
+  height: calc(var(--card-h) * var(--s));
+  border-radius: calc(var(--r-card) * var(--s));
   /* Position is a transform so scrolling never touches layout. */
   will-change: transform;
   /* NOT `contain: paint`. The focus ring below is deliberately drawn OUTSET
@@ -87,6 +87,14 @@ body::after {
 }
 
 .card-art img {
+  /* MUST be positioned. `.card-fallback` below is absolute, and a positioned
+     element paints above a static one regardless of DOM order -- so a static
+     img sat *underneath* the fallback and every cover in the library was
+     invisible while being fully loaded. Nothing errored; the network was
+     clean; naturalWidth was correct. Another silently-correct-looking CSS
+     failure, like the paint containment that ate the focus ring. */
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -115,9 +123,9 @@ body::after {
    in design/tokens.json. */
 .card-ring {
   position: absolute;
-  inset: calc(var(--ring-offset) * -1);
-  border: var(--ring-w) solid var(--accentLight);
-  border-radius: calc(var(--r-card) + var(--ring-offset));
+  inset: calc(var(--ring-offset) * var(--s) * -1);
+  border: calc(var(--ring-w) * var(--s)) solid var(--accentLight);
+  border-radius: calc((var(--r-card) + var(--ring-offset)) * var(--s));
   opacity: 0;
   transition: opacity calc(var(--motion) * 120ms) ease-out;
   pointer-events: none;
@@ -151,3 +159,207 @@ body::after {
 .hud b { color: var(--fg1); font-weight: 500; }
 .hud b.bad { color: var(--warning); }
 .hud hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; }
+
+
+/* --- fatal error screen -------------------------------------------
+   Shown when startup fails. Deliberately does not depend on tokens or
+   on anything the app sets up, because the failure it reports may be
+   the thing that would have set them up. */
+.fatal {
+  position: fixed;
+  inset: 0;
+  z-index: 100000;
+  overflow: auto;
+  padding: 48px;
+  background: #000;
+  color: #fafafa;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.fatal h1 {
+  margin: 0 0 20px;
+  font-family: var(--font, system-ui);
+  font-size: 22px;
+  font-weight: 500;
+}
+.fatal pre {
+  margin: 0 0 20px;
+  padding: 18px;
+  border: 1px solid #ff6b6b55;
+  border-radius: 12px;
+  background: #1a0d0d;
+  color: #ff9d9d;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.fatal .hint { color: #8a8a8a; margin: 0; }
+
+
+/* ==================================================================
+   SHELL
+
+   Backdrop, top bar, hero, grid, legend. Ported from the browser
+   prototype, which is the specification.
+
+   Everything chrome-sized multiplies by --s, a scale factor derived
+   from viewport height in src/shell.ts. Playnite got the same effect
+   by laying out on a fixed 1080px canvas and scaling it with a
+   Viewbox; we lay out for real and scale only the type and spacing,
+   which is strictly better at every resolution.
+   ================================================================== */
+
+.stage {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+/* --- backdrop ------------------------------------------------------ */
+
+.backdrop { position: fixed; inset: 0; z-index: 0; background: var(--bg0); }
+
+.backdrop-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 70% 20%;
+  opacity: 0;
+  /* Compositor-only. Never animate a filter or a backdrop-filter here. */
+  transition: opacity calc(var(--motion) * 420ms) ease-out;
+}
+.backdrop-img.is-visible { opacity: var(--ambient); }
+
+/* Two stops in one direction and one in the other, so the hero text sits on
+   near-solid black while the art stays legible in the opposite corner. Pure
+   black at both ends: two different blacks meeting is a visible seam. */
+.backdrop-scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(100deg, #000 22%, rgb(0 0 0 / 0.72) 46%, rgb(0 0 0 / 0.15) 100%),
+    linear-gradient(0deg, #000 6%, rgb(0 0 0 / 0) 62%);
+}
+
+/* --- top bar ------------------------------------------------------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: calc(24px * var(--s));
+  height: calc(88px * var(--s));
+  padding: 0 calc(var(--pad-edge) * var(--s));
+  flex: none;
+}
+.topbar .spacer { flex: 1; }
+.brand {
+  font-size: calc(21px * var(--s));
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--fg1);
+}
+.status {
+  display: flex;
+  gap: calc(20px * var(--s));
+  font-size: calc(15px * var(--s));
+  color: var(--fg2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- hero ---------------------------------------------------------- */
+
+.hero {
+  display: flex;
+  align-items: flex-end;
+  flex: none;
+  height: calc(301px * var(--s));
+  padding: 0 calc(var(--pad-edge) * var(--s)) calc(22px * var(--s));
+}
+.hero-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: calc(10px * var(--s));
+  max-width: calc(700px * var(--s));
+  /* The logo is a transparent PNG over artwork; without this it disappears
+     against a light backdrop. */
+  filter: drop-shadow(0 calc(2px * var(--s)) calc(22px * var(--s)) rgb(0 0 0 / 0.9));
+}
+.hero-logo {
+  max-height: calc(178px * var(--s));
+  max-width: 100%;
+  object-fit: contain;
+  object-position: left bottom;
+}
+.hero-logo[hidden], .hero-title[hidden] { display: none; }
+.hero-title {
+  margin: 0;
+  font-size: calc(54px * var(--s));
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  line-height: 1.04;
+  color: var(--fg1);
+}
+.hero-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(14px * var(--s));
+  font-size: calc(16px * var(--s));
+  color: var(--heroMeta);
+}
+.hero-meta .dot { color: var(--fg3); }
+
+/* --- library ------------------------------------------------------- */
+
+.library { flex: 1; min-height: 0; display: flex; }
+.library .grid-viewport { flex: 1; }
+
+/* --- legend -------------------------------------------------------- */
+
+.hints {
+  display: flex;
+  align-items: center;
+  gap: calc(26px * var(--s));
+  height: calc(76px * var(--s));
+  padding: 0 calc(var(--pad-edge) * var(--s));
+  flex: none;
+  font-size: calc(14px * var(--s));
+  color: var(--fg2);
+}
+.hint { display: inline-flex; align-items: center; gap: calc(9px * var(--s)); }
+.hint-key {
+  display: inline-grid;
+  place-items: center;
+  min-width: calc(22px * var(--s));
+  height: calc(22px * var(--s));
+  padding: 0 calc(6px * var(--s));
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--spec);
+  font-size: calc(11px * var(--s));
+  font-weight: 500;
+  color: var(--fg1);
+}
+
+/* --- empty library ------------------------------------------------- */
+
+.empty {
+  margin: auto;
+  text-align: center;
+  color: var(--fg2);
+  font-size: calc(17px * var(--s));
+  line-height: 1.7;
+}
+.empty b { display: block; color: var(--fg1); font-size: calc(24px * var(--s)); font-weight: 400; }
+.empty code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+  color: var(--fg1);
+}

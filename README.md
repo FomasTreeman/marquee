@@ -46,6 +46,8 @@ metadata, no launching, no manual games yet.
   the risks worth knowing before starting.
 - **[docs/PHASE-0.md](docs/PHASE-0.md)** — the spike's exit criteria and the
   numbers, per platform.
+- **[docs/DEBUGGING.md](docs/DEBUGGING.md)** — the log, the self-check, and how
+  to tell a real measurement from a browser-tab artifact.
 
 ## Running it
 
@@ -54,7 +56,12 @@ pnpm install
 pnpm app        # the real thing: Tauri window, real numbers
 pnpm dev        # plain browser tab, fast loop for CSS work only
 pnpm tokens     # regenerate src/css/tokens.css from design/tokens.json
+pnpm logs       # tail the log (both runtimes, one file)
+pnpm test       # cargo test + tsc
 ```
+
+`?mock=40` populates the library with real Steam titles — useful on a machine
+with two games installed. `?hud=0` hides the HUD, and so does **Y** on the pad.
 
 `pnpm app` puts a HUD in the bottom right with frame rate, input latency, IPC
 round trip and the webview that drew it. It is there because priority #1 is

@@ -4,8 +4,7 @@
  * A typed client over the Rust scan. Nothing here knows what a `.acf` file is;
  * that is the whole point of the provider boundary in docs/PLAN.md §5.
  */
-import { invoke } from '@tauri-apps/api/core'
-import { inApp } from './host'
+import { call, inApp } from './host'
 
 export interface Game {
   id: string
@@ -35,7 +34,7 @@ export interface ScanResult {
 
 export async function scanLibrary(): Promise<ScanResult> {
   if (!inApp) return { games: [], providers: [], tookMs: 0 }
-  return invoke<ScanResult>('scan_library')
+  return call<ScanResult>('scan_library')
 }
 
 /**

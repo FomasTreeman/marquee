@@ -10,8 +10,7 @@
  * the rest of the prototype port across unchanged.
  */
 import { listen } from '@tauri-apps/api/event'
-import { invoke } from '@tauri-apps/api/core'
-import { inApp } from './host'
+import { call, inApp } from './host'
 
 export type Action =
   | 'up' | 'down' | 'left' | 'right'
@@ -57,7 +56,7 @@ async function syncClock(samples = 12): Promise<number> {
   let offset = 0
   for (let i = 0; i < samples; i++) {
     const before = performance.now()
-    const rust = await invoke<number>('clock_sync')
+    const rust = await call<number>('clock_sync')
     const after = performance.now()
     const rtt = after - before
     if (rtt < best) {
@@ -74,7 +73,7 @@ export interface PadStatus { supported: boolean; connected: number }
 
 export async function padStatus(): Promise<PadStatus> {
   if (!inApp) return { supported: false, connected: 0 }
-  return invoke<PadStatus>('pad_status')
+  return call<PadStatus>('pad_status')
 }
 
 export async function createInput(dispatch: (e: ActionEvent) => void): Promise<() => void> {

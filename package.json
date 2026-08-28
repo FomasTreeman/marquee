@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "app": "tauri dev",
-    "tokens": "python3 tools/build-tokens.py"
+    "tokens": "python3 tools/build-tokens.py",
+    "logs": "tail -f \"$HOME/Library/Logs/Marquee/marquee.log\"",
+    "test": "cd src-tauri && cargo test && cd .. && tsc --noEmit"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

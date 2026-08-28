@@ -84,8 +84,13 @@ export function createGrid(
       const v = parseFloat(cs.getPropertyValue(name))
       return Number.isFinite(v) ? v : fallback
     }
-    cardW = px('--card-w', 188)
-    gap = px('--gap', 20)
+    // Chrome scales with viewport height (see src/shell.ts). Both operands
+    // are read as plain numbers and multiplied here, because a token defined
+    // as `calc(... * var(--s))` comes back from getComputedStyle as the
+    // unresolved calc() string, not a number.
+    const scale = px('--s', 1) || 1
+    cardW = px('--card-w', 188) * scale
+    gap = px('--gap', 20) * scale
     const ratio = px('--cover-ratio', 0.6667) || 0.6667
     cardH = Math.round(cardW / ratio)
     padTop = gap
@@ -116,6 +121,12 @@ export function createGrid(
     ring.className = 'card-ring'
     art.append(fallback, img)
     el.append(art, ring)
+    // Parked until it is given an item. A fresh slot has index -1 and no
+    // transform, so without this the whole unused pool sits stacked at 0,0 on
+    // top of the first card -- which looks exactly like the first card failing
+    // to load its artwork. Found by the self-check, after being misread as an
+    // image bug three times.
+    el.style.visibility = 'hidden'
     canvas.appendChild(el)
     return { el, art, fallback, img, index: -1, transform: '', focus: false }
   }
@@ -134,8 +145,12 @@ export function createGrid(
   function paintSlot(s: Slot, index: number): void {
     const item = items[index]
     if (!item) {
-      // Parked: kept in the pool, moved off-screen rather than removed.
-      if (s.index !== -1) { s.el.style.visibility = 'hidden'; s.index = -1 }
+      // Parked: kept in the pool, hidden rather than removed.
+      if (s.index !== -1) {
+        s.el.style.visibility = 'hidden'
+        s.index = -1
+        s.focus = false
+      }
       return
     }
     const col = index % cols

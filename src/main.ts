@@ -1,173 +1,252 @@
 /**
- * Phase 0 spike.
+ * Marquee.
  *
- * docs/PLAN.md §10 sets four exit criteria, and this screen is where three of
- * them are demonstrated and measured: the shell runs, the design's CSS renders,
- * and a grid of 2,000 cards holds frame rate. Input arrives next.
- *
- * The purpose of this phase is to kill the project cheaply if the stack was
- * the wrong choice, so the numbers are on screen rather than in a console
- * somewhere — and stamped with the webview that produced them.
+ * Wires the shell, the library and the input stream together. Everything of
+ * substance lives in its own module; this file is the assembly and should stay
+ * short enough to read in one go.
  */
 import { createGrid, type GridItem } from './grid'
 import { createFrameMeter, installGrainTile } from './perf'
+import { createShell, setHints } from './shell'
+import { createBackdrop } from './backdrop'
 import { hostInfo, pingMs, inApp } from './host'
 import { createInput, padStatus, type Action } from './input'
-import { scanLibrary, steamArtwork, tintFor, type ScanResult } from './library'
+import { scanLibrary, steamArtwork, tintFor, type Game, type ScanResult } from './library'
+import { installErrorHandlers, logInfo, logWarn, logError, renderFatal, logPath } from './log'
+import { createHud } from './hud'
+import { scheduleSelfCheck } from './selfcheck'
 
 const params = new URLSearchParams(location.search)
-/** ?mock=2000 forces the synthetic library, for measuring the grid at a scale
- *  no real library reaches. */
+/** ?mock=2000 forces a synthetic library, for measuring the grid at a scale no
+ *  real library reaches. */
 const MOCK = Number(params.get('mock') ?? 0)
 
-/** Deterministic placeholder library. No network, no keys, no backend — the
- *  grid is being measured here, not the data layer. */
-function mockLibrary(n: number): GridItem[] {
-  const words = ['Shadow', 'Iron', 'Hollow', 'Crimson', 'Last', 'Silent', 'Broken', 'Elder',
-    'Neon', 'Dead', 'Star', 'Deep', 'Lost', 'Wild', 'Frost', 'Ember']
-  const nouns = ['Kingdom', 'Protocol', 'Legacy', 'Horizon', 'Requiem', 'Dominion', 'Ashes',
-    'Odyssey', 'Covenant', 'Exile', 'Reckoning', 'Vanguard', 'Descent', 'Chronicle']
-  const out: GridItem[] = []
+/**
+ * A sample library of real Steam titles.
+ *
+ * Real appids on purpose, so `?mock=` exercises the actual artwork path --
+ * cover, wide key art and transparent logo, straight off the CDN -- rather
+ * than only proving the layout. It is also the only way to see the design
+ * fully populated on a machine with two games installed.
+ */
+const SAMPLE: Array<[string, string]> = [
+  ['1245620', 'ELDEN RING'],
+  ['1174180', 'Red Dead Redemption 2'],
+  ['1086940', "Baldur's Gate 3"],
+  ['1091500', 'Cyberpunk 2077'],
+  ['292030', 'The Witcher 3: Wild Hunt'],
+  ['1593500', 'God of War'],
+  ['1817070', "Marvel's Spider-Man Remastered"],
+  ['1888930', 'The Last of Us Part I'],
+  ['2050650', 'Resident Evil 4'],
+  ['990080', 'Hogwarts Legacy'],
+  ['1145360', 'Hades'],
+  ['1145350', 'Hades II'],
+  ['367520', 'Hollow Knight'],
+  ['413150', 'Stardew Valley'],
+  ['105600', 'Terraria'],
+  ['892970', 'Valheim'],
+  ['1237970', 'Titanfall 2'],
+  ['620', 'Portal 2'],
+  ['570', 'Dota 2'],
+  ['440', 'Team Fortress 2'],
+  ['1462040', 'Final Fantasy VII Remake'],
+  ['1517290', 'Battlefield 2042'],
+  ['588650', 'Dead Cells'],
+  ['648800', 'Raft'],
+]
+
+function mockLibrary(n: number): Game[] {
+  const out: Game[] = []
   for (let i = 0; i < n; i++) {
-    const w = words[i % words.length]
-    const nn = nouns[(i * 7 + 3) % nouns.length]
+    const [appid, title] = SAMPLE[i % SAMPLE.length]!
+    const round = Math.floor(i / SAMPLE.length)
     out.push({
-      id: i,
-      title: `${w} ${nn}${i > words.length * nouns.length ? ` ${((i / 224) | 0) + 1}` : ''}`,
-      tint: `hsl(${(i * 47) % 360} 22% 14%)`,
+      id: `steam:${appid}`,
+      // Marked as steam so the artwork path is genuinely exercised.
+      provider: 'steam',
+      providerId: appid,
+      title: round ? `${title} (${round + 1})` : title,
+      installed: i % 7 !== 0,
+      installDir: null,
+      sizeBytes: (8 + (i * 13) % 90) * 1_073_741_824,
+      lastPlayed: i % 3 === 0 ? Math.floor(Date.now() / 1000) - i * 86_400 : null,
     })
   }
   return out
 }
 
-/** A provider that failed must be visible. An empty library with no
- *  explanation is the thing docs/PLAN.md §11 warns about. */
-function libraryLabel(scan: ScanResult): string {
-  const failed = scan.providers.filter((p) => p.error !== null)
-  if (failed.length) return `${failed[0]!.provider}: ${failed[0]!.error}`
-  const found = scan.providers.filter((p) => p.detected).map((p) => p.provider)
-  if (!found.length) return 'no stores detected · mock library'
-  return `${found.join(', ')} · ${scan.games.length} games · ${scan.tookMs} ms`
+function gib(bytes: number): string {
+  if (bytes <= 0) return ''
+  const g = bytes / 1_073_741_824
+  return g >= 10 ? `${g.toFixed(0)} GB` : `${g.toFixed(1)} GB`
 }
 
-function padLabel(p: { supported: boolean; connected: number }): string {
-  if (!p.supported) return '<b class="bad">unsupported</b>'
-  if (p.connected === 0) return '<b>none connected</b>'
-  return `<b>${p.connected} connected</b>`
+function playedLabel(unixSeconds: number | null): string {
+  if (!unixSeconds) return 'Never played'
+  const days = Math.floor((Date.now() / 1000 - unixSeconds) / 86_400)
+  if (days <= 0) return 'Played today'
+  if (days === 1) return 'Played yesterday'
+  if (days < 30) return `Played ${days} days ago`
+  const months = Math.floor(days / 30)
+  return months < 12 ? `Played ${months} months ago` : `Played ${Math.floor(months / 12)} years ago`
+}
+
+const PROVIDER_NAMES: Record<string, string> = {
+  steam: 'Steam',
+  manual: 'Added by hand',
+  mock: 'Sample',
+}
+
+function heroFacts(game: Game): string[] {
+  return [
+    PROVIDER_NAMES[game.provider] ?? game.provider,
+    game.installed ? gib(game.sizeBytes) : 'Not installed',
+    playedLabel(game.lastPlayed),
+  ].filter(Boolean)
 }
 
 /**
- * The HUD, built once.
+ * An empty library must explain itself.
  *
- * It used to rewrite `innerHTML` twice a second behind a 30px backdrop blur,
- * which re-parsed the markup and forced a backdrop re-blur every tick. That
- * showed up as an 18 ms p99 on a *stationary* grid -- the instrument was most
- * of what it was measuring. Now the structure is created once and only text
- * nodes change, and the blur is gone from src/css/app.css for the same reason.
+ * Pitch black with nothing on it is what this design looks like when it is
+ * working perfectly, which makes it the worst possible way to report that
+ * nothing was found.
  */
-function hud(rows: string[]): { set(key: string, value: string, bad?: boolean): void } {
-  const el = document.createElement('div')
-  el.className = 'hud'
-  const cells = new Map<string, HTMLElement>()
-  for (const key of rows) {
-    if (key === '-') { el.appendChild(document.createElement('hr')); continue }
-    const line = document.createElement('div')
-    const label = document.createElement('span')
-    label.className = 'k'
-    label.textContent = key
-    const value = document.createElement('b')
-    line.append(label, value)
-    el.appendChild(line)
-    cells.set(key, value)
+function renderEmpty(host: HTMLElement, scan: ScanResult): void {
+  const failed = scan.providers.filter((p) => p.error)
+  const box = document.createElement('div')
+  box.className = 'empty'
+  const title = document.createElement('b')
+  const body = document.createElement('span')
+  if (failed.length) {
+    title.textContent = 'Could not read your library'
+    body.textContent = failed.map((p) => `${p.provider}: ${p.error}`).join(' · ')
+  } else if (!scan.providers.some((p) => p.detected)) {
+    title.textContent = 'No stores found'
+    body.textContent = 'Steam does not appear to be installed on this machine.'
+  } else {
+    title.textContent = 'No games installed'
+    body.textContent = 'Steam is here, but nothing is installed through it yet.'
   }
-  document.body.appendChild(el)
-  return {
-    set(key, value, bad = false) {
-      const cell = cells.get(key)
-      if (!cell || cell.textContent === value) return
-      cell.textContent = value
-      cell.classList.toggle('bad', bad)
-    },
-  }
+  box.append(title, body)
+  host.appendChild(box)
 }
 
 async function main(): Promise<void> {
+  const started = performance.now()
   installGrainTile()
 
-  const viewport = document.createElement('div')
-  viewport.className = 'grid-viewport'
-  document.getElementById('app')!.appendChild(viewport)
+  const root = document.getElementById('app')!
+  const shell = createShell(root)
+  const backdrop = createBackdrop(shell.backdropA, shell.backdropB)
 
-  const grid = createGrid(viewport)
+  setHints(shell.hints, [
+    ['A', 'Play'],
+    ['Y', 'Details'],
+    ['X', 'Favourite'],
+    ['☰', 'Menu'],
+  ])
 
-  // The real library, or the synthetic one when asked for or when there is
-  // nothing installed to show.
+  // A failed scan must not take the interface with it: the shell still comes
+  // up, the reason is on screen and in the log. Priority #2, in practice.
   let scan: ScanResult = { games: [], providers: [], tookMs: 0 }
-  if (!MOCK) scan = await scanLibrary()
+  if (!MOCK) {
+    try {
+      scan = await scanLibrary()
+      logInfo('scan', `${scan.games.length} games in ${scan.tookMs} ms`)
+      for (const p of scan.providers) if (p.error) logWarn('scan', `${p.provider}: ${p.error}`)
+    } catch (e) {
+      logError('scan', 'library scan failed', e)
+      scan = { games: [], providers: [{ provider: 'scan', detected: true, error: String(e), tookMs: 0 }], tookMs: 0 }
+    }
+  }
 
-  const items: GridItem[] = scan.games.length
-    ? scan.games.map((g, i) => ({
-        id: i,
-        title: g.title,
-        tint: tintFor(g.title),
-        art: g.provider === 'steam' ? steamArtwork(g.providerId).cover : undefined,
-      }))
-    : mockLibrary(MOCK || 2000)
+  const games: Game[] = MOCK ? mockLibrary(MOCK) : scan.games
+  const art = games.map((g) => (g.provider === 'steam' ? steamArtwork(g.providerId) : {}))
 
-  grid.setItems(items)
+  const items: GridItem[] = games.map((g, i) => ({
+    id: i,
+    title: g.title,
+    tint: tintFor(g.title),
+    art: art[i]?.cover,
+  }))
 
-  // Pad and keyboard feed the same action stream. Nothing here knows or cares
-  // which one moved the cursor.
+  shell.count.textContent = games.length ? `${games.length} games` : ''
+
+  const grid = createGrid(shell.gridViewport, (index) => {
+    const game = games[index]
+    if (!game) return
+    backdrop.show(art[index]?.hero)
+
+    const logo = art[index]?.logo
+    // The transparent wordmark is the design's preferred title. Fall back to
+    // type only when there is no logo, rather than showing both.
+    shell.heroLogo.hidden = !logo
+    shell.heroTitle.hidden = !!logo
+    if (logo && shell.heroLogo.getAttribute('src') !== logo) {
+      shell.heroLogo.src = logo
+      shell.heroLogo.onerror = () => {
+        shell.heroLogo.hidden = true
+        shell.heroTitle.hidden = false
+      }
+    }
+    shell.heroTitle.textContent = game.title
+
+    shell.heroMeta.textContent = ''
+    heroFacts(game).forEach((fact, n) => {
+      if (n) {
+        const dot = document.createElement('span')
+        dot.className = 'dot'
+        dot.textContent = '·'
+        shell.heroMeta.appendChild(dot)
+      }
+      const span = document.createElement('span')
+      span.textContent = fact
+      shell.heroMeta.appendChild(span)
+    })
+  })
+
+  if (!games.length) {
+    renderEmpty(shell.gridViewport, scan)
+  } else {
+    grid.setItems(items)
+    grid.focus(0)
+    // setItems clamps rather than moving, so the first selection has to be
+    // announced explicitly for the hero to populate on load.
+    grid.move(1, 0)
+    grid.move(-1, 0)
+  }
+
   const NAV: Partial<Record<Action, [number, number]>> = {
     left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1],
   }
-  let lastLatency: number | null = null
-  let worstLatency = 0
+  const hud = createHud(grid, createFrameMeter())
   await createInput((e) => {
-    if (e.latency !== null) {
-      lastLatency = e.latency
-      worstLatency = Math.max(worstLatency, e.latency)
-    }
+    hud.noteInput(e.latency)
+    if (e.action === 'y' && !e.repeat) hud.toggle()
     const d = NAV[e.action]
     if (d) grid.move(d[0], d[1])
   })
 
-  const meter = createFrameMeter()
-  // ?hud=0 measures without the instrument in the way. Any HUD costs
-  // something; this is how you find out how much.
-  const showHud = new URLSearchParams(location.search).get('hud') !== '0'
-  const host = await hostInfo()
-  const ipc = await pingMs()
-  const pad = await padStatus()
+  await hud.attach({
+    host: await hostInfo(),
+    ipc: await pingMs(),
+    pad: await padStatus(),
+    scan,
+    total: games.length,
+  })
 
-  // docs/PLAN.md §2. A budget nobody can see is a budget nobody keeps.
-  const budget = { p99: 20, ipc: 2, input: 50 }
+  // Asserts the invariants that error handling cannot see -- artwork actually
+  // painted on top, the focus ring not clipped, the shell laid out. Both real
+  // bugs found so far were silent and would have failed one of these.
+  if (import.meta.env.DEV || params.get('check') === '1') scheduleSelfCheck()
 
-  if (showHud) {
-    const panel = hud(['host', 'display', 'library', 'cards', 'fps', 'p99', 'dropped', '-', 'ipc', 'pad', 'input'])
-    panel.set('host', `${host.webview} · ${host.os}/${host.arch}`)
-    panel.set('library', libraryLabel(scan), scan.providers.some((p) => p.error !== null))
-    panel.set('cards', `${items.length.toLocaleString()} · ${grid.columns} cols`)
-    panel.set('ipc', ipc === null ? '— browser' : `${ipc.toFixed(2)} ms`, ipc !== null && ipc > budget.ipc)
-    panel.set('pad', padLabel(pad), !pad.supported)
-
-    setInterval(() => {
-      const f = meter.read()
-      const frame = f.hz ? 1000 / f.hz : 0
-      panel.set('display', f.hz ? `${f.hz} Hz · ${frame.toFixed(1)} ms/frame` : '—')
-      panel.set('fps', f.fps.toFixed(0), f.hz > 0 && f.fps < f.hz * 0.95)
-      panel.set('p99', `${f.p99.toFixed(1)} ms`, f.p99 > budget.p99)
-      // The refresh-independent one: frames that overran the display's own
-      // interval by half or more, out of the last three seconds.
-      panel.set('dropped', `${f.dropped} / 180 frames`, f.dropped > 2)
-      panel.set('input', lastLatency === null
-        ? '— press a button'
-        : `${lastLatency.toFixed(1)} ms · worst ${worstLatency.toFixed(1)}`,
-        worstLatency > budget.input)
-    }, 500)
-  }
-
-  console.info(`[marquee] spike · ${host.webview} · ${items.length} cards · shell=${inApp ? 'tauri' : 'browser'}`)
+  logInfo('boot', `ready in ${(performance.now() - started).toFixed(0)} ms · ${games.length} games · shell=${inApp ? 'tauri' : 'browser'}`)
 }
 
-void main()
+// Installed before anything else runs, so a failure inside main() still
+// reaches the log and the screen. Without it, `void main()` swallows every
+// rejection and a broken window is indistinguishable from a working one.
+installErrorHandlers()
+main().catch(async (e) => renderFatal(e, await logPath()))

@@ -6,6 +6,7 @@
  * if the transport ever does. Nothing else in the frontend imports Tauri.
  */
 import { invoke } from '@tauri-apps/api/core'
+import { log } from './log'
 
 export interface HostInfo {
   os: string
@@ -21,6 +22,28 @@ export interface HostInfo {
  *  `pnpm dev` alone is a useful fast loop for pure CSS work, so the frontend
  *  is built to degrade rather than throw. */
 export const inApp = '__TAURI_INTERNALS__' in window
+
+/**
+ * Every call into Rust goes through here.
+ *
+ * A bare `invoke` that rejects produces a promise nobody handles and a window
+ * that renders nothing. This logs the failure with the command name and
+ * arguments, then rethrows so the caller can still decide what to do -- but
+ * the evidence exists either way.
+ */
+export async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const t0 = performance.now()
+  try {
+    const result = await invoke<T>(command, args)
+    const ms = performance.now() - t0
+    // Only the slow ones. A debug line per call would bury the log.
+    if (ms > 50) log('debug', 'ipc', `${command} took ${ms.toFixed(0)} ms`)
+    return result
+  } catch (e) {
+    log('error', 'ipc', `${command} failed`, { args, error: e })
+    throw e
+  }
+}
 
 export async function hostInfo(): Promise<HostInfo> {
   if (!inApp) {
