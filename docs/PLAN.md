@@ -389,7 +389,7 @@ code left in the library layer to sequence. What remains:
 
 | Surface | Windows | macOS | Linux |
 |---|---|---|---|
-| Steam library path | `Program Files (x86)\\Steam` + registry | `~/Library/Application Support/Steam` | `~/.steam/steam`, `~/.local/share/Steam` |
+| Steam library path | `Program Files (x86)\Steam` + registry | `~/Library/Application Support/Steam` | `~/.steam/steam`, `~/.local/share/Steam` |
 | Steam manifest format | identical | identical | identical |
 | Spawn + watch a process | `std::process` | `std::process` | `std::process` |
 | `steam://` handoff | works | works | works |
