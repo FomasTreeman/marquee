@@ -1,0 +1,63 @@
+/* ==================================================================
+   DESIGN TOKENS -- GENERATED, DO NOT EDIT
+
+   Source:   design/tokens.json
+   Regenerate:  python3 tools/build-tokens.py
+
+   Edits here are lost on the next build. Change the JSON.
+   ================================================================== */
+
+:root {
+  /* --- type --- */
+  --font: "Inter Tight", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --fw-body: 300;
+
+  /* --- palette --- */
+  --bg0: rgb(0 0 0);
+  --bg1: rgb(0 0 0);
+  --bg2: rgb(0 0 0);
+  --fg1: rgb(255 255 255 / 0.98);
+  --fg2: rgb(255 255 255 / 0.541);
+  --fg3: rgb(255 255 255 / 0.302);
+  --line: rgb(255 255 255 / 0.09);
+  --spec: rgb(255 255 255 / 0.141);
+  --accent: rgb(233 237 244);
+  --accentLight: rgb(255 255 255);
+  --overlay: rgb(8 9 12 / 0.8);
+  --warning: rgb(255 107 107);
+  --play: rgb(47 158 68);
+  --sel: rgb(35 38 46);
+  --selStrong: rgb(46 50 60);
+  --focusBorder: rgb(132 138 150);
+  --heroMeta: rgb(255 255 255 / 0.769);
+  --quiet: rgb(255 255 255 / 0.361);
+
+  /* --- shape, spacing, effects --- */
+  --r-card: 20px;
+  --r-panel: 20px;
+  --r-inner: 14px;
+  --r-row: 10px;
+  --r-pill: 999px;
+  --gap: 20px;
+  --pad-edge: 52px;
+  --card-w: 188px;
+  --cover-ratio: 0.6667;
+  --grain: 0.055;
+  --ambient: 0.85;
+  --backdrop-blur: 30px;
+  --motion: 1;
+  --ring-w: 4px;
+  --ring-offset: 4px;
+  --focus-scale: 1;
+
+  /* --- derived ---
+     Cover height follows the card width and the box-art ratio, so
+     changing --card-w alone never distorts artwork. */
+  --card-h: calc(var(--card-w) / var(--cover-ratio));
+}
+
+/* Respect the platform setting. --motion is the design's own dial and
+   this is the user's; the user wins. */
+@media (prefers-reduced-motion: reduce) {
+  :root { --motion: 0; }
+}

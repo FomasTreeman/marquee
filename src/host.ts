@@ -1,0 +1,48 @@
+/**
+ * The bridge to the Rust core.
+ *
+ * Every call into the backend goes through here so there is exactly one place
+ * that knows about `invoke`, one place to instrument, and one place to change
+ * if the transport ever does. Nothing else in the frontend imports Tauri.
+ */
+import { invoke } from '@tauri-apps/api/core'
+
+export interface HostInfo {
+  os: string
+  /** The engine actually drawing the interface — the axis every rendering
+   *  bug in this project will turn out to lie along. */
+  webview: string
+  arch: string
+  version: string
+  debug: boolean
+}
+
+/** True when running inside the Tauri shell rather than a plain browser tab.
+ *  `pnpm dev` alone is a useful fast loop for pure CSS work, so the frontend
+ *  is built to degrade rather than throw. */
+export const inApp = '__TAURI_INTERNALS__' in window
+
+export async function hostInfo(): Promise<HostInfo> {
+  if (!inApp) {
+    return {
+      os: 'browser',
+      webview: navigator.userAgent.includes('Chrome') ? 'Chromium (tab)' : 'WebKit (tab)',
+      arch: '—',
+      version: 'dev',
+      debug: true,
+    }
+  }
+  return invoke<HostInfo>('host_info')
+}
+
+/** Round-trip latency of the IPC bridge, in milliseconds.
+ *  Measures the bridge, not any work — `ping` is deliberately trivial. */
+export async function pingMs(samples = 20): Promise<number | null> {
+  if (!inApp) return null
+  // One warm-up: the first call pays for channel setup and would otherwise
+  // dominate a twenty-sample mean.
+  await invoke('ping')
+  const t0 = performance.now()
+  for (let i = 0; i < samples; i++) await invoke('ping')
+  return (performance.now() - t0) / samples
+}

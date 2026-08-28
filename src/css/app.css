@@ -1,0 +1,149 @@
+/* ==================================================================
+   Marquee — application styles.
+
+   Pitch black, one accent, cover art doing the work. Everything here
+   reads from tokens.css; no literal colour or radius belongs in this
+   file.
+   ================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: var(--bg0);
+  color: var(--fg1);
+  font-family: var(--font);
+  font-weight: var(--fw-body);
+  font-synthesis-weight: none;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  /* The interface is driven by a pad. Nothing here is text to select, and a
+     stray highlight on a TV looks like a bug. */
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#app { height: 100%; display: flex; flex-direction: column; }
+
+/* --- film grain ---------------------------------------------------
+   One static layer that never repaints. It must never be an animated
+   canvas or a live SVG filter — that is a per-frame CPU burn for an
+   effect nobody consciously notices. See docs/PLAN.md §4. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: var(--grain);
+  background-image: var(--grain-tile);
+  background-size: 128px 128px;
+}
+
+/* --- grid ---------------------------------------------------------
+   Virtualised. The canvas is sized to the full row count and only the
+   visible window plus an overscan margin exists in the DOM; cards are
+   pooled and moved with transforms, never reflowed. */
+
+.grid-viewport {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0 var(--pad-edge);
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+}
+.grid-viewport::-webkit-scrollbar { display: none; }
+
+.grid-canvas { position: relative; width: 100%; }
+
+.card {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--card-w);
+  height: var(--card-h);
+  border-radius: var(--r-card);
+  /* Position is a transform so scrolling never touches layout. */
+  will-change: transform;
+  /* NOT `contain: paint`. The focus ring below is deliberately drawn OUTSET
+     of this box, and paint containment clips to the border box -- it makes
+     the ring silently invisible with no error anywhere. This is the same
+     class of bug as the clipped focus outlines in the Playnite theme, and it
+     cost a screenshot to find here too. Clipping belongs on .card-art, which
+     actually wants it. */
+  contain: layout style;
+}
+
+.card-art {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  overflow: hidden;
+  contain: paint;
+  background: var(--card-tint, #14161c);
+  box-shadow: 0 10px 24px rgb(0 0 0 / 0.55);
+}
+
+.card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Placeholder art for the spike: a deterministic tint plus the title, so a
+   grid of 2,000 is visually distinguishable while scrolling without any
+   network at all. */
+.card-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  padding: 14px;
+  font-size: 13px;
+  line-height: 1.25;
+  color: var(--fg2);
+  background: linear-gradient(160deg, var(--card-tint), #0a0b0e 78%);
+}
+
+/* --- focus ring ---------------------------------------------------
+   Drawn OUTSET by --ring-offset with thickness --ring-w. Those two must
+   be equal or a hairline of background shows between ring and card —
+   the exact bug that cost an afternoon in the Playnite build, recorded
+   in design/tokens.json. */
+.card-ring {
+  position: absolute;
+  inset: calc(var(--ring-offset) * -1);
+  border: var(--ring-w) solid var(--accentLight);
+  border-radius: calc(var(--r-card) + var(--ring-offset));
+  opacity: 0;
+  transition: opacity calc(var(--motion) * 120ms) ease-out;
+  pointer-events: none;
+}
+.card[data-focus="1"] .card-ring { opacity: 1; }
+
+/* --- HUD ----------------------------------------------------------
+   Phase 0 instrumentation. Every number the spike has to produce is on
+   screen at once, stamped with the webview that drew it, because a frame
+   rate without an engine name proves nothing. */
+.hud {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 10000;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-inner);
+  background: var(--overlay);
+  backdrop-filter: blur(var(--backdrop-blur));
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.7;
+  color: var(--fg2);
+  pointer-events: none;
+}
+.hud b { color: var(--fg1); font-weight: 500; }
+.hud .bad { color: var(--warning); }
+.hud hr { border: 0; border-top: 1px solid var(--line); margin: 8px 0; }
