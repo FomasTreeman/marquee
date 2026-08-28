@@ -64,6 +64,9 @@ function reportArtFailure(url: string): void {
 export interface Grid {
   setItems(items: GridItem[]): void
   focus(index: number): void
+  /** Update one item's title in place. Metadata arrives progressively and
+   *  rebuilding the whole list for each name would reset scroll and focus. */
+  setTitle(index: number, title: string): void
   move(dx: number, dy: number): void
   get focused(): number
   get columns(): number
@@ -286,6 +289,13 @@ export function createGrid(
       if (next.length) announce()
     },
     focus(i) { setFocus(i) },
+    setTitle(index, title) {
+      const item = items[index]
+      if (!item) return
+      item.title = title
+      const slot = slots.find((s) => s.index === index)
+      if (slot) slot.fallback.textContent = title
+    },
     move(dx, dy) { setFocus(focused + dx + dy * cols) },
     get focused() { return focused },
     get columns() { return cols },

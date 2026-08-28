@@ -4,17 +4,33 @@
  * A typed client over the Rust scan. Nothing here knows what a `.acf` file is;
  * that is the whole point of the provider boundary in docs/PLAN.md §5.
  */
+import { listen } from '@tauri-apps/api/event'
 import { call, inApp } from './host'
 
 export interface Game {
   id: string
   provider: string
   providerId: string
+  /** Empty until the metadata worker fills it in. Deliberately empty rather
+   *  than a placeholder like "App 220", so the interface can show that a name
+   *  is still arriving instead of showing something wrong. */
   title: string
   installed: boolean
   installDir: string | null
   sizeBytes: number
   lastPlayed: number | null
+  playtimeMinutes: number
+}
+
+export interface Meta {
+  appId: string
+  name: string
+  description: string
+  developers: string[]
+  publishers: string[]
+  releaseDate: string
+  genres: string[]
+  score: number | null
 }
 
 export interface ProviderResult {
@@ -30,6 +46,24 @@ export interface ScanResult {
   games: Game[]
   providers: ProviderResult[]
   tookMs: number
+}
+
+/**
+ * Ask for metadata, in priority order.
+ *
+ * Returns whatever is already cached, immediately. The rest arrives through
+ * `onMeta` as the background worker fetches it -- Steam's store endpoint
+ * allows roughly 200 requests per five minutes, so a library of two hundred
+ * games takes a few minutes on first run and is instant forever after.
+ */
+export async function requestMeta(appIds: string[]): Promise<Meta[]> {
+  if (!inApp) return []
+  return call<Meta[]>('request_meta', { appIds })
+}
+
+export async function onMeta(cb: (meta: Meta) => void): Promise<() => void> {
+  if (!inApp) return () => {}
+  return listen<Meta>('meta', (e) => cb(e.payload))
 }
 
 export async function scanLibrary(): Promise<ScanResult> {

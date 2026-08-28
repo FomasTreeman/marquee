@@ -31,6 +31,7 @@ pub struct Game {
     pub size_bytes: u64,
     /// Unix seconds, or None if the provider does not track it.
     pub last_played: Option<u64>,
+    pub playtime_minutes: u64,
 }
 
 /// What a provider reports after a scan.
@@ -100,15 +101,30 @@ pub fn scan() -> ScanResult {
         games.extend(found);
     }
 
-    // Alphabetical by default. Sorting here rather than in the interface means
-    // the frontend can hand the grid an index range without holding the whole
-    // library, which is what §4 asks for.
-    games.sort_by(|a, b| sort_key(&a.title).cmp(&sort_key(&b.title)));
+    // Recently played first, then most played, then installed, then appid.
+    //
+    // Deliberately NOT alphabetical. Titles arrive progressively from the
+    // metadata worker, so an alphabetical library would reshuffle itself under
+    // the cursor for several minutes on first run -- which is intolerable on a
+    // pad. This order is known the instant the scan finishes and never
+    // changes, so names fill in without anything moving. It is also what every
+    // console does by default, and it puts the games worth enriching first at
+    // the front of the queue.
+    games.sort_by(|a, b| {
+        b.last_played
+            .cmp(&a.last_played)
+            .then(b.playtime_minutes.cmp(&a.playtime_minutes))
+            .then(b.installed.cmp(&a.installed))
+            .then(a.provider_id.cmp(&b.provider_id))
+    });
 
     ScanResult { games, providers: results, took_ms: started.elapsed().as_millis() as u64 }
 }
 
 /// Sort "The Witcher 3" under W, and lowercase so case never splits the list.
+/// Unused until alphabetical sorting becomes a user-facing option; kept
+/// because getting it right is fiddlier than it looks.
+#[allow(dead_code)]
 fn sort_key(title: &str) -> String {
     let t = title.trim();
     for article in ["The ", "A ", "An "] {

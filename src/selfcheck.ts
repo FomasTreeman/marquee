@@ -32,7 +32,12 @@ export interface Check {
 function topmostAtCentre(el: Element): { ok: boolean; blocker?: string } {
   const r = el.getBoundingClientRect()
   if (r.width < 2 || r.height < 2) return { ok: false, blocker: 'zero-sized' }
-  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+  const x = r.left + r.width / 2
+  const y = r.top + r.height / 2
+  if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) {
+    return { ok: true } // off-screen; not something this check can speak to
+  }
+  const hit = document.elementFromPoint(x, y)
   if (!hit) return { ok: false, blocker: 'nothing hit' }
   if (hit === el || el.contains(hit)) return { ok: true }
   return { ok: false, blocker: describe(hit) }
@@ -61,9 +66,17 @@ export function runSelfCheck(): Check[] {
   // --- artwork is actually visible ------------------------------------
   // The exact bug from the header. A loaded image behind an opaque sibling
   // passes every other kind of test there is.
+  // Only cards FULLY on screen. A partially visible card has its geometric
+  // centre outside the viewport, where elementFromPoint returns null -- which
+  // the hit test would report as "covered by nothing". A check that cries wolf
+  // is a check that gets ignored, so it only asserts what it can actually see.
   const cards = [...document.querySelectorAll<HTMLElement>('.card')].filter((c) => {
     const r = c.getBoundingClientRect()
-    return r.top < window.innerHeight && r.bottom > 0 && c.style.visibility !== 'hidden'
+    return (
+      c.style.visibility !== 'hidden' &&
+      r.top >= 0 && r.left >= 0 &&
+      r.bottom <= window.innerHeight && r.right <= window.innerWidth
+    )
   })
   const withArt = cards.filter((c) => {
     const img = c.querySelector('img')

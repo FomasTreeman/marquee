@@ -108,6 +108,71 @@ impl Steam {
         out
     }
 
+    /// Games this account has played on this machine, from
+    /// `userdata/<id>/config/localconfig.vdf`.
+    ///
+    /// This is why the library is not just the handful of games currently
+    /// installed. Steam records real playtime and last-played per app, locally
+    /// and with no API key -- and unlike the Web API it needs no account
+    /// linking, and unlike the community profile endpoint it does not require
+    /// the profile to be public. Both of those were tried and neither works
+    /// without authentication any more.
+    ///
+    /// It is not the *owned* library: it covers apps with local config, which
+    /// in practice means anything launched or configured on this machine. That
+    /// is a far better default than nothing, and it is honest about what it is.
+    fn played_games(root: &Path) -> Vec<Game> {
+        let mut out = Vec::new();
+        let Ok(users) = std::fs::read_dir(root.join("userdata")) else {
+            return out;
+        };
+
+        for user in users.flatten() {
+            let file = user.path().join("config/localconfig.vdf");
+            let Ok(text) = std::fs::read_to_string(&file) else { continue };
+            let Ok(parsed) = vdf::parse(&text) else {
+                crate::log_warn!("steam", "could not parse {}", file.display());
+                continue;
+            };
+            let Some(apps) = parsed
+                .root_child()
+                .and_then(|v| v.get("Software"))
+                .and_then(|v| v.get("Valve"))
+                .and_then(|v| v.get("Steam"))
+                .and_then(|v| v.get("apps"))
+            else {
+                continue;
+            };
+
+            for (app_id, entry) in apps.entries() {
+                if !app_id.chars().all(|c| c.is_ascii_digit()) {
+                    continue;
+                }
+                let playtime = entry.u64_at("Playtime").unwrap_or(0);
+                let last_played = entry.u64_at("LastPlayed").filter(|v| *v > 0);
+                // An entry with neither is a cloud-sync stub, not a game.
+                if playtime == 0 && last_played.is_none() {
+                    continue;
+                }
+                out.push(Game {
+                    id: format!("steam:{app_id}"),
+                    provider: "steam".into(),
+                    provider_id: app_id.clone(),
+                    // Filled in by the metadata worker. Empty rather than
+                    // "App 220", so the interface can show that it is still
+                    // arriving instead of showing something wrong.
+                    title: String::new(),
+                    installed: false,
+                    install_dir: None,
+                    size_bytes: 0,
+                    last_played,
+                    playtime_minutes: playtime,
+                });
+            }
+        }
+        out
+    }
+
     fn read_manifest(path: &Path) -> Option<Game> {
         let text = std::fs::read_to_string(path).ok()?;
         let app = vdf::parse(&text).ok()?.root_child()?.clone();
@@ -136,6 +201,7 @@ impl Steam {
             install_dir,
             size_bytes: app.u64_at("SizeOnDisk").unwrap_or(0),
             last_played,
+            playtime_minutes: 0,
         })
     }
 }
@@ -151,7 +217,7 @@ impl LibraryProvider for Steam {
 
     fn scan(&self) -> Result<Vec<Game>, String> {
         let root = Self::root().ok_or("Steam is not installed on this machine")?;
-        let mut games = Vec::new();
+        let mut games: Vec<Game> = Vec::new();
         let mut seen = std::collections::HashSet::new();
 
         for lib in Self::library_paths(&root) {
@@ -171,6 +237,23 @@ impl LibraryProvider for Steam {
                     // The same appid can appear in two libraries after a move.
                     if seen.insert(game.id.clone()) {
                         games.push(game);
+                    }
+                }
+            }
+        }
+
+        // Played-but-not-installed games fill out the rest of the library. An
+        // installed manifest is the better record, so it wins on the fields it
+        // has -- but playtime only exists here, so it is merged in either way.
+        for played in Self::played_games(&root) {
+            match games.iter_mut().find(|g| g.id == played.id) {
+                Some(installed) => {
+                    installed.playtime_minutes = played.playtime_minutes;
+                    installed.last_played = installed.last_played.or(played.last_played);
+                }
+                None => {
+                    if seen.insert(played.id.clone()) {
+                        games.push(played);
                     }
                 }
             }

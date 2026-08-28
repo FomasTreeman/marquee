@@ -11,7 +11,7 @@ import { createShell, setHints } from './shell'
 import { createBackdrop } from './backdrop'
 import { hostInfo, pingMs, inApp } from './host'
 import { createInput, padStatus, type Action } from './input'
-import { scanLibrary, steamArtwork, tintFor, type Game, type ScanResult } from './library'
+import { scanLibrary, requestMeta, onMeta, steamArtwork, tintFor, type Game, type ScanResult } from './library'
 import { installErrorHandlers, logInfo, logWarn, logError, renderFatal, logPath } from './log'
 import { createHud } from './hud'
 import { scheduleSelfCheck } from './selfcheck'
@@ -71,6 +71,7 @@ function mockLibrary(n: number): Game[] {
       installDir: null,
       sizeBytes: (8 + (i * 13) % 90) * 1_073_741_824,
       lastPlayed: i % 3 === 0 ? Math.floor(Date.now() / 1000) - i * 86_400 : null,
+      playtimeMinutes: (i * 137) % 4000,
     })
   }
   return out
@@ -98,10 +99,17 @@ const PROVIDER_NAMES: Record<string, string> = {
   mock: 'Sample',
 }
 
+function hoursLabel(minutes: number): string {
+  if (minutes <= 0) return ''
+  if (minutes < 60) return `${minutes} minutes played`
+  return `${Math.round(minutes / 60)} hours played`
+}
+
 function heroFacts(game: Game): string[] {
   return [
     PROVIDER_NAMES[game.provider] ?? game.provider,
     game.installed ? gib(game.sizeBytes) : 'Not installed',
+    hoursLabel(game.playtimeMinutes),
     playedLabel(game.lastPlayed),
   ].filter(Boolean)
 }
@@ -176,7 +184,7 @@ async function main(): Promise<void> {
     ? `${games.length} ${games.length === 1 ? 'game' : 'games'}`
     : ''
 
-  const grid = createGrid(shell.gridViewport, (index) => {
+  function refreshHero(index: number): void {
     const game = games[index]
     if (!game) return
     backdrop.show(art[index]?.hero)
@@ -196,7 +204,7 @@ async function main(): Promise<void> {
         shell.heroTitle.hidden = false
       }
     }
-    shell.heroTitle.textContent = game.title
+    shell.heroTitle.textContent = game.title || 'Loading…'
 
     shell.heroMeta.textContent = ''
     heroFacts(game).forEach((fact, n) => {
@@ -210,7 +218,9 @@ async function main(): Promise<void> {
       span.textContent = fact
       shell.heroMeta.appendChild(span)
     })
-  })
+  }
+
+  const grid = createGrid(shell.gridViewport, refreshHero)
 
   if (!games.length) {
     renderEmpty(shell.gridViewport, scan)
@@ -218,6 +228,32 @@ async function main(): Promise<void> {
     // setItems announces the initial selection itself, so the hero and the
     // backdrop populate on load without nudging focus back and forth.
     grid.setItems(items)
+
+    // Names arrive progressively. Artwork does not need them -- every cover,
+    // wide art and wordmark is keyed by appid alone -- so the library looks
+    // right immediately and fills in its text over the next few minutes.
+    //
+    // Requested in library order, which is most-recently-played first, so the
+    // games actually on screen are named before anything below the fold.
+    const byAppId = new Map<string, number>()
+    games.forEach((g, i) => { if (g.provider === 'steam') byAppId.set(g.providerId, i) })
+
+    const applyMeta = (appId: string, name: string) => {
+      const index = byAppId.get(appId)
+      if (index === undefined || !name) return
+      const game = games[index]!
+      if (game.title === name) return
+      game.title = name
+      grid.setTitle(index, name)
+      if (index === grid.focused) refreshHero(index)
+    }
+
+    const unlisten = await onMeta((m) => applyMeta(m.appId, m.name))
+    window.addEventListener('beforeunload', () => unlisten())
+
+    const cached = await requestMeta([...byAppId.keys()])
+    for (const m of cached) applyMeta(m.appId, m.name)
+    logInfo('meta', `${cached.length}/${byAppId.size} names already cached`)
   }
 
   const NAV: Partial<Record<Action, [number, number]>> = {

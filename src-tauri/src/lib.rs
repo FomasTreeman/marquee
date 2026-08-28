@@ -8,6 +8,8 @@ mod diag;
 mod input;
 mod library;
 pub mod log;
+mod meta;
+mod paths;
 mod vdf;
 
 use std::sync::OnceLock;
@@ -105,6 +107,7 @@ pub fn run() {
         .setup(move |app| {
             let status = input::spawn(app.handle().clone(), epoch);
             app.manage(status);
+            app.manage(meta::spawn(app.handle().clone()));
             log_info!("boot", "window up");
             Ok(())
         })
@@ -115,7 +118,8 @@ pub fn run() {
             input::pad_status,
             scan_library,
             log::log_from_ui,
-            log::log_path
+            log::log_path,
+            meta::request_meta
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Marquee");
