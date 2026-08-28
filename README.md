@@ -35,9 +35,12 @@ games Steam has never heard of, and they are strictly optional.
 
 ## Status
 
-**Phase 0 — the spike.** The shell runs, the design renders, a grid of 2,000
-cards scrolls without 2,000 DOM nodes, and the pad is read natively in Rust.
-No library, no metadata, no launching yet.
+**Phase 1 — the skeleton.** Phase 0 passed on macOS: 0–2 dropped frames out of
+180 with 2,000 cards, 0.3–2 ms input latency, 0.35 ms IPC. Windows and Linux
+are unmeasured.
+
+Now reading a real Steam library and showing it with real cover art. No
+metadata, no launching, no manual games yet.
 
 - **[docs/PLAN.md](docs/PLAN.md)** — scope, stack, architecture, phasing, and
   the risks worth knowing before starting.

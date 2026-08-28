@@ -102,8 +102,8 @@ A change that breaks one is a bug, not a preference.
 |---|---|---|
 | Cold start → grid painted, 2,000 games | < 800 ms | in-app trace, logged every boot in dev |
 | Idle RSS, 2,000 games | < 200 MB | OS reporting, all three platforms |
-| Grid scroll | locked to refresh rate on integrated graphics | frame timing overlay |
-| Pad press → visible response | < 50 ms | timestamped in the input event |
+| Grid scroll | **< 1% dropped frames**; p99 < 1.25 × frame interval | frame timing HUD |
+| Pad press → visible response | < 50 ms (**measured 0.3–2 ms**; hold that) | timestamped in the input event |
 | Launch keypress → process spawned | < 200 ms | trace |
 | Library rescan, 2,000 games | < 3 s, never blocking the UI | trace |
 

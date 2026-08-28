@@ -6,6 +6,8 @@
 
 mod diag;
 mod input;
+mod library;
+mod vdf;
 
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -26,6 +28,31 @@ fn start() -> Instant {
 #[tauri::command]
 fn ping() -> &'static str {
     "pong"
+}
+
+/// Scan every library provider.
+///
+/// Returns whatever was found plus a per-provider report, so a store that
+/// failed shows as a warning beside the games that did come back rather than
+/// as an empty library with no explanation.
+#[tauri::command]
+async fn scan_library() -> library::ScanResult {
+    // Off the main thread: a cold scan touches the filesystem once per
+    // installed game, and docs/PLAN.md §4 says the scan never blocks the UI.
+    match tauri::async_runtime::spawn_blocking(library::scan).await {
+        Ok(result) => result,
+        Err(e) => library::ScanResult {
+            games: Vec::new(),
+            providers: vec![library::ProviderResult {
+                provider: "scan".into(),
+                detected: true,
+                games: Vec::new(),
+                error: Some(format!("scan task failed: {e}")),
+                took_ms: 0,
+            }],
+            took_ms: 0,
+        },
+    }
 }
 
 /// Milliseconds since the input epoch.
@@ -52,7 +79,8 @@ pub fn run() {
             ping,
             clock_sync,
             diag::host_info,
-            input::pad_status
+            input::pad_status,
+            scan_library
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Marquee");

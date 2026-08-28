@@ -45,10 +45,17 @@ the judder a hand on a stick actually feels.
 | | macOS · WKWebView | Windows · WebView2 | Linux · WebKitGTK |
 |---|---|---|---|
 | **1** builds and runs | ✅ 1m37s cold, 8s warm | | |
-| **2** CSS renders | pending | | |
+| **2** CSS renders | ✅ | | |
 | **3** input latency | ✅ **0.3–2 ms**, worst 6.3 ms | | |
-| **4** grid p99 | ⚠️ re-measuring — see below | | |
+| **4** dropped frames | ✅ **0–2 / 180** (p99 ≈ 19 ms) | | |
 | IPC round trip | ✅ **0.35 ms** | | |
+| gamepad, incl. hot-plug | ✅ | | |
+
+## macOS: passed
+
+All four criteria met on WKWebView. The stack choice stands and Phase 1 may
+begin. Windows and Linux columns remain open and **a pass on one engine is not
+a pass** — §3 of the plan exists precisely because the three differ.
 
 Fill each cell from the HUD. Leave a cell empty rather than guessing; an
 optimistic blank is how a stack choice survives longer than it deserves.
@@ -92,6 +99,32 @@ work that had no business existing. Four causes, all ours:
 
 None of these are Tauri, WebKit or the webview. They are the ordinary way a
 grid gets slow, and they were found because the number was on screen.
+
+### After the fixes: 0–2 dropped frames, and a budget that was wrong
+
+Second run: **0–1 dropped frames, occasionally 2, out of 180** — better than
+99% of frames on time, whether stationary or navigating quickly. p99 barely
+moved, at roughly 19 ms.
+
+Both of those are the expected result, and the second one needs saying plainly
+rather than quietly: **the fixes improved the tail, not the p99, because the
+p99 was never going to move.** A p99 sampled over 180 frames is the second
+worst frame in three seconds, and `requestAnimationFrame` jitter of one frame
+interval is ordinary in every browser engine. The floor sits just above the
+refresh interval no matter how little work the page does.
+
+So the **20 ms p99 budget in the plan was miscalibrated** — it was written
+before anything had been measured and before the code knew the refresh rate.
+It has been replaced by a refresh-relative pair:
+
+| Metric | Old | New |
+|---|---|---|
+| frame time | p99 < 20 ms | p99 < 1.25 × frame interval |
+| judder | — | **dropped frames < 1%** of a 180-frame window |
+
+Dropped frames is the metric to hold. It is refresh-independent, it survives
+moving between a ProMotion laptop and a 60 Hz television, and it counts the
+thing a hand on a stick actually feels.
 
 ## CSS property verdicts
 

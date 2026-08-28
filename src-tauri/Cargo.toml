@@ -23,6 +23,11 @@ serde_json = "1"
 # off-brand pad work without a per-device patch. See src/input.rs.
 gilrs = "0.11"
 
+[target.'cfg(windows)'.dependencies]
+# Steam records its own install path in the registry. Reading it beats
+# guessing Program Files, because a lot of people move Steam to another drive.
+winreg = "0.52"
+
 [profile.dev]
 # The debug build is what we dogfood, so it should not feel like a debug build.
 opt-level = 1

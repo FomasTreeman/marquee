@@ -107,6 +107,9 @@ export function createGrid(
     img.loading = 'lazy'
     img.decoding = 'async'
     img.draggable = false
+    // Not every appid has every asset on the CDN. A missing cover reveals the
+    // tinted fallback underneath rather than a broken image frame.
+    img.addEventListener('error', () => { img.style.display = 'none' })
     const fallback = document.createElement('div')
     fallback.className = 'card-fallback'
     const ring = document.createElement('div')
@@ -150,8 +153,10 @@ export function createGrid(
       s.el.style.setProperty('--card-tint', item.tint)
       s.fallback.textContent = item.title
       if (item.art) {
-        if (s.img.getAttribute('src') !== item.art) s.img.src = item.art
-        s.img.style.display = ''
+        if (s.img.getAttribute('src') !== item.art) {
+          s.img.style.display = ''
+          s.img.src = item.art
+        }
       } else {
         s.img.removeAttribute('src')
         s.img.style.display = 'none'

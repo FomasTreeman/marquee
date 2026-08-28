@@ -13,8 +13,12 @@ import { createGrid, type GridItem } from './grid'
 import { createFrameMeter, installGrainTile } from './perf'
 import { hostInfo, pingMs, inApp } from './host'
 import { createInput, padStatus, type Action } from './input'
+import { scanLibrary, steamArtwork, tintFor, type ScanResult } from './library'
 
-const COUNT = Number(new URLSearchParams(location.search).get('n') ?? 2000)
+const params = new URLSearchParams(location.search)
+/** ?mock=2000 forces the synthetic library, for measuring the grid at a scale
+ *  no real library reaches. */
+const MOCK = Number(params.get('mock') ?? 0)
 
 /** Deterministic placeholder library. No network, no keys, no backend — the
  *  grid is being measured here, not the data layer. */
@@ -34,6 +38,16 @@ function mockLibrary(n: number): GridItem[] {
     })
   }
   return out
+}
+
+/** A provider that failed must be visible. An empty library with no
+ *  explanation is the thing docs/PLAN.md §11 warns about. */
+function libraryLabel(scan: ScanResult): string {
+  const failed = scan.providers.filter((p) => p.error !== null)
+  if (failed.length) return `${failed[0]!.provider}: ${failed[0]!.error}`
+  const found = scan.providers.filter((p) => p.detected).map((p) => p.provider)
+  if (!found.length) return 'no stores detected · mock library'
+  return `${found.join(', ')} · ${scan.games.length} games · ${scan.tookMs} ms`
 }
 
 function padLabel(p: { supported: boolean; connected: number }): string {
@@ -84,8 +98,22 @@ async function main(): Promise<void> {
   viewport.className = 'grid-viewport'
   document.getElementById('app')!.appendChild(viewport)
 
-  const items = mockLibrary(COUNT)
   const grid = createGrid(viewport)
+
+  // The real library, or the synthetic one when asked for or when there is
+  // nothing installed to show.
+  let scan: ScanResult = { games: [], providers: [], tookMs: 0 }
+  if (!MOCK) scan = await scanLibrary()
+
+  const items: GridItem[] = scan.games.length
+    ? scan.games.map((g, i) => ({
+        id: i,
+        title: g.title,
+        tint: tintFor(g.title),
+        art: g.provider === 'steam' ? steamArtwork(g.providerId).cover : undefined,
+      }))
+    : mockLibrary(MOCK || 2000)
+
   grid.setItems(items)
 
   // Pad and keyboard feed the same action stream. Nothing here knows or cares
@@ -116,8 +144,9 @@ async function main(): Promise<void> {
   const budget = { p99: 20, ipc: 2, input: 50 }
 
   if (showHud) {
-    const panel = hud(['host', 'display', 'cards', 'fps', 'p99', 'dropped', '-', 'ipc', 'pad', 'input'])
+    const panel = hud(['host', 'display', 'library', 'cards', 'fps', 'p99', 'dropped', '-', 'ipc', 'pad', 'input'])
     panel.set('host', `${host.webview} · ${host.os}/${host.arch}`)
+    panel.set('library', libraryLabel(scan), scan.providers.some((p) => p.error !== null))
     panel.set('cards', `${items.length.toLocaleString()} · ${grid.columns} cols`)
     panel.set('ipc', ipc === null ? '— browser' : `${ipc.toFixed(2)} ms`, ipc !== null && ipc > budget.ipc)
     panel.set('pad', padLabel(pad), !pad.supported)

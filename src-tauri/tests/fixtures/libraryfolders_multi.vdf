@@ -1,0 +1,22 @@
+"libraryfolders"
+{
+	// Steam writes comments into these occasionally.
+	"0"
+	{
+		"path"		"C:\\Program Files (x86)\\Steam"
+		"label"		""
+		"apps"
+		{
+			"1091500"		"70000000"
+		}
+	}
+	"1"
+	{
+		"path"		"D:\\SteamLibrary"
+		"label"		"games"		[$WINDOWS]
+		"apps"
+		{
+			"367520"		"9000000"
+		}
+	}
+}
