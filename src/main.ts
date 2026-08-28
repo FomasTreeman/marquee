@@ -42,11 +42,39 @@ function padLabel(p: { supported: boolean; connected: number }): string {
   return `<b>${p.connected} connected</b>`
 }
 
-function hud(): HTMLElement {
+/**
+ * The HUD, built once.
+ *
+ * It used to rewrite `innerHTML` twice a second behind a 30px backdrop blur,
+ * which re-parsed the markup and forced a backdrop re-blur every tick. That
+ * showed up as an 18 ms p99 on a *stationary* grid -- the instrument was most
+ * of what it was measuring. Now the structure is created once and only text
+ * nodes change, and the blur is gone from src/css/app.css for the same reason.
+ */
+function hud(rows: string[]): { set(key: string, value: string, bad?: boolean): void } {
   const el = document.createElement('div')
   el.className = 'hud'
+  const cells = new Map<string, HTMLElement>()
+  for (const key of rows) {
+    if (key === '-') { el.appendChild(document.createElement('hr')); continue }
+    const line = document.createElement('div')
+    const label = document.createElement('span')
+    label.className = 'k'
+    label.textContent = key
+    const value = document.createElement('b')
+    line.append(label, value)
+    el.appendChild(line)
+    cells.set(key, value)
+  }
   document.body.appendChild(el)
-  return el
+  return {
+    set(key, value, bad = false) {
+      const cell = cells.get(key)
+      if (!cell || cell.textContent === value) return
+      cell.textContent = value
+      cell.classList.toggle('bad', bad)
+    },
+  }
 }
 
 async function main(): Promise<void> {
@@ -77,33 +105,38 @@ async function main(): Promise<void> {
   })
 
   const meter = createFrameMeter()
-  const panel = hud()
+  // ?hud=0 measures without the instrument in the way. Any HUD costs
+  // something; this is how you find out how much.
+  const showHud = new URLSearchParams(location.search).get('hud') !== '0'
   const host = await hostInfo()
   const ipc = await pingMs()
   const pad = await padStatus()
 
   // docs/PLAN.md §2. A budget nobody can see is a budget nobody keeps.
-  const budget = { fps: 58, p99: 20, ipc: 2, input: 50 }
-  const flag = (v: number, max: number) => (v > max ? ' class="bad"' : '')
+  const budget = { p99: 20, ipc: 2, input: 50 }
 
-  setInterval(() => {
-    const f = meter.read()
-    panel.innerHTML = `
-      <b>${host.webview}</b><br>
-      ${host.os} · ${host.arch} · v${host.version}${host.debug ? ' · debug' : ''}
-      <hr>
-      cards   <b>${items.length.toLocaleString()}</b> · ${grid.columns} cols<br>
-      fps     <b${f.fps < budget.fps ? ' class="bad"' : ''}>${f.fps.toFixed(0)}</b><br>
-      p99     <b${flag(f.p99, budget.p99)}>${f.p99.toFixed(1)} ms</b><br>
-      worst   <b>${f.worst.toFixed(1)} ms</b><br>
-      ipc     ${ipc === null ? '<b>—</b> (browser)' : `<b${flag(ipc, budget.ipc)}>${ipc.toFixed(2)} ms</b>`}
-      <hr>
-      pad     ${padLabel(pad)}<br>
-      input   ${lastLatency === null
-                 ? '<b>—</b> press a pad button'
-                 : `<b${flag(lastLatency, budget.input)}>${lastLatency.toFixed(1)} ms</b> · worst <b${flag(worstLatency, budget.input)}>${worstLatency.toFixed(1)} ms</b>`}
-    `
-  }, 500)
+  if (showHud) {
+    const panel = hud(['host', 'display', 'cards', 'fps', 'p99', 'dropped', '-', 'ipc', 'pad', 'input'])
+    panel.set('host', `${host.webview} · ${host.os}/${host.arch}`)
+    panel.set('cards', `${items.length.toLocaleString()} · ${grid.columns} cols`)
+    panel.set('ipc', ipc === null ? '— browser' : `${ipc.toFixed(2)} ms`, ipc !== null && ipc > budget.ipc)
+    panel.set('pad', padLabel(pad), !pad.supported)
+
+    setInterval(() => {
+      const f = meter.read()
+      const frame = f.hz ? 1000 / f.hz : 0
+      panel.set('display', f.hz ? `${f.hz} Hz · ${frame.toFixed(1)} ms/frame` : '—')
+      panel.set('fps', f.fps.toFixed(0), f.hz > 0 && f.fps < f.hz * 0.95)
+      panel.set('p99', `${f.p99.toFixed(1)} ms`, f.p99 > budget.p99)
+      // The refresh-independent one: frames that overran the display's own
+      // interval by half or more, out of the last three seconds.
+      panel.set('dropped', `${f.dropped} / 180 frames`, f.dropped > 2)
+      panel.set('input', lastLatency === null
+        ? '— press a button'
+        : `${lastLatency.toFixed(1)} ms · worst ${worstLatency.toFixed(1)}`,
+        worstLatency > budget.input)
+    }, 500)
+  }
 
   console.info(`[marquee] spike · ${host.webview} · ${items.length} cards · shell=${inApp ? 'tauri' : 'browser'}`)
 }

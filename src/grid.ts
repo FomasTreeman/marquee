@@ -32,6 +32,13 @@ interface Slot {
   img: HTMLImageElement
   /** Which item this pooled node currently shows, or -1 when parked. */
   index: number
+  /** Last values written to the DOM. Every write is compared against these
+   *  first: an unconditional `style.transform` on 49 nodes is 49 style
+   *  invalidations per frame, and an unconditional `data-focus` is 49 more
+   *  when exactly two of them ever change. That was most of the navigation
+   *  p99. */
+  transform: string
+  focus: boolean
 }
 
 const OVERSCAN_ROWS = 2
@@ -62,6 +69,14 @@ export function createGrid(
   let padTop = 0
   let focused = 0
   let scheduled = false
+  /* Our own copies of the two scroll-related layout values.
+     Reading `scrollTop`/`clientHeight` and then writing `scrollTop` in the
+     same turn forces a synchronous layout, and scrollIntoView() did exactly
+     that on every single focus move. We track them instead: the scroll
+     listener keeps scrollY honest, and clientHeight only changes on resize,
+     which is where we read it. */
+  let scrollY = 0
+  let viewH = 0
 
   function readMetrics(): void {
     const cs = getComputedStyle(document.documentElement)
@@ -75,6 +90,7 @@ export function createGrid(
     cardH = Math.round(cardW / ratio)
     padTop = gap
 
+    viewH = viewport.clientHeight
     const inner = viewport.clientWidth - parseFloat(getComputedStyle(viewport).paddingLeft) * 2
     // The gap only exists *between* columns, hence the +gap on both sides.
     cols = Math.max(1, Math.floor((inner + gap) / (cardW + gap)))
@@ -98,12 +114,12 @@ export function createGrid(
     art.append(fallback, img)
     el.append(art, ring)
     canvas.appendChild(el)
-    return { el, art, fallback, img, index: -1 }
+    return { el, art, fallback, img, index: -1, transform: '', focus: false }
   }
 
   /** Size the pool to cover the viewport plus overscan, once, on resize. */
   function ensurePool(): void {
-    const rows = Math.ceil(viewport.clientHeight / rowHeight()) + OVERSCAN_ROWS * 2
+    const rows = Math.ceil(viewH / rowHeight()) + OVERSCAN_ROWS * 2
     const want = rows * cols
     while (slots.length < want) slots.push(makeSlot())
     while (slots.length > want) {
@@ -123,7 +139,11 @@ export function createGrid(
     const row = (index / cols) | 0
     const x = col * (cardW + gap)
     const y = padTop + row * rowHeight()
-    s.el.style.transform = `translate3d(${x}px, ${y}px, 0)`
+    const transform = `translate3d(${x}px, ${y}px, 0)`
+    if (s.transform !== transform) {
+      s.el.style.transform = transform
+      s.transform = transform
+    }
 
     if (s.index !== index) {
       s.el.style.visibility = 'visible'
@@ -138,13 +158,17 @@ export function createGrid(
       }
       s.index = index
     }
-    s.el.dataset['focus'] = index === focused ? '1' : '0'
+    const isFocused = index === focused
+    if (s.focus !== isFocused) {
+      s.el.dataset['focus'] = isFocused ? '1' : '0'
+      s.focus = isFocused
+    }
   }
 
   function render(): void {
     scheduled = false
     const rh = rowHeight()
-    const firstRow = Math.max(0, ((viewport.scrollTop - padTop) / rh | 0) - OVERSCAN_ROWS)
+    const firstRow = Math.max(0, ((scrollY - padTop) / rh | 0) - OVERSCAN_ROWS)
     const start = firstRow * cols
     for (let i = 0; i < slots.length; i++) paintSlot(slots[i]!, start + i)
   }
@@ -162,34 +186,41 @@ export function createGrid(
     canvas.style.height = `${padTop + rows * rowHeight()}px`
     // A resize can change the column count under the cursor; keep the focused
     // card on screen rather than leaving the user somewhere else entirely.
-    for (const s of slots) s.index = -1
-    render()
+    for (const s of slots) { s.index = -1; s.transform = ''; s.focus = false }
     scrollIntoView()
+    render()
   }
 
+  /** Keeps the focused card on screen. Writes only — never reads back — so
+   *  it cannot force a layout. */
   function scrollIntoView(): void {
     const rh = rowHeight()
     const row = (focused / cols) | 0
     const top = padTop + row * rh
     const bottom = top + cardH
-    const vh = viewport.clientHeight
-    if (top - gap < viewport.scrollTop) {
-      viewport.scrollTop = Math.max(0, top - gap)
-    } else if (bottom + gap > viewport.scrollTop + vh) {
-      viewport.scrollTop = bottom + gap - vh
+    let next = scrollY
+    if (top - gap < scrollY) next = Math.max(0, top - gap)
+    else if (bottom + gap > scrollY + viewH) next = bottom + gap - viewH
+    if (next !== scrollY) {
+      scrollY = next
+      viewport.scrollTop = next
     }
   }
 
   const ro = new ResizeObserver(() => layout())
   ro.observe(viewport)
-  viewport.addEventListener('scroll', schedule, { passive: true })
+  const onScroll = () => { scrollY = viewport.scrollTop; schedule() }
+  viewport.addEventListener('scroll', onScroll, { passive: true })
 
   function setFocus(next: number): void {
     const clamped = Math.max(0, Math.min(items.length - 1, next))
     if (clamped === focused) return
     focused = clamped
     scrollIntoView()
-    render()
+    // Always through rAF. Rendering synchronously here AND again from the
+    // scroll event that scrollIntoView just triggered meant two full renders
+    // per keypress, one of them outside the frame.
+    schedule()
     onFocusChange?.(focused, items[focused])
   }
 
@@ -199,6 +230,6 @@ export function createGrid(
     move(dx, dy) { setFocus(focused + dx + dy * cols) },
     get focused() { return focused },
     get columns() { return cols },
-    destroy() { ro.disconnect(); viewport.removeEventListener('scroll', schedule); canvas.remove() },
+    destroy() { ro.disconnect(); viewport.removeEventListener('scroll', onScroll); canvas.remove() },
   }
 }
