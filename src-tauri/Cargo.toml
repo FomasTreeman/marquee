@@ -19,6 +19,10 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Gamepad input. Uses SDL_GameControllerDB mappings, which is what makes an
+# off-brand pad work without a per-device patch. See src/input.rs.
+gilrs = "0.11"
+
 [profile.dev]
 # The debug build is what we dogfood, so it should not feel like a debug build.
 opt-level = 1

@@ -12,6 +12,7 @@
 import { createGrid, type GridItem } from './grid'
 import { createFrameMeter, installGrainTile } from './perf'
 import { hostInfo, pingMs, inApp } from './host'
+import { createInput, padStatus, type Action } from './input'
 
 const COUNT = Number(new URLSearchParams(location.search).get('n') ?? 2000)
 
@@ -35,6 +36,12 @@ function mockLibrary(n: number): GridItem[] {
   return out
 }
 
+function padLabel(p: { supported: boolean; connected: number }): string {
+  if (!p.supported) return '<b class="bad">unsupported</b>'
+  if (p.connected === 0) return '<b>none connected</b>'
+  return `<b>${p.connected} connected</b>`
+}
+
 function hud(): HTMLElement {
   const el = document.createElement('div')
   el.className = 'hud'
@@ -53,23 +60,30 @@ async function main(): Promise<void> {
   const grid = createGrid(viewport)
   grid.setItems(items)
 
-  // Keyboard stands in for the pad until gilrs lands. The action names are
-  // already the abstract ones so nothing downstream has to change when the
-  // real input source arrives.
-  window.addEventListener('keydown', (e) => {
-    const map: Record<string, [number, number]> = {
-      ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1],
+  // Pad and keyboard feed the same action stream. Nothing here knows or cares
+  // which one moved the cursor.
+  const NAV: Partial<Record<Action, [number, number]>> = {
+    left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1],
+  }
+  let lastLatency: number | null = null
+  let worstLatency = 0
+  await createInput((e) => {
+    if (e.latency !== null) {
+      lastLatency = e.latency
+      worstLatency = Math.max(worstLatency, e.latency)
     }
-    const d = map[e.key]
-    if (d) { e.preventDefault(); grid.move(d[0], d[1]) }
+    const d = NAV[e.action]
+    if (d) grid.move(d[0], d[1])
   })
 
   const meter = createFrameMeter()
   const panel = hud()
   const host = await hostInfo()
   const ipc = await pingMs()
+  const pad = await padStatus()
 
-  const budget = { fps: 58, p99: 20, ipc: 2 }
+  // docs/PLAN.md §2. A budget nobody can see is a budget nobody keeps.
+  const budget = { fps: 58, p99: 20, ipc: 2, input: 50 }
   const flag = (v: number, max: number) => (v > max ? ' class="bad"' : '')
 
   setInterval(() => {
@@ -83,6 +97,11 @@ async function main(): Promise<void> {
       p99     <b${flag(f.p99, budget.p99)}>${f.p99.toFixed(1)} ms</b><br>
       worst   <b>${f.worst.toFixed(1)} ms</b><br>
       ipc     ${ipc === null ? '<b>—</b> (browser)' : `<b${flag(ipc, budget.ipc)}>${ipc.toFixed(2)} ms</b>`}
+      <hr>
+      pad     ${padLabel(pad)}<br>
+      input   ${lastLatency === null
+                 ? '<b>—</b> press a pad button'
+                 : `<b${flag(lastLatency, budget.input)}>${lastLatency.toFixed(1)} ms</b> · worst <b${flag(worstLatency, budget.input)}>${worstLatency.toFixed(1)} ms</b>`}
     `
   }, 500)
 
