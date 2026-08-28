@@ -20,23 +20,28 @@ down in this document rather than argued again later.
 ---
 
 ## 1. Scope
-
 ### What it is
 
 A **frontend for games you already own and have installed.** It finds them,
 makes them beautiful, and launches them. It is a television interface for a PC.
 
+**Exactly one store is automated: Steam.** Every other game — Epic, GOG, EA,
+Ubisoft, Battle.net, Xbox, emulators, itch downloads, a decade-old GOG installer
+— is added the same way: point at the executable. One code path, one UI, no
+per-store reverse engineering.
+
+That decision is the single most important one in this document, and §5 explains
+what it buys and what it costs.
+
 ### What it is not, in v1
 
 - **Not a store.** No purchasing.
 - **Not an installer.** No downloading, patching, or repair. If a game is not
-  installed, we can show it greyed out and hand you off to the store client
-  that owns it.
-- **Not a compatibility layer.** On Linux we shell out to `umu-run` for Windows
-  games. Managing Wine prefixes ourselves is a multi-year project that Lutris,
-  Bottles and Heroic have already each spent years on.
+  installed, the store client that owns it is where you go.
+- **Not a compatibility layer.** Managing Wine prefixes is a multi-year project
+  that Lutris, Bottles and Heroic have each already spent years on.
 - **Not an emulator frontend** — though ROM folders fall out nearly free from
-  the custom-game provider, so we get most of it by accident.
+  the manual-entry path, so we get most of it by accident.
 
 That first exclusion is what makes the project finishable. Downloading and
 installing means per-store authentication, DRM, CDN protocols, delta patching
@@ -55,8 +60,6 @@ between a year and a decade.
 | Steam Big Picture | yes | Steam + shortcuts | yes |
 
 Nothing occupies the top-right of that table. That is the whole thesis.
-
----
 
 ## 2. The priorities, made numeric
 
@@ -227,138 +230,201 @@ carelessly. Non-negotiable rules:
 ---
 
 ## 5. The library problem
+### Steam is automated. Everything else is a path to an executable.
 
-This is where the actual work is. Everything else is a solved problem.
-
-A single Rust trait, one module per store:
+Two providers, and only two:
 
 ```rust
 trait LibraryProvider {
     fn id(&self) -> &'static str;
-    fn detect(&self) -> bool;                       // installed on this machine?
+    fn detect(&self) -> bool;                            // present on this machine?
     fn scan(&self) -> Result<Vec<GameRef>, ScanError>;   // installed games
     fn launch(&self, g: &GameRef) -> Result<Child, LaunchError>;
 }
 ```
 
-Providers are independent, run concurrently, and are individually fallible.
+**Steam** reads `steamapps/libraryfolders.vdf` for the library roots, then
+`appmanifest_*.acf` in each. Plain-text VDF, needs a parser of roughly 150
+lines, and — importantly — **the format is identical on Windows, macOS and
+Linux.** Only the base path differs. Launch by `steam://rungameid/<appid>`.
 
-### Difficulty tiers — read this before estimating anything
+**Manual** is our own table. Title, executable, working directory, arguments,
+art. Launch by spawning the process.
 
-| Tier | Store | Source | Notes |
-|---|---|---|---|
-| **0** | Steam | `steamapps/libraryfolders.vdf` + `appmanifest_*.acf` | Plain text VDF. Needs a ~150-line parser. Multi-library aware. Works on all three OSes. |
-| **0** | Epic | `Data/Manifests/*.item` | Plain JSON. Nearly free. |
-| **0** | Custom / ROMs | our own DB | Ship this first — it is the fallback for everything below. |
-| **1** | GOG Galaxy | `galaxy-2.0.db` SQLite | Read-only, schema is undocumented and can shift. |
-| **1** | Ubisoft Connect | Windows registry `Ubisoft\Launcher\Installs` | Windows only. |
-| **1** | Battle.net | `product.db` protobuf | Needs a schema we do not control. |
-| **2** | Xbox / MS Store | `GamingServices`, package enumeration | Windows-only APIs; launch via `shell:AppsFolder\<PFN>!App`. |
-| **3** | **EA** | encrypted `IS` file under `ProgramData\EA Desktop` | See below. |
+### What that deletes
 
-**EA is the hard one, and it deserves a paragraph of its own.** The modern EA
-Desktop client stores its catalogue in a file encrypted with a key derived from
-machine hardware identifiers. Playnite's EA plugin reverse-engineers that
-derivation, and it breaks whenever EA changes it. The older Origin format
-(`ProgramData\Origin\LocalContent\**\*.mfst`, plain text) is far friendlier but
-is only present on machines that still have legacy installs.
+The original plan had a five-tier difficulty table ending in EA's
+hardware-key-encrypted catalogue file, which Playnite reverse-engineers and
+which breaks whenever EA changes the derivation. Also GOG's undocumented SQLite
+schema, Battle.net's protobuf `product.db`, Ubisoft's registry keys, and the
+Windows-only package APIs behind Xbox.
 
-Plan accordingly: **EA ships behind the custom-game provider, not before it.**
-If a user can add an EA game by hand in fifteen seconds, the encrypted-manifest
-work stops being a launch blocker and becomes a nice-to-have that can break
-without taking a release down with it. Build the escape hatch first.
+All of it is gone. Not deferred — **gone from the roadmap.** With it goes every
+Windows-only code path in the library layer, which is most of why §7 no longer
+needs to sequence platforms.
 
-### Launching, v1: hand off to the store
+### What it costs, honestly
 
-Do not fight DRM. Launch through the store's own URI handler:
+Three things, and none of them are dealbreakers:
 
-- `steam://rungameid/<appid>`
-- `com.epicgames.launcher://apps/<id>?action=launch`
-- GOG, EA, Ubisoft, Battle.net all expose equivalents.
+**1. Adding games is manual work, once per game.** Fifteen seconds each. For a
+library of thirty non-Steam games that is under ten minutes, one time. This is
+the trade and it is a good one.
 
-This is one line per store, survives store updates, keeps overlays and cloud
-saves working, and avoids anti-cheat systems that refuse to run a game started
-from an unexpected parent process.
+**2. An executable has no identity.** This is the real cost, and it is a UI
+problem rather than a plumbing one. `bf2042.exe` is not a title, so the
+add-a-game flow needs a matching step: pick the executable → guess a title from
+the folder and file name → search the metadata sources → **the user picks the
+right game from a short list** → art and metadata attach. That overlay is new
+work that did not exist when every game arrived with a store ID. It is one
+screen, and the prototype already has the overlay patterns for it.
 
-**The honest caveat:** launching a Steam game will open Steam. We are a
-frontend, not a replacement, and on a television that is visible. Mitigate by
-detecting the child process and covering the handoff, but do not pretend it is
-solved. Write it in the README.
+Make the guess good. Folder name beats executable name almost always
+(`.../Cyberpunk 2077/bin/x64/Cyberpunk2077.exe`), and stripping the usual
+`bin`, `x64`, `retail`, `Binaries`, `Win64` segments gets you most of the way.
 
----
+**3. Some executables are launcher stubs.** Starting an EA or Ubisoft game
+directly will often bootstrap that store's client anyway, and a few titles
+refuse to run without it. That is the same visible handoff as the Steam case
+below, not a new problem — but it is not magic either.
+
+### One thing it makes *better*
+
+Playtime. When we spawn the executable ourselves we own the child process and
+can time the session exactly. With the Steam URI handoff our child exits
+immediately and the game is Steam's, so Steam playtime needs process-name
+watching or reading Steam's own records. The manual path is the accurate one.
+
+### The Steam caveat that does not go away
+
+Launching a Steam game opens Steam. We are a frontend, not a replacement, and
+on a television that is visible. Detect the child and cover the handoff, but do
+not pretend it is solved. Put it in the README.
+
+### Leaving the door open
+
+The provider trait means adding Epic later is **additive, not a rewrite** — a
+new module, a registry entry, done. Epic in particular is nearly free: plain
+JSON manifests in `Data/Manifests/*.item`, maybe a hundred lines. If the manual
+flow proves annoying for a store with a lot of games, that store gets a
+provider. The architecture does not need to change for it, which is precisely
+why it is safe to not build it now.
 
 ## 6. Metadata and art
+### IGDB is out
 
-### The constraint that shapes this section
+IGDB requires a Twitch client secret, and a client secret cannot ship inside a
+distributed desktop application — it violates the developer agreement, and an
+app access token is a password. IGDB only accepts app access tokens. Using it
+would mean running a proxy server to hold the secret.
 
-**IGDB requires a Twitch client secret, and a client secret cannot ship inside
-a distributed desktop application** — it violates the developer agreement, and
-an app access token is a password. IGDB's API only accepts app access tokens.
+There is no need to. Three sources cover everything, and **not one of them
+requires a secret or any server-side infrastructure.**
 
-There are exactly two lawful options:
+### The stack
 
-1. **Bring your own credentials.** The user creates a free Twitch application
-   and pastes two values into settings.
-2. **Run a proxy.** A Cloudflare Worker holding the secret, ~50 lines,
-   effectively free at this scale. This is what Playnite does.
+**1. Steam Store API** — `store.steampowered.com/api/appdetails?appids=<id>`.
+**No API key at all.** Descriptions, genres, developer, publisher, release date,
+Metacritic score, screenshots. Rate-limited to roughly 200 requests per five
+minutes, which matters only on a first scan and is trivially handled with a
+queue and a cache. This is a different host from `api.steampowered.com`, which
+does need a key — we do not use that one.
 
-**Recommendation: BYO for v1.** Zero infrastructure, zero running cost, zero
-liability, and it can ship the day the code works. Add the proxy only if the
-project goes public and the setup friction proves to be the thing stopping
-adoption. Design the metadata layer so the swap is a config change.
+For Steam games, this is the whole answer.
 
-### Art sources, in priority order
-
-1. **Steam's public CDN** — no key, no auth, no rate limit worth worrying about:
+**2. Steam's public CDN** — no key, no auth:
    - `library_600x900.jpg` — portrait cover
    - `library_hero.jpg` — wide key art for the backdrop
    - `logo.png` — **transparent wordmark**
 
-   This covers a large fraction of a typical library for free, and the
-   prototype already proves the design works on exactly these three assets.
-   It is the default.
+   The prototype already proves the design works on exactly these three assets,
+   and they exist for a large fraction of any library — including many games
+   bought elsewhere, because Steam has a page for them regardless.
 
-2. **SteamGridDB** — grids, heroes, logos and icons for everything Steam does
-   not have. The API key is generated per-user from a profile page, free, and
-   BYO is the normal, expected pattern there. This is what makes non-Steam
-   games look as good as Steam ones.
+**3. SteamGridDB** — grids, heroes, logos and icons for everything the CDN does
+not have. API key is generated from a profile page, free, per-user, **no
+secret.** This is what makes a manually-added GOG game look as good as a Steam
+one, and given §5 it is now load-bearing rather than a nicety.
 
-3. **IGDB** — descriptions, genres, release dates, scores. Text, mostly.
+**4. RAWG** — descriptions, genres, release dates and Metacritic scores for
+non-Steam games. Free key from `rawg.io/apidocs`, again **a plain key with no
+secret**, 20,000 requests a month. That is generous for a personal library
+provided we cache and never re-fetch, and it is nowhere near enough to be
+careless with.
 
-4. **Manual override**, always. Any user-supplied image wins over every source
-   above and is never overwritten by a rescan.
+Two conditions attach to RAWG and both are easy: attribution is required
+wherever their data appears, so the detail view carries a discreet source line;
+and the free tier is bounded by monthly active users, which a private tool
+never approaches.
 
-That ordering matters: **the app must look finished with no API keys at all.**
-Keys improve coverage; they are not a gate on the first-run experience.
+**5. Manual override**, always. Any user-supplied title, description or image
+wins over every source above and is never overwritten by a rescan.
+
+### The property to protect
+
+**The app must look finished with no keys entered at all.** Steam appdetails
+and the Steam CDN need nothing, and between them they cover the automated half
+of the library completely. SteamGridDB and RAWG keys improve coverage for
+manually-added games; they are never a gate on first run, and the settings
+screen should say so rather than presenting two empty fields on a wizard.
+
+### Keep it swappable
+
+RAWG is the practical choice, not the best-curated database — IGDB's data is
+better maintained. Keep the metadata layer behind one interface so that if this
+ever goes public and a proxy becomes worth running, IGDB slots in as a source
+rather than a rewrite.
 
 ### Licensing note
 
 Cover art is publisher IP. Caching it locally, per user, for their own library
-is ordinary and uncontroversial. Redistributing it — bundling art in the
-installer, mirroring it from our own server — is not. Never ship art.
-
----
+is ordinary and uncontroversial. Redistributing it — bundling art in an
+installer, mirroring it from a server of ours — is not. Never ship art.
 
 ## 7. Platform reality
+### The scope decision dissolved this question
 
-**Windows** — the primary target. Every store exists here. Most of the
-provider work is Windows-specific and some of it (Xbox, registry) has no
-meaning elsewhere.
+With Steam as the only automated provider, there is almost no platform-specific
+code left in the library layer to sequence. What remains:
 
-**Linux** — the most interesting target, because it is the one with a real
-audience that is underserved and because handheld PCs live here. Native games
-and Steam work directly; Windows games go through `umu-run` (umu-launcher),
-the Open Wine Components project that makes Proton and protonfixes usable
-outside Steam. Lutris, Heroic and Bottles all use it. We shell out to it and
-we do not reinvent it. Also: gamepad access may need udev rules on some
-distributions — check in the spike, not in a bug report.
+| Surface | Windows | macOS | Linux |
+|---|---|---|---|
+| Steam library path | `Program Files (x86)\\Steam` + registry | `~/Library/Application Support/Steam` | `~/.steam/steam`, `~/.local/share/Steam` |
+| Steam manifest format | identical | identical | identical |
+| Spawn + watch a process | `std::process` | `std::process` | `std::process` |
+| `steam://` handoff | works | works | works |
+| Inhibit screensaver | `SetThreadExecutionState` | `IOPMAssertion` | D-Bus `org.freedesktop.ScreenSaver` |
+| Packaging | MSI / NSIS | DMG | AppImage / Flatpak |
 
-**macOS** — the development platform, and it should be first-class as a *UI*
-target because that is where the design gets looked at. Be honest that the
-Mac gaming library is small: Steam, native apps, and not much else. Treating
-it as a co-equal gaming target would distort the roadmap.
+Four small platform shims and three packaging targets. That is the entire
+delta. **There is no longer a meaningful "platform first" decision to make** —
+the thing that would have forced one was the per-store reverse engineering,
+and that is gone.
 
----
+### So: all three from commit one, develop on Mac, dogfood on Windows
+
+- **Develop on the Mac** because that is where the machine is and the loop is
+  fastest. There is a real technical dividend too: macOS WKWebView and Linux
+  WebKitGTK are **both WebKit**, so getting the interface right on the Mac gets
+  it most of the way to Linux for free.
+- **Windows is the odd one out**, because WebView2 is Chromium. It is also
+  where the app will actually be used for the next few months, so it is the
+  dogfood target and it is in CI from the first commit. Divergence found in
+  week one is a CSS tweak; found in month four it is an architecture problem.
+- **Linux is not a big undertaking under this scope.** Native Linux games and
+  Steam games both work with no special handling — Steam manages its own Proton
+  and we never see it. Verify it in the Phase 0 spike, package it in Phase 5.
+
+### The one Linux thing that is deferred
+
+Running a *manually-added Windows executable* on Linux needs Proton, via
+`umu-run` (umu-launcher), the project that makes Proton and protonfixes usable
+outside Steam. Lutris, Heroic and Bottles all shell out to it and so should we.
+
+Note how narrow that is: a niche within a niche, and it does not block anything
+else. Defer until Linux is actually a daily driver. Also check in the spike
+whether gamepad access needs udev rules on the target distribution — that is
+the kind of thing better found deliberately than in a bug report.
 
 ## 8. Data model
 
@@ -421,7 +487,6 @@ Two things must change on the way across:
 ---
 
 ## 10. Phases
-
 Each phase has an exit criterion. A phase is not done because the code is
 written; it is done because the criterion is demonstrably met.
 
@@ -429,41 +494,40 @@ written; it is done because the criterion is demonstrably met.
 
 The purpose is to kill the project cheaply if it deserves to die.
 
-- Tauri v2 shell building and running on all three OSes.
+- Tauri v2 shell building and running on Windows, macOS and Linux.
 - The prototype's CSS rendering on all three, with a written verdict on every
   dangerous property.
 - `gilrs` → webview action stream, measured under 50 ms.
 - **A grid of 2,000 placeholder cards scrolling at refresh rate.**
 
-**Exit:** all four demonstrated, on all three OSes, with numbers written down.
-If the grid cannot hold frame rate in a webview, the stack choice was wrong
-and this is the cheapest possible moment to discover it.
+**Exit:** all four demonstrated, on all three, with numbers written down. If
+the grid cannot hold frame rate in a webview, the stack choice was wrong and
+this is the cheapest possible moment to find that out.
 
 ### Phase 1 — Skeleton
 
-Rust core, SQLite with migrations, provider registry. Two providers only:
-**custom games** and **Steam**. Launch by URI. Real data behind the ported
-prototype UI.
+Rust core, SQLite with migrations, the two providers from §5: **Steam** and
+**manual**. Launch by `steam://` and by process spawn respectively. The ported
+prototype UI running on real data.
 
-**Exit:** the app finds a real Steam library, shows it in the real design, and
-launches a game with a controller. Nothing else.
+**Exit:** the app finds the real Steam library, shows it in the real design, and
+launches a game with a controller. A hand-added executable does the same.
 
-### Phase 2 — Art and metadata
+### Phase 2 — Art, metadata, and the add-a-game flow
 
-Steam CDN, SteamGridDB (BYO key), IGDB (BYO credentials). Ingest resizing,
-content-addressed cache, manual override.
+Steam appdetails and CDN (no keys), SteamGridDB and RAWG (BYO keys). Ingest
+resizing, content-addressed cache, manual override.
 
-**Exit:** a 2,000-game library looks like the prototype, and the performance
-budgets in §2 are met with real images.
+Plus the matching overlay from §5 — pick an executable, guess a title, search,
+choose from a short list, attach art. Under this scope that flow is not a side
+feature; **it is how most of the library gets in.** Budget for it accordingly
+and make the guess good.
 
-### Phase 3 — The rest of the stores
+**Exit:** a 2,000-game library looks like the prototype and meets every
+performance budget in §2 with real images. Adding a non-Steam game takes under
+fifteen seconds and lands the right art without typing a full title.
 
-Epic, GOG, then tier 1, then Xbox. EA last and explicitly optional.
-
-**Exit:** each provider has golden-file tests and degrades visibly rather than
-fatally.
-
-### Phase 4 — Big-screen behaviour
+### Phase 3 — Big-screen behaviour
 
 The unglamorous list that decides whether it is actually usable on a TV:
 fullscreen and exclusive mode, first-run without a mouse, gamepad wake,
@@ -473,66 +537,78 @@ detecting a game that failed to start, settings, and theming.
 **Exit:** a full session — boot, browse, launch, play, exit, sleep, wake —
 without touching a keyboard.
 
-### Phase 5 — Release engineering
+### Phase 4 — Release engineering
 
-Windows code signing (or SmartScreen will scare off most users), macOS
-notarization (needs a paid Apple Developer account), Linux packaging
-(AppImage plus Flatpak), Tauri's signed updater, crash reporting.
+Deferred while the project is private, but the work is known: Windows code
+signing (or SmartScreen will scare off most users), macOS notarization (needs a
+paid Apple Developer account), Linux packaging (AppImage plus Flatpak), Tauri's
+signed updater, crash reporting.
 
 **Exit:** somebody who is not us installs it, on a machine we have never
 touched, without instructions.
 
----
-
 ## 11. Risks and caveats
-
 For whoever picks this up later, including us in six months.
 
-**Three webview engines.** The defining risk. §3 covers the mitigation. Do not
-let it slide, because the failure mode is "works on my Mac".
+**Three webview engines.** The defining risk, and the one the scope decision did
+not shrink. §3 covers the mitigation. Do not let it slide, because the failure
+mode is "works on my Mac" — and the daily driver is Windows, the one engine
+that is not WebKit.
 
-**Store formats are undocumented and unstable.** Every parser here reads a
-private format that its owner may change without warning and owes us nothing.
-Golden-file tests catch regressions; they cannot prevent breakage. Design so a
-broken provider is a visible warning, never a crash, and always leave the
-manual escape hatch.
+**Steam's manifest format is undocumented.** Only one parser now reads a private
+format, which is a large improvement over five, but Valve still owes us nothing.
+Golden-file tests against captured `.acf` and `.vdf` files catch regressions;
+they cannot prevent breakage. A failed Steam scan must degrade to a visible
+warning with the manual path still available, never a crash.
+
+**Match quality is the new failure mode.** With most of the library added by
+hand, a bad title guess or a wrong metadata match is the thing that will
+actually annoy a user day to day. It replaces "EA integration broke" as the
+top support issue. Treat the matching overlay as a first-class surface, not
+plumbing, and always allow a manual search and a manual art override.
+
+**RAWG's free tier is 20,000 requests a month** and attribution is required.
+Fine for a personal library, but only if the cache is genuinely permanent and
+nothing re-fetches on a rescan. Get that right early; it is painful to retrofit.
 
 **Anti-cheat.** Some games check their parent process or refuse to run outside
-their launcher. Launching by store URI avoids most of this. It will not avoid
-all of it, and there is no general fix.
+their launcher. Launching Steam titles by URI avoids most of this. Manually
+launched executables from other stores may hit it, and there is no general fix.
 
-**Store terms of service.** Reading local files that a store wrote on the
-user's own machine is fine. Automating a store client, scraping web pages, or
+**Store terms of service.** Reading files a store wrote on the user's own
+machine is fine. Automating a store client, scraping web pages, or
 redistributing store assets is not. Stay on the first side of that line and
 never scrape when an API exists.
-
-**EA's encrypted manifest.** Fragile by construction — see §5. Never a release
-blocker.
-
-**Signing costs real money and time.** An Apple Developer account is an annual
-fee; Windows signing is a certificate with its own procurement story. Neither
-is technically hard and both take longer than expected. Do not discover them
-in release week.
 
 **"It still opens Steam."** Structural, not a bug. Documented in §5.
 
 **Scope creep toward being a store.** Every downloading and installing feature
 looks like a small addition to the one before it, and together they are a
-different, much larger project. §1 is the line. Move it deliberately or not
-at all.
+different, much larger project. §1 is the line. Move it deliberately or not at
+all.
 
----
+**Scope creep back toward per-store providers.** The other direction, and
+subtler: it will be tempting to add Epic "because it is easy", then GOG
+"because it is only SQLite", and end up maintaining five undocumented parsers
+again. The rule from §5 holds — a store earns a provider only when the manual
+flow has proven annoying for it in practice, not in anticipation.
 
 ## 12. Open decisions
+Most of what was open here has been settled: Steam is the only automated
+provider, IGDB is out in favour of key-only sources, the repository stays
+private, and platforms are no longer sequenced.
 
-Genuinely open — needs a call before Phase 1, not before Phase 0.
+What is left:
 
-1. **Name.** "Marquee" is a placeholder. Check availability before committing.
-2. **Licence.** MIT matches both existing projects and maximises adoption.
-   GPL-3 matches Heroic and Lutris and prevents a closed fork. MIT is the
-   default here unless there is a reason.
-3. **Public or private.** Changes the metadata answer (proxy vs BYO), the
-   signing answer, and whether issues become a support obligation. It does not
-   change any code before Phase 4, so it can wait.
-4. **Windows-first or Linux-first for providers.** Windows has all the stores;
-   Linux has the underserved audience and the handhelds.
+1. **Name.** "Marquee" is a placeholder. It costs nothing to change now and it
+   is unfixable once anyone has installed the thing, so decide before the
+   interface starts saying it out loud.
+
+2. **Licence.** Deferred. The repository is private and nothing is published,
+   so this only needs answering if and when it goes public. Both sibling
+   projects are MIT, which is the obvious default if it ever matters.
+
+3. **How much of the tuner survives.** `tuner.js` and `presets.js` are how the
+   design got tuned in the first place and they are genuinely useful, but they
+   are also a whole settings surface with no user. Ship them behind a dev flag
+   in Phase 1 and decide in Phase 3 whether any of it should be user-facing.
