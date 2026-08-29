@@ -105,6 +105,8 @@ export function createGrid(
      which is where we read it. */
   let scrollY = 0
   let viewH = 0
+  /** Leftover width after fitting, split evenly so the grid stays centred. */
+  let sideInset = 0
 
   function readMetrics(): void {
     const cs = getComputedStyle(document.documentElement)
@@ -117,16 +119,34 @@ export function createGrid(
     // as `calc(... * var(--s))` comes back from getComputedStyle as the
     // unresolved calc() string, not a number.
     const scale = px('--s', 1) || 1
-    cardW = px('--card-w', 188) * scale
+    const ideal = px('--card-w', 188) * scale
     gap = px('--gap', 20) * scale
     const ratio = px('--cover-ratio', 0.6667) || 0.6667
-    cardH = Math.round(cardW / ratio)
     padTop = gap
 
     viewH = viewport.clientHeight
     const inner = viewport.clientWidth - parseFloat(getComputedStyle(viewport).paddingLeft) * 2
-    // The gap only exists *between* columns, hence the +gap on both sides.
-    cols = Math.max(1, Math.floor((inner + gap) / (cardW + gap)))
+
+    // Columns from the *ideal* card width. The gap only exists between
+    // columns, hence the +gap on both sides.
+    cols = Math.max(1, Math.floor((inner + gap) / (ideal + gap)))
+
+    // Then widen the cards to consume exactly what is left, rather than
+    // leaving it as dead space against the right edge. A fixed card width
+    // means the remainder -- up to a whole card's worth at an awkward window
+    // size -- pools on one side and the grid looks broken.
+    //
+    // Cards grow rather than the gaps, so the gutters stay constant and the
+    // art stays as large as the space allows. Capped, because at one or two
+    // columns the arithmetic would otherwise produce a card the height of the
+    // window.
+    const fitted = (inner - gap * (cols - 1)) / cols
+    cardW = Math.max(ideal, Math.min(fitted, ideal * 1.35))
+    cardH = Math.round(cardW / ratio)
+
+    // Whatever the cap left over is centred, so a very wide window is
+    // symmetrical rather than left-heavy.
+    sideInset = Math.max(0, (inner - (cols * cardW + gap * (cols - 1))) / 2)
   }
 
   function rowHeight(): number { return cardH + gap }
@@ -147,6 +167,13 @@ export function createGrid(
     img.addEventListener('error', () => {
       img.style.display = 'none'
       reportArtFailure(img.getAttribute('src') ?? '(no src)')
+    })
+    // Some games publish no portrait cover at all, and the artwork pipeline
+    // falls back to the wide store capsule. Cropping that into a 2:3 card would
+    // show a vertical sliver of the middle, so it is contained and centred
+    // against the card's tint instead -- legible, and visibly a fallback.
+    img.addEventListener('load', () => {
+      img.style.objectFit = img.naturalWidth > img.naturalHeight ? 'contain' : 'cover'
     })
     const fallback = document.createElement('div')
     fallback.className = 'card-fallback'
@@ -189,7 +216,7 @@ export function createGrid(
     }
     const col = index % cols
     const row = (index / cols) | 0
-    const x = col * (cardW + gap)
+    const x = sideInset + col * (cardW + gap)
     const y = padTop + row * rowHeight()
     const transform = `translate3d(${x}px, ${y}px, 0)`
     if (s.transform !== transform) {
@@ -247,6 +274,17 @@ export function createGrid(
     // The grid publishes its item count so the self-check can assert that no
     // more cards are visible than there are items -- the exact bug above.
     canvas.dataset['items'] = String(items.length)
+    // Published so the self-check can assert the grid actually fills its width
+    // -- dead space at the right edge is invisible to every other assertion.
+    canvas.dataset['fit'] = JSON.stringify({
+      inner: Math.round(viewport.clientWidth - parseFloat(getComputedStyle(viewport).paddingLeft) * 2),
+      used: Math.round(cols * cardW + gap * (cols - 1)),
+      cols,
+    })
+    // Card size is computed, not a token, so it is published as a variable the
+    // stylesheet reads rather than written onto every card.
+    canvas.style.setProperty('--card-w-fit', `${cardW}px`)
+    canvas.style.setProperty('--card-h-fit', `${cardH}px`)
     scrollIntoView()
     render()
   }

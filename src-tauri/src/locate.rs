@@ -174,8 +174,15 @@ fn roots() -> Vec<PathBuf> {
 /// Bounded deliberately: one level of directories under each root, then at most
 /// three levels inside a matching folder. An unbounded walk of Program Files
 /// takes minutes and would find worse answers.
-pub fn find(title: &str) -> Option<PathBuf> {
-    for root in roots() {
+pub fn find(title: &str, learned: &[String]) -> Option<PathBuf> {
+    // Learned roots first, and they matter far more than the built-in guesses:
+    // anyone with a large collection keeps it on whichever drive had room, and
+    // Program Files is the last place to look.
+    let mut search: Vec<PathBuf> = learned.iter().map(PathBuf::from).collect();
+    search.extend(roots());
+    search.retain(|p| p.is_dir());
+
+    for root in search {
         let Ok(entries) = std::fs::read_dir(&root) else {
             continue;
         };
@@ -253,12 +260,18 @@ fn best_in(dir: &Path, title: &str, depth: usize) -> Option<PathBuf> {
 }
 
 #[tauri::command]
-pub async fn find_executable(title: String) -> Option<String> {
-    tauri::async_runtime::spawn_blocking(move || find(&title))
-        .await
-        .ok()
-        .flatten()
-        .map(|p| p.display().to_string())
+pub async fn find_executable(
+    title: String,
+    store: tauri::State<'_, std::sync::Arc<crate::store::Store>>,
+) -> Result<Option<String>, String> {
+    let learned = store.game_roots().unwrap_or_default();
+    Ok(
+        tauri::async_runtime::spawn_blocking(move || find(&title, &learned))
+            .await
+            .ok()
+            .flatten()
+            .map(|p| p.display().to_string()),
+    )
 }
 
 #[cfg(test)]
@@ -328,7 +341,15 @@ mod tests {
     /// a quiet None rather than anything louder.
     #[test]
     fn a_title_that_matches_nothing_returns_none() {
-        assert!(find("Zzzz No Such Game 91847").is_none());
-        assert!(find("").is_none());
+        assert!(find("Zzzz No Such Game 91847", &[]).is_none());
+        assert!(find("", &[]).is_none());
+    }
+
+    /// A learned root that no longer exists -- an unplugged drive, a folder
+    /// moved -- must be skipped rather than breaking the search.
+    #[test]
+    fn a_missing_learned_root_is_skipped() {
+        let learned = vec!["/no/such/place/at/all".to_string()];
+        assert!(find("Anything", &learned).is_none());
     }
 }

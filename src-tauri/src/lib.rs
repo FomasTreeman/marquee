@@ -96,7 +96,16 @@ fn set_manual_executable(
     executable: Option<String>,
     store: tauri::State<'_, std::sync::Arc<store::Store>>,
 ) -> Result<(), String> {
-    store.set_executable(id, executable.as_deref())
+    store.set_executable(id, executable.as_deref())?;
+    // Learn from it. Guessing at Program Files is worthless for a library kept
+    // in a custom folder on whichever drive had room, so every executable
+    // chosen by hand makes the next automatic lookup more likely to work.
+    if let Some(path) = executable.as_deref() {
+        if let Err(e) = store.remember_root(path) {
+            log_warn!("store", "could not record a game root: {e}");
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]

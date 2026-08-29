@@ -36,14 +36,14 @@ const SAMPLE: Array<[string, string]> = [
 ]
 
 /** Browser-only stand-in for Steam's store search. See searchGames(). */
-export function searchSample(term: string): Array<{ appId: string; name: string; cover: string }> {
+export function searchSample(term: string): Array<{ appId: string; name: string; thumbnail: string }> {
   const q = term.trim().toLowerCase()
   return SAMPLE.filter(([, name]) => name.toLowerCase().includes(q))
     .slice(0, 12)
     .map(([appId, name]) => ({
       appId,
       name,
-      cover: `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/library_600x900.jpg`,
+      thumbnail: `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/header.jpg`,
     }))
 }
 

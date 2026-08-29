@@ -62,8 +62,10 @@ body::after {
   position: absolute;
   top: 0;
   left: 0;
-  width: calc(var(--card-w) * var(--s));
-  height: calc(var(--card-h) * var(--s));
+  /* Computed by the grid to fill the row exactly; the token is the fallback
+     and the starting point it is derived from. */
+  width: var(--card-w-fit, calc(var(--card-w) * var(--s)));
+  height: var(--card-h-fit, calc(var(--card-h) * var(--s)));
   border-radius: calc(var(--r-card) * var(--s));
   /* Position is a transform so scrolling never touches layout. */
   will-change: transform;
@@ -563,7 +565,13 @@ body::after {
   display: flex;
   gap: calc(var(--gap) * var(--s));
   overflow-x: auto;
-  padding-bottom: calc(8px * var(--s));
+  /* Room for the selection outline on every side. Without it the scroll
+     container clips the outline of the first and last result, and the top and
+     bottom of all of them -- the selected item ends up with three visible
+     edges. The negative margin keeps the row optically aligned with the field
+     above despite the padding. */
+  padding: calc(8px * var(--s));
+  margin: calc(-8px * var(--s));
   scrollbar-width: none;
 }
 .add-results::-webkit-scrollbar { display: none; }

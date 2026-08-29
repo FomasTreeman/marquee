@@ -17,12 +17,21 @@
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
 use crate::{log_debug, log_info, log_warn, paths};
+
+/// Bump when a field is added that existing cache entries will not have.
+///
+/// Learned the hard way: `header_image` was added to fix artwork for recent
+/// releases, but every already-cached entry deserialised it as empty, so the
+/// fix silently did nothing for exactly the games that had been seen before.
+/// A cache with no version is a cache that can only ever be wrong once.
+const CACHE_VERSION: u32 = 2;
 
 /// 200 per 5 minutes is one per 1.5 s. Sit just outside it.
 const SPACING: Duration = Duration::from_millis(1700);
@@ -40,6 +49,16 @@ pub struct Meta {
     pub release_date: String,
     pub genres: Vec<String>,
     pub score: Option<u32>,
+    /// The wide store capsule, at its real hashed path.
+    ///
+    /// Needed because the legacy `steam/apps/<id>/header.jpg` route serves a
+    /// grey placeholder for newer releases while this one serves the actual
+    /// image. It is the only real artwork some games expose publicly.
+    #[serde(default)]
+    pub header_image: String,
+    /// Schema version of this cache entry. Absent means version 1.
+    #[serde(default)]
+    pub v: u32,
 }
 
 fn cache_path(app_id: &str) -> PathBuf {
@@ -50,7 +69,13 @@ fn cache_path(app_id: &str) -> PathBuf {
 
 pub fn cached(app_id: &str) -> Option<Meta> {
     let text = std::fs::read_to_string(cache_path(app_id)).ok()?;
-    serde_json::from_str(&text).ok()
+    let meta: Meta = serde_json::from_str(&text).ok()?;
+    // An entry written before a field existed is worse than no entry: it
+    // answers the question wrongly and stops anything re-asking.
+    if meta.v < CACHE_VERSION {
+        return None;
+    }
+    Some(meta)
 }
 
 fn store(meta: &Meta) {
@@ -74,6 +99,7 @@ fn store_miss(app_id: &str) {
     store(&Meta {
         app_id: app_id.to_string(),
         name: String::new(),
+        v: CACHE_VERSION,
         ..Default::default()
     })
 }
@@ -128,7 +154,103 @@ fn parse(app_id: &str, body: &serde_json::Value) -> Option<Meta> {
             .and_then(|m| m.get("score"))
             .and_then(|v| v.as_u64())
             .map(|n| n as u32),
+        header_image: d
+            .get("header_image")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        v: CACHE_VERSION,
     })
+}
+
+/// The store endpoint's rate limit is per client, not per caller.
+///
+/// Two things now make requests: the background worker walking the library, and
+/// the artwork pipeline resolving a card that is being drawn right now. Spacing
+/// them independently would still add up to double the intended rate, so they
+/// share one gate.
+static LAST_REQUEST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+
+fn wait_turn() {
+    let mut last = match LAST_REQUEST.lock() {
+        Ok(l) => l,
+        // A poisoned lock must not stop metadata working; the worst case is a
+        // slightly bunched pair of requests.
+        Err(e) => e.into_inner(),
+    };
+    if let Some(prev) = *last {
+        let since = prev.elapsed();
+        if since < SPACING {
+            std::thread::sleep(SPACING - since);
+        }
+    }
+    *last = Some(std::time::Instant::now());
+}
+
+/// Fetch one game's metadata, synchronously, and cache it.
+///
+/// The background worker is the normal path, but the artwork pipeline needs a
+/// game's hashed header URL the moment it draws a card and cannot wait several
+/// minutes for the queue to reach it. Both go through here, so there is one
+/// definition of what fetching means and one cache.
+///
+/// Returns None for a game with no store page, and caches that too.
+pub enum Fetched {
+    /// Boxed: the other two variants carry nothing, and an enum sized to its
+    /// largest variant would make every return 208 bytes of mostly padding.
+    Found(Box<Meta>),
+    /// Delisted, region-locked, or a tool. Cached, so it is never re-asked.
+    NoStorePage,
+    /// Rate limited or offline. Deliberately not cached: recording a busy
+    /// minute as "no such game" would make it permanent.
+    Retry,
+}
+
+pub fn fetch_one(client: &reqwest::blocking::Client, app_id: &str) -> Fetched {
+    if let Some(meta) = cached(app_id) {
+        return if meta.name.is_empty() {
+            Fetched::NoStorePage
+        } else {
+            Fetched::Found(Box::new(meta))
+        };
+    }
+
+    wait_turn();
+    let url = format!("https://store.steampowered.com/api/appdetails?appids={app_id}&l=en");
+    let Ok(response) = client.get(&url).send() else {
+        return Fetched::Retry;
+    };
+    if response.status().as_u16() == 429 {
+        log_warn!("meta", "rate limited fetching {app_id}");
+        return Fetched::Retry;
+    }
+    let Ok(body) = response.json::<serde_json::Value>() else {
+        return Fetched::Retry;
+    };
+    match parse(app_id, &body) {
+        Some(meta) => {
+            store(&meta);
+            Fetched::Found(Box::new(meta))
+        }
+        None => {
+            store_miss(app_id);
+            Fetched::NoStorePage
+        }
+    }
+}
+
+/// A client configured the way every request in this app should be: bounded,
+/// and identifying itself honestly.
+pub fn http_client() -> Option<reqwest::blocking::Client> {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(20))
+        .user_agent(concat!(
+            "Marquee/",
+            env!("CARGO_PKG_VERSION"),
+            " (game launcher)"
+        ))
+        .build()
+        .ok()
 }
 
 pub struct Enricher {
@@ -202,40 +324,23 @@ pub fn spawn(app: AppHandle) -> Enricher {
                 continue;
             }
 
-            let url = format!("https://store.steampowered.com/api/appdetails?appids={app_id}&l=en");
-            match client.get(&url).send() {
-                Ok(r) if r.status().as_u16() == 429 => {
-                    log_warn!("meta", "rate limited, backing off {}s", BACKOFF.as_secs());
-                    queue.push_front(app_id);
-                    std::thread::sleep(BACKOFF);
-                    continue;
+            match fetch_one(&client, &app_id) {
+                Fetched::Found(meta) => {
+                    fetched += 1;
+                    if fetched % 25 == 0 {
+                        log_info!("meta", "{fetched} fetched, {} queued", queue.len());
+                    }
+                    let _ = app.emit("meta", &meta);
                 }
-                Ok(r) => match r.json::<serde_json::Value>() {
-                    Ok(body) => match parse(&app_id, &body) {
-                        Some(meta) => {
-                            store(&meta);
-                            fetched += 1;
-                            if fetched % 25 == 0 {
-                                log_info!("meta", "{fetched} fetched, {} queued", queue.len());
-                            }
-                            let _ = app.emit("meta", &meta);
-                        }
-                        None => {
-                            // Delisted, region-locked, or a tool. Remember the
-                            // miss so we never ask again.
-                            log_debug!("meta", "no store page for {app_id}");
-                            store_miss(&app_id);
-                        }
-                    },
-                    Err(e) => log_warn!("meta", "bad response for {app_id}: {e}"),
-                },
-                Err(e) => {
-                    log_warn!("meta", "request failed for {app_id}: {e}");
-                    // Offline is not a permanent condition; do not cache a miss.
+                Fetched::NoStorePage => log_debug!("meta", "no store page for {app_id}"),
+                Fetched::Retry => {
+                    // Back of the queue, not the front: a game that cannot be
+                    // fetched right now must not block every game behind it.
+                    log_debug!("meta", "will retry {app_id}");
+                    queue.push_back(app_id);
+                    std::thread::sleep(BACKOFF);
                 }
             }
-
-            std::thread::sleep(SPACING);
         }
     });
 

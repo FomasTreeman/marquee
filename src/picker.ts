@@ -12,7 +12,7 @@
  * one can be wrong, so they must show the same candidates in the same order --
  * otherwise the fix cannot reach what the mistake reached.
  */
-import { searchGames, type SearchHit } from './library'
+import { searchGames, coverFor, type SearchHit } from './library'
 import { logWarn } from './log'
 
 const DEBOUNCE_MS = 280
@@ -70,10 +70,26 @@ export function createPicker(): Picker {
       const card = el('button', 'add-result', results)
       card.dataset['selected'] = i === selected ? '1' : '0'
       const img = el('img', undefined, card)
-      img.src = hit.cover
       img.alt = ''
       img.loading = 'lazy'
-      img.addEventListener('error', () => { img.style.visibility = 'hidden' })
+      // Steam's own thumbnail is the last resort, and it is wide rather than
+      // portrait, so it is contained rather than cropped to a sliver.
+      let triedThumbnail = false
+      img.addEventListener('error', () => {
+        if (!triedThumbnail && hit.thumbnail) {
+          triedThumbnail = true
+          img.style.objectFit = 'contain'
+          img.src = hit.thumbnail
+          return
+        }
+        img.style.visibility = 'hidden'
+      })
+      // A wide image in a portrait slot is a fallback capsule, not a cover.
+      // Cropping it would show a vertical sliver of the middle.
+      img.addEventListener('load', () => {
+        if (img.naturalWidth > img.naturalHeight) img.style.objectFit = 'contain'
+      })
+      img.src = coverFor(hit) ?? hit.thumbnail
       const name = el('span', undefined, card)
       name.textContent = hit.name
       card.onclick = () => { selected = i; void choose() }

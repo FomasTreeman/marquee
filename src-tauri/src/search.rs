@@ -19,9 +19,13 @@ use crate::log_warn;
 pub struct SearchHit {
     pub app_id: String,
     pub name: String,
-    /// Portrait cover, the same asset the grid uses, so a result looks exactly
-    /// like the card it will become.
-    pub cover: String,
+    /// Steam's own thumbnail for this result.
+    ///
+    /// A last resort only. The interface builds its cover from the appid so a
+    /// result goes through the same artwork pipeline as a card -- placeholder
+    /// detection, fallbacks, cache -- and therefore looks exactly like the card
+    /// it is about to become. This is what to show if even that finds nothing.
+    pub thumbnail: String,
 }
 
 fn hits_from(body: &serde_json::Value) -> Vec<SearchHit> {
@@ -37,9 +41,11 @@ fn hits_from(body: &serde_json::Value) -> Vec<SearchHit> {
                         return None;
                     }
                     Some(SearchHit {
-                        cover: format!(
-                            "https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/library_600x900.jpg"
-                        ),
+                        thumbnail: item
+                            .get("tiny_image")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
                         app_id,
                         name,
                     })
@@ -102,12 +108,14 @@ mod tests {
     }"#;
 
     #[test]
-    fn parses_results_and_builds_cover_urls() {
+    fn parses_results_and_keeps_the_thumbnail() {
         let hits = hits_from(&serde_json::from_str(SAMPLE).unwrap());
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].app_id, "367520");
         assert_eq!(hits[0].name, "Hollow Knight");
-        assert!(hits[0].cover.ends_with("/367520/library_600x900.jpg"));
+        // Steam's own thumbnail, used only if the artwork pipeline finds
+        // nothing at all for the appid.
+        assert_eq!(hits[0].thumbnail, "https://x/t.jpg");
     }
 
     /// Valve returns `{"total":0}` with no items key at all for a miss.

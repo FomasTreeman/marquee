@@ -108,6 +108,8 @@ So `src/selfcheck.ts` asserts the invariants that would have failed, and it
 - While the on-screen keyboard is up: exactly one key is highlighted, and it
   does not overlap the field it is driving.
 - Toasts do not intercept pointer events.
+- **The grid fills its width.** Dead space at the right edge is invisible to
+  every other assertion: each card is painted, aligned and correct.
 
 ### It runs when overlays open, not only at boot
 
@@ -127,6 +129,19 @@ Grid assertions are now gated on no overlay being open. The rule generalises —
 **a check must know the states in which its question is meaningful**, because
 output that cries wolf teaches everyone to ignore it, including the output that
 is real.
+
+It happened twice more, which is why the rule is worth stating rather than just
+applying:
+
+- **Only the topmost overlay is checked.** The picker opens *from* the detail
+  view, so the detail view stays open underneath and its buttons are then
+  correctly unreachable. Asserting on them reported a failure while the
+  interface worked exactly as designed.
+- **Transitioned values are only asserted when the window can paint.** The
+  focus ring's opacity is animated, and a hidden window freezes compositor
+  animations mid-flight — so a backgrounded tab reported `opacity 0` for a ring
+  plainly visible in the screenshot taken moments later. The DOM state is
+  asserted always; the painted value only when `visibilityState` is `visible`.
 - The focused card has a visible ring, and no ancestor has paint containment
   that would clip it.
 - The shell's four bands are laid out with non-zero height.

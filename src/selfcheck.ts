@@ -140,9 +140,19 @@ export function runSelfCheck(): Check[] {
       fr.top >= -1 && fr.bottom <= window.innerHeight + 1,
       `top ${Math.round(fr.top)} bottom ${Math.round(fr.bottom)} of ${window.innerHeight}`))
 
+    // The ring's opacity is transitioned, and a hidden window freezes
+    // compositor animations mid-flight -- so a backgrounded tab reports 0 for a
+    // ring that is plainly visible in a screenshot. Assert the DOM state
+    // always, and the painted value only when the window can actually paint.
     const ring = focused.querySelector<HTMLElement>('.card-ring')
-    const ringOk = !!ring && parseFloat(getComputedStyle(ring).opacity) > 0.5
-    out.push(check('focus ring is visible', ringOk, ring ? `opacity ${getComputedStyle(ring).opacity}` : 'no ring element'))
+    const style = ring ? getComputedStyle(ring) : undefined
+    const present = !!ring && style!.display !== 'none' && style!.visibility !== 'hidden'
+    out.push(check('focus ring exists on the focused card', present,
+      ring ? `display ${style!.display}` : 'no ring element'))
+    if (present && document.visibilityState === 'visible') {
+      out.push(check('focus ring is painted', parseFloat(style!.opacity) > 0.5,
+        `opacity ${style!.opacity}`))
+    }
 
     // Paint containment on an ancestor clips an outset ring away silently.
     const clipping = ancestorsOf(focused).find((a) => {
@@ -158,6 +168,23 @@ export function runSelfCheck(): Check[] {
     )
   } else if (cards.length) {
     out.push(check('something is focused', false, 'no card carries data-focus="1"'))
+  }
+
+  // --- the grid fills its width ---------------------------------------
+  // Cards are fixed-width by default, so an awkward window size leaves up to a
+  // whole card's worth of dead space against the right edge. Nothing else here
+  // can see that: every card is painted, aligned and correct.
+  const fitRaw = document.querySelector<HTMLElement>('.grid-canvas')?.dataset['fit']
+  if (fitRaw) {
+    try {
+      const fit = JSON.parse(fitRaw) as { inner: number; used: number; cols: number }
+      const slack = fit.inner - fit.used
+      const gap = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--gap')) || 20
+      out.push(check('the grid fills the width', slack < gap * 2,
+        `${slack}px unused across ${fit.cols} columns`))
+    } catch {
+      // A malformed dataset is not worth failing the run over.
+    }
   }
 
   // --- layout ---------------------------------------------------------
@@ -248,11 +275,21 @@ export function runSelfCheck(): Check[] {
   // Only asserted while open. An overlay is exactly the kind of surface that
   // is hard to reach and easy to break, and its buttons are the only things in
   // the interface that can be silently unclickable.
+  //
+  // Only the TOPMOST one. The picker opens from the detail view, so the detail
+  // view stays open underneath -- and its buttons are then correctly
+  // unreachable. Asserting on it reported a failure while the interface was
+  // working exactly as designed, which is the second time that mistake has
+  // been made here and the reason the rule below is written down.
   const overlays: Array<[string, string]> = [
-    ['.detail', 'detail view'],
     ['.add', 'game picker'],
+    ['.detail', 'detail view'],
   ]
-  for (const [sel, name] of overlays) {
+  const topmost = overlays.find(([sel]) => {
+    const el = document.querySelector<HTMLElement>(sel)
+    return el && !el.hidden
+  })
+  for (const [sel, name] of topmost ? [topmost] : []) {
     const overlay = document.querySelector<HTMLElement>(sel)
     if (!overlay || overlay.hidden) continue
     const r = overlay.getBoundingClientRect()

@@ -86,7 +86,12 @@ async function autoLocate(game: Game, button: HTMLElement, onChanged: () => void
   try {
     const found = await findExecutable(game.title)
     if (!found) {
-      toast(`Could not find ${game.title} automatically. Choose the file instead.`, 'error', 6000)
+      toast(
+        `Could not find ${game.title}. Choose the file instead — once you have, ` +
+          'games in that folder will be found automatically.',
+        'error',
+        7000,
+      )
       return
     }
     await setManualExecutable(id, found)
@@ -161,19 +166,23 @@ export function createDetail(hooks: DetailHooks): DetailView {
         // A hand-added game with nowhere to launch from says exactly that,
         // rather than offering a Play button that cannot work.
         //
-        // "Find it" comes first because it is the one that usually works, and
-        // because hunting through bin/x64 for the real entry point is the
-        // tedious half of adding a game.
-        const find = el('button', 'action action-primary', actions)
-        find.textContent = 'Find it for me'
-        find.onclick = () => void autoLocate(game, find, onChanged)
-
-        const set = el('button', 'action', actions)
-        set.textContent = 'Choose file'
+        // Browsing is the primary action, not the fallback. Someone who added
+        // a game by hand almost always knows exactly where it is, and a
+        // library kept in a custom folder on whichever drive had room is not
+        // somewhere a guess at Program Files is going to reach.
+        const set = el('button', 'action action-primary', actions)
+        set.textContent = 'Choose file…'
         set.onclick = () => {
           void pickExecutable(game, onChanged).catch((e) =>
             toast(`Could not set that. ${String(e)}`, 'error'))
         }
+
+        // Secondary, and it earns its place over time: every file chosen by
+        // hand teaches the app where games live, so this searches those places
+        // first rather than guessing.
+        const find = el('button', 'action', actions)
+        find.textContent = 'Look for it'
+        find.onclick = () => void autoLocate(game, find, onChanged)
       } else {
         const play = el('button', 'action action-primary', actions)
         play.textContent = game.installed ? 'Play' : 'Install and play'

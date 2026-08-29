@@ -62,8 +62,10 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
   and until that existed the headline feature needed a desk
 - **Fixing wrong or missing artwork** on any game by searching the name it is
   actually listed under
-- **Finding a game's executable for you**, so adding one rarely means hunting
-  through `bin/x64` for the real entry point
+- **Learning where you keep games.** Every executable you choose by hand
+  teaches it a folder, and it searches those first next time — so a library on
+  a custom folder on whichever drive had room gets found, which guessing at
+  `Program Files` never would
 
 **Not yet**
 

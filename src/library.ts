@@ -78,7 +78,15 @@ export async function requestMeta(appIds: string[]): Promise<Meta[]> {
 export interface SearchHit {
   appId: string
   name: string
-  cover: string
+  /** Steam's own thumbnail. A last resort — see `coverFor`. */
+  thumbnail: string
+}
+
+/** A search result's cover, built the same way a card's is, so it goes through
+ *  placeholder detection and the fallback chain rather than pointing at a raw
+ *  CDN path that is a grey box for a lot of recent games. */
+export function coverFor(hit: SearchHit): string | undefined {
+  return steamArtwork(hit.appId).cover
 }
 
 /**
@@ -127,8 +135,14 @@ export async function setCustomTitle(gameId: string, title: string | null): Prom
   return call<void>('set_custom_title', { gameId, title })
 }
 
-/** Look for a game's executable in the usual places. A suggestion, not a
- *  decision -- the user confirms whatever comes back. */
+/**
+ * Look for a game's executable.
+ *
+ * Searches the folders previous choices have taught it about first, then a
+ * short list of conventional install locations. A suggestion, not a decision:
+ * the user confirms whatever comes back, because launching the wrong program
+ * is worse than asking.
+ */
 export async function findExecutable(title: string): Promise<string | null> {
   if (!inApp) return null
   return call<string | null>('find_executable', { title })

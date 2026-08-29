@@ -48,6 +48,17 @@ const MIGRATIONS: &[&str] = &[
     // In user_game deliberately: it is a correction the user made, and no
     // scanner may ever clear it.
     "ALTER TABLE user_game ADD COLUMN art_app_id TEXT;",
+    // v3. Where this person actually keeps games.
+    //
+    // Guessing at Program Files and C:\\Games is worthless for anyone whose
+    // library lives in a custom folder on whichever drive had room -- which is
+    // most people with a large collection. So instead of guessing, learn: every
+    // time an executable is chosen by hand, remember the directory its game
+    // folder sits in, and search there first next time.
+    "CREATE TABLE game_root (
+        path     TEXT PRIMARY KEY,
+        added_at INTEGER NOT NULL
+     );",
 ];
 
 pub struct Store(Mutex<Connection>);
@@ -259,6 +270,55 @@ impl Store {
     }
 }
 
+impl Store {
+    /// Remember where a game was found, so the next one nearby is found for
+    /// free.
+    ///
+    /// Records the *grandparent* and great-grandparent of the executable, not
+    /// its own directory: `E:\\Games\\Elden Ring\\Game\\eldenring.exe` means
+    /// the useful root is `E:\\Games`, and scanning the game's own folder would
+    /// never help find a different game.
+    pub fn remember_root(&self, executable: &str) -> Result<(), String> {
+        let path = std::path::Path::new(executable);
+        let mut roots = Vec::new();
+        // Two levels up covers `<root>/<game>/game.exe`; three covers the very
+        // common `<root>/<game>/bin/game.exe`.
+        if let Some(p) = path.parent().and_then(|p| p.parent()) {
+            roots.push(p.to_path_buf());
+            if let Some(g) = p.parent() {
+                roots.push(g.to_path_buf());
+            }
+        }
+        for root in roots {
+            // A filesystem root is not a useful place to start a scan.
+            if root.parent().is_none() {
+                continue;
+            }
+            let Some(text) = root.to_str() else { continue };
+            self.with(|c| {
+                c.execute(
+                    "INSERT OR IGNORE INTO game_root (path, added_at)
+                     VALUES (?1, strftime('%s','now'))",
+                    params![text],
+                )?;
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
+    /// Most recently learned first, and capped: an unbounded list would turn
+    /// an automatic lookup into a full-disk scan.
+    pub fn game_roots(&self) -> Result<Vec<String>, String> {
+        self.with(|c| {
+            let mut stmt =
+                c.prepare("SELECT path FROM game_root ORDER BY added_at DESC LIMIT 16")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            rows.collect()
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,6 +415,39 @@ mod tests {
         assert!(f.favourite, "favourite lost when artwork was set");
         assert_eq!(f.art_app_id.as_deref(), Some("440"));
         assert_eq!(f.custom_title.as_deref(), Some("Renamed"));
+    }
+
+    #[test]
+    fn a_chosen_executable_teaches_us_where_games_live() {
+        let s = memory();
+        s.remember_root("/Volumes/Big/Games/Elden Ring/Game/eldenring.exe")
+            .unwrap();
+        let roots = s.game_roots().unwrap();
+        // The game's own folder is useless for finding a *different* game; its
+        // parent is the one worth scanning.
+        assert!(roots.contains(&"/Volumes/Big/Games/Elden Ring".to_string()));
+        assert!(roots.contains(&"/Volumes/Big/Games".to_string()));
+        assert!(!roots.iter().any(|r| r.ends_with("eldenring.exe")));
+    }
+
+    #[test]
+    fn roots_do_not_pile_up_duplicates() {
+        let s = memory();
+        for game in ["A", "B", "C"] {
+            s.remember_root(&format!("/games/{game}/run.exe")).unwrap();
+        }
+        let roots = s.game_roots().unwrap();
+        assert_eq!(roots.iter().filter(|r| *r == "/games").count(), 1);
+    }
+
+    /// Scanning from a filesystem root is a full-disk walk, which is exactly
+    /// what this feature exists to avoid.
+    #[test]
+    fn a_filesystem_root_is_never_recorded() {
+        let s = memory();
+        s.remember_root("/game.exe").unwrap();
+        s.remember_root("/a/game.exe").unwrap();
+        assert!(!s.game_roots().unwrap().contains(&"/".to_string()));
     }
 
     /// The property the whole schema exists for.

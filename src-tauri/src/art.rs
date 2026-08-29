@@ -85,6 +85,40 @@ impl Kind {
     }
 }
 
+/// Steam serves a flat grey placeholder rather than a 404 when an asset does
+/// not exist, and it does this for a lot of recent releases -- Battlefield 6's
+/// `library_600x900.jpg` is 1.6 KB of grey, while its `library_hero.jpg` is
+/// 250 KB of real art. A 200 is therefore not evidence of anything.
+///
+/// Detected by content rather than by size, because a size threshold is a guess
+/// that fails on genuinely small artwork. A placeholder is near-uniform; real
+/// cover art is not, by an enormous margin.
+fn is_placeholder(img: &image::DynamicImage) -> bool {
+    let grey = img.to_luma8();
+    let (w, h) = (grey.width(), grey.height());
+    if w == 0 || h == 0 {
+        return true;
+    }
+    // Sample a grid rather than every pixel: a few thousand points settle this
+    // question and the full decode is the expensive part anyway.
+    let step_x = (w / 48).max(1);
+    let step_y = (h / 48).max(1);
+    let mut samples = Vec::new();
+    for y in (0..h).step_by(step_y as usize) {
+        for x in (0..w).step_by(step_x as usize) {
+            samples.push(grey.get_pixel(x, y).0[0] as i32);
+        }
+    }
+    if samples.is_empty() {
+        return true;
+    }
+    let mean = samples.iter().sum::<i32>() / samples.len() as i32;
+    let deviation = samples.iter().map(|s| (s - mean).abs()).sum::<i32>() / samples.len() as i32;
+    // Real artwork sits far above this. Measured: Steam's placeholder is
+    // effectively 0, Team Fortress 2's cover is in the high tens.
+    deviation < 8
+}
+
 fn path_for(app_id: &str, kind: Kind) -> PathBuf {
     paths::cache_dir().join("art").join(format!(
         "{app_id}-{}.{}",
@@ -107,34 +141,63 @@ pub fn fetch(app_id: &str, kind: Kind) -> Option<Vec<u8>> {
         return if bytes.is_empty() { None } else { Some(bytes) };
     }
 
-    let url = format!(
+    let client = crate::meta::http_client()?;
+
+    // Candidates in preference order. Cover and hero fall back to the wide
+    // store capsule, which for some recent releases is the only real artwork
+    // published at all -- and a wide image cropped into a portrait card beats
+    // a grey box by a distance.
+    let mut candidates = vec![format!(
         "https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/{}",
         kind.file()
-    );
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .user_agent(concat!(
-            "Marquee/",
-            env!("CARGO_PKG_VERSION"),
-            " (game launcher)"
-        ))
-        .build()
-        .ok()?;
+    )];
+    if kind != Kind::Logo {
+        // Fetched inline rather than waited for. The background worker will
+        // reach this appid eventually, but a card being drawn now cannot wait
+        // several minutes for it -- and both paths share one cache, so this
+        // costs at most one request ever.
+        if let crate::meta::Fetched::Found(m) = crate::meta::fetch_one(&client, app_id) {
+            if !m.header_image.is_empty() {
+                candidates.push(m.header_image);
+            }
+        }
+        candidates.push(format!(
+            "https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg"
+        ));
+    }
 
-    let response = client.get(&url).send().ok()?;
-    if !response.status().is_success() {
-        // Not every appid has every asset. Record the miss and stop asking.
-        log_debug!(
-            "art",
-            "no {} for {app_id} ({})",
-            kind.file(),
-            response.status()
-        );
+    let mut raw = None;
+    for url in &candidates {
+        let Ok(response) = client.get(url).send() else {
+            continue;
+        };
+        if !response.status().is_success() {
+            continue;
+        }
+        let Ok(bytes) = response.bytes() else {
+            continue;
+        };
+        // A 200 proves nothing: Steam answers with a grey placeholder rather
+        // than a 404. Look at the pixels.
+        if let Ok(img) = image::load_from_memory(&bytes) {
+            if is_placeholder(&img) {
+                log_debug!("art", "{app_id}: {url} is a placeholder, trying the next");
+                continue;
+            }
+        }
+        raw = Some(bytes);
+        break;
+    }
+
+    let Some(raw) = raw else {
+        log_debug!("art", "no usable {} for {app_id}", kind.file());
+        // Every candidate was tried, so this miss is a real one and worth
+        // remembering: without it, a game with no artwork costs three requests
+        // on every single launch.
         let _ = paths::ensure(path.parent()?);
         let _ = std::fs::write(&path, b"");
         return None;
-    }
-    let raw = response.bytes().ok()?;
+    };
 
     // None means "store what arrived": either nothing needed doing, or we
     // could not decode it -- and in the second case the webview may well
@@ -245,6 +308,54 @@ mod tests {
         assert_eq!(Kind::Cover.mime(), "image/jpeg");
     }
 
+    /// Steam answers with a flat grey image rather than a 404 when an asset
+    /// does not exist. Battlefield 6's cover is 1.6 KB of exactly that, while
+    /// its wide art is 250 KB of the real thing -- so a 200 proves nothing and
+    /// this is the check that decides.
+    #[test]
+    fn a_flat_image_is_recognised_as_a_placeholder() {
+        let flat = image::DynamicImage::ImageLuma8(image::GrayImage::from_pixel(
+            300,
+            450,
+            image::Luma([128]),
+        ));
+        assert!(is_placeholder(&flat));
+
+        // Very slightly noisy, as a JPEG of a grey box would be after
+        // compression. Still a placeholder.
+        let dithered =
+            image::DynamicImage::ImageLuma8(image::GrayImage::from_fn(300, 450, |x, y| {
+                image::Luma([128 + ((x + y) % 3) as u8])
+            }));
+        assert!(is_placeholder(&dithered));
+    }
+
+    #[test]
+    fn real_artwork_is_not_mistaken_for_a_placeholder() {
+        // Strong structure, as any cover has.
+        let art = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(300, 450, |x, y| {
+            let v = if (x / 20 + y / 20) % 2 == 0 { 20 } else { 230 };
+            image::Rgba([v, v, v, 255])
+        }));
+        assert!(!is_placeholder(&art));
+
+        // A gentle gradient -- dark to light across the frame. Low contrast for
+        // artwork, but nowhere near uniform, and it must survive.
+        let gradient =
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(300, 450, |_, y| {
+                let v = (y * 255 / 450) as u8;
+                image::Rgba([v, v, v, 255])
+            }));
+        assert!(!is_placeholder(&gradient));
+    }
+
+    #[test]
+    fn a_degenerate_image_is_treated_as_a_placeholder() {
+        let one =
+            image::DynamicImage::ImageLuma8(image::GrayImage::from_pixel(1, 1, image::Luma([0])));
+        assert!(is_placeholder(&one));
+    }
+
     #[test]
     fn rubbish_input_is_none_rather_than_a_panic() {
         assert!(resize(b"not an image at all", Kind::Cover).is_none());
@@ -262,5 +373,46 @@ mod tests {
         }
         assert_eq!(Kind::parse("../../etc/passwd"), None);
         assert_eq!(Kind::parse(""), None);
+    }
+}
+
+#[cfg(test)]
+mod live {
+    use super::*;
+
+    /// The real Battlefield 6 case, end to end.
+    ///
+    /// Its `library_600x900.jpg` is 1.6 KB of grey and its `logo.png` is the
+    /// same, while its `library_hero.jpg` is 250 KB of real art and its actual
+    /// capsule exists only under a hashed path. Every part of the fallback is
+    /// exercised by this one appid, which is why it is the fixture.
+    ///
+    ///     cargo test live -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn a_recent_release_still_gets_artwork() {
+        let dir = paths::cache_dir().join("art");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        for (kind, must_have) in [(Kind::Cover, true), (Kind::Hero, true), (Kind::Logo, false)] {
+            let got = fetch("2807960", kind);
+            match &got {
+                Some(bytes) => {
+                    let img = image::load_from_memory(bytes).expect("decodable");
+                    println!(
+                        "  {:?}: {} KB, {}x{}",
+                        kind,
+                        bytes.len() / 1024,
+                        img.width(),
+                        img.height()
+                    );
+                    assert!(!is_placeholder(&img), "{kind:?} came back as a placeholder");
+                }
+                None => println!("  {kind:?}: none"),
+            }
+            if must_have {
+                assert!(got.is_some(), "{kind:?} should have resolved to something");
+            }
+        }
     }
 }
