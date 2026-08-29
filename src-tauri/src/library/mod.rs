@@ -150,7 +150,11 @@ pub fn scan(store: &Store) -> ScanResult {
             .then(a.provider_id.cmp(&b.provider_id))
     });
 
-    ScanResult { games, providers: results, took_ms: started.elapsed().as_millis() as u64 }
+    ScanResult {
+        games,
+        providers: results,
+        took_ms: started.elapsed().as_millis() as u64,
+    }
 }
 
 /// Sort "The Witcher 3" under W, and lowercase so case never splits the list.

@@ -59,7 +59,11 @@ pub async fn search_games(term: String) -> Result<Vec<SearchHit>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(10))
-            .user_agent(concat!("Marquee/", env!("CARGO_PKG_VERSION"), " (game launcher)"))
+            .user_agent(concat!(
+                "Marquee/",
+                env!("CARGO_PKG_VERSION"),
+                " (game launcher)"
+            ))
             .build()
             .map_err(|e| e.to_string())?;
 

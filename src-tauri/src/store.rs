@@ -53,7 +53,8 @@ impl Store {
         if let Some(dir) = path.parent() {
             paths::ensure(dir).map_err(|e| format!("could not create {}: {e}", dir.display()))?;
         }
-        let conn = Connection::open(&path).map_err(|e| format!("could not open {}: {e}", path.display()))?;
+        let conn = Connection::open(&path)
+            .map_err(|e| format!("could not open {}: {e}", path.display()))?;
         // Survives a power cut mid-write, and lets the metadata worker read
         // while the interface writes.
         conn.pragma_update(None, "journal_mode", "WAL").ok();
@@ -64,7 +65,10 @@ impl Store {
     }
 
     fn with<T>(&self, f: impl FnOnce(&Connection) -> rusqlite::Result<T>) -> Result<T, String> {
-        let conn = self.0.lock().map_err(|_| "database lock is poisoned".to_string())?;
+        let conn = self
+            .0
+            .lock()
+            .map_err(|_| "database lock is poisoned".to_string())?;
         f(&conn).map_err(|e| e.to_string())
     }
 }
@@ -74,7 +78,8 @@ fn migrate(conn: &Connection) -> Result<(), String> {
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
     for (i, sql) in MIGRATIONS.iter().enumerate().skip(version as usize) {
-        conn.execute_batch(sql).map_err(|e| format!("migration {} failed: {e}", i + 1))?;
+        conn.execute_batch(sql)
+            .map_err(|e| format!("migration {} failed: {e}", i + 1))?;
         conn.pragma_update(None, "user_version", (i + 1) as i64)
             .map_err(|e| e.to_string())?;
         log_info!("store", "migrated to schema v{}", i + 1);
@@ -133,7 +138,10 @@ impl Store {
 
     pub fn set_executable(&self, id: i64, executable: Option<&str>) -> Result<(), String> {
         self.with(|c| {
-            c.execute("UPDATE manual_game SET executable = ?2 WHERE id = ?1", params![id, executable])?;
+            c.execute(
+                "UPDATE manual_game SET executable = ?2 WHERE id = ?1",
+                params![id, executable],
+            )?;
             Ok(())
         })
     }
@@ -143,7 +151,10 @@ impl Store {
             c.execute("DELETE FROM manual_game WHERE id = ?1", params![id])?;
             // The user data keyed to it goes too -- this is the one deletion
             // that is the user's own instruction rather than a scanner's.
-            c.execute("DELETE FROM user_game WHERE game_id = ?1", params![format!("manual:{id}")])?;
+            c.execute(
+                "DELETE FROM user_game WHERE game_id = ?1",
+                params![format!("manual:{id}")],
+            )?;
             Ok(())
         })
     }
@@ -162,7 +173,8 @@ pub struct UserFlags {
 impl Store {
     pub fn user_flags(&self) -> Result<Vec<(String, UserFlags)>, String> {
         self.with(|c| {
-            let mut stmt = c.prepare("SELECT game_id, favourite, hidden, custom_title FROM user_game")?;
+            let mut stmt =
+                c.prepare("SELECT game_id, favourite, hidden, custom_title FROM user_game")?;
             let rows = stmt.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -215,7 +227,9 @@ mod tests {
         // Running again on an up-to-date database must do nothing rather than
         // fail on "table already exists".
         migrate(&conn).unwrap();
-        let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(v, MIGRATIONS.len() as i64);
     }
 
@@ -257,6 +271,8 @@ mod tests {
         // API that would let it -- that is the point -- so this asserts the
         // absence: nothing but remove_manual_game deletes from user_game.
         let flags = s.user_flags().unwrap();
-        assert!(flags.iter().any(|(id, f)| id == "steam:1091500" && f.favourite));
+        assert!(flags
+            .iter()
+            .any(|(id, f)| id == "steam:1091500" && f.favourite));
     }
 }

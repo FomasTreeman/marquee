@@ -43,7 +43,9 @@ pub struct Meta {
 }
 
 fn cache_path(app_id: &str) -> PathBuf {
-    paths::cache_dir().join("appdetails").join(format!("{app_id}.json"))
+    paths::cache_dir()
+        .join("appdetails")
+        .join(format!("{app_id}.json"))
 }
 
 pub fn cached(app_id: &str) -> Option<Meta> {
@@ -69,7 +71,11 @@ fn store(meta: &Meta) {
 /// Marks an appid we asked about and Steam does not recognise, so the worker
 /// does not ask again on every launch. Delisted games and tools land here.
 fn store_miss(app_id: &str) {
-    store(&Meta { app_id: app_id.to_string(), name: String::new(), ..Default::default() })
+    store(&Meta {
+        app_id: app_id.to_string(),
+        name: String::new(),
+        ..Default::default()
+    })
 }
 
 fn parse(app_id: &str, body: &serde_json::Value) -> Option<Meta> {
@@ -81,7 +87,11 @@ fn parse(app_id: &str, body: &serde_json::Value) -> Option<Meta> {
     let list = |key: &str| -> Vec<String> {
         d.get(key)
             .and_then(|v| v.as_array())
-            .map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default()
     };
     Some(Meta {
@@ -105,7 +115,11 @@ fn parse(app_id: &str, body: &serde_json::Value) -> Option<Meta> {
             .and_then(|v| v.as_array())
             .map(|a| {
                 a.iter()
-                    .filter_map(|g| g.get("description").and_then(|v| v.as_str()).map(String::from))
+                    .filter_map(|g| {
+                        g.get("description")
+                            .and_then(|v| v.as_str())
+                            .map(String::from)
+                    })
                     .collect()
             })
             .unwrap_or_default(),
@@ -142,7 +156,11 @@ pub fn spawn(app: AppHandle) -> Enricher {
             .timeout(Duration::from_secs(20))
             // Identify honestly. docs/PLAN.md §11: stay on the right side of
             // "calling a public endpoint at a human rate".
-            .user_agent(concat!("Marquee/", env!("CARGO_PKG_VERSION"), " (game launcher)"))
+            .user_agent(concat!(
+                "Marquee/",
+                env!("CARGO_PKG_VERSION"),
+                " (game launcher)"
+            ))
             .build()
         {
             Ok(c) => c,
@@ -160,20 +178,22 @@ pub fn spawn(app: AppHandle) -> Enricher {
         let mut fetched = 0usize;
 
         loop {
-            // Drain anything newly requested without blocking if work remains.
-            loop {
-                match if queue.is_empty() { rx.recv().ok() } else { rx.try_recv().ok() } {
-                    Some(batch) => {
-                        for id in batch {
-                            if queued.insert(id.clone()) {
-                                queue.push_back(id);
-                            }
-                        }
+            // Drain anything newly requested. Blocks when there is nothing
+            // left to do, so an idle worker costs nothing.
+            while let Some(batch) = if queue.is_empty() {
+                rx.recv().ok()
+            } else {
+                rx.try_recv().ok()
+            } {
+                for id in batch {
+                    if queued.insert(id.clone()) {
+                        queue.push_back(id);
                     }
-                    None => break,
                 }
             }
-            let Some(app_id) = queue.pop_front() else { continue };
+            let Some(app_id) = queue.pop_front() else {
+                continue;
+            };
 
             if let Some(meta) = cached(&app_id) {
                 if !meta.name.is_empty() {
@@ -182,9 +202,7 @@ pub fn spawn(app: AppHandle) -> Enricher {
                 continue;
             }
 
-            let url = format!(
-                "https://store.steampowered.com/api/appdetails?appids={app_id}&l=en"
-            );
+            let url = format!("https://store.steampowered.com/api/appdetails?appids={app_id}&l=en");
             match client.get(&url).send() {
                 Ok(r) if r.status().as_u16() == 429 => {
                     log_warn!("meta", "rate limited, backing off {}s", BACKOFF.as_secs());
@@ -228,7 +246,11 @@ pub fn spawn(app: AppHandle) -> Enricher {
 /// queues a fetch and the `meta` event arrives later.
 #[tauri::command]
 pub fn request_meta(app_ids: Vec<String>, enricher: tauri::State<'_, Enricher>) -> Vec<Meta> {
-    let ready: Vec<Meta> = app_ids.iter().filter_map(|id| cached(id)).filter(|m| !m.name.is_empty()).collect();
+    let ready: Vec<Meta> = app_ids
+        .iter()
+        .filter_map(|id| cached(id))
+        .filter(|m| !m.name.is_empty())
+        .collect();
     enricher.request(app_ids);
     ready
 }

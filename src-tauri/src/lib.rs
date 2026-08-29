@@ -148,7 +148,9 @@ async fn scan_library(
                     .map(|p| format!(
                         "{}={}",
                         p.provider,
-                        p.error.as_deref().unwrap_or(if p.detected { "ok" } else { "absent" })
+                        p.error
+                            .as_deref()
+                            .unwrap_or(if p.detected { "ok" } else { "absent" })
                     ))
                     .collect::<Vec<_>>()
                     .join(" ")
@@ -158,15 +160,15 @@ async fn scan_library(
         Err(e) => {
             log_error!("scan", "scan task failed: {e}");
             library::ScanResult {
-            games: Vec::new(),
-            providers: vec![library::ProviderResult {
-                provider: "scan".into(),
-                detected: true,
                 games: Vec::new(),
-                error: Some(format!("scan task failed: {e}")),
+                providers: vec![library::ProviderResult {
+                    provider: "scan".into(),
+                    detected: true,
+                    games: Vec::new(),
+                    error: Some(format!("scan task failed: {e}")),
+                    took_ms: 0,
+                }],
                 took_ms: 0,
-            }],
-            took_ms: 0,
             }
         }
     };
@@ -231,9 +233,13 @@ pub fn run() {
                             // appid, so the webview need never revalidate.
                             .header("Cache-Control", "public, max-age=31536000, immutable")
                             .body(bytes),
-                        None => tauri::http::Response::builder().status(404).body(Vec::new()),
+                        None => tauri::http::Response::builder()
+                            .status(404)
+                            .body(Vec::new()),
                     },
-                    _ => tauri::http::Response::builder().status(400).body(Vec::new()),
+                    _ => tauri::http::Response::builder()
+                        .status(400)
+                        .body(Vec::new()),
                 };
                 if let Ok(response) = response {
                     responder.respond(response);

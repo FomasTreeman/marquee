@@ -94,7 +94,10 @@ struct Parser<'a> {
 
 impl<'a> Parser<'a> {
     fn err<T>(&self, message: impl Into<String>) -> Result<T, ParseError> {
-        Err(ParseError { message: message.into(), line: self.line })
+        Err(ParseError {
+            message: message.into(),
+            line: self.line,
+        })
     }
 
     fn peek(&self) -> Option<u8> {
@@ -225,7 +228,12 @@ impl<'a> Parser<'a> {
 pub fn parse(input: &str) -> Result<Value, ParseError> {
     // Some Steam files are written with a UTF-8 BOM.
     let input = input.strip_prefix('\u{feff}').unwrap_or(input);
-    Parser { bytes: input.as_bytes(), pos: 0, line: 1 }.map(0)
+    Parser {
+        bytes: input.as_bytes(),
+        pos: 0,
+        line: 1,
+    }
+    .map(0)
 }
 
 #[cfg(test)]
@@ -282,7 +290,10 @@ mod tests {
         );
         // `"label" "games" [$WINDOWS]` -- the conditional must not become a key.
         assert_eq!(folders.get("1").unwrap().str_at("label"), Some("games"));
-        assert_eq!(folders.get("1").unwrap().str_at("path"), Some("D:\\SteamLibrary"));
+        assert_eq!(
+            folders.get("1").unwrap().str_at("path"),
+            Some("D:\\SteamLibrary")
+        );
     }
 
     #[test]

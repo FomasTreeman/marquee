@@ -105,7 +105,11 @@ fn sink() -> &'static Mutex<Sink> {
             if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > MAX_BYTES {
                 let _ = std::fs::rename(&path, path.with_extension("log.1"));
             }
-            OpenOptions::new().create(true).append(true).open(&path).ok()
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+                .ok()
         })();
         Mutex::new(Sink { file })
     })
@@ -114,7 +118,9 @@ fn sink() -> &'static Mutex<Sink> {
 fn stamp() -> String {
     // Wall-clock to the millisecond, without pulling in a date library for
     // one line of formatting.
-    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     let secs = now.as_secs();
     let (h, m, s) = ((secs / 3600) % 24, (secs / 60) % 60, secs % 60);
     format!("{h:02}:{m:02}:{s:02}.{:03}", now.subsec_millis())

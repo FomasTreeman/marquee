@@ -69,22 +69,32 @@ impl Kind {
     }
 
     fn extension(self) -> &'static str {
-        if self.keeps_alpha() { "png" } else { "jpg" }
+        if self.keeps_alpha() {
+            "png"
+        } else {
+            "jpg"
+        }
     }
 
     pub fn mime(self) -> &'static str {
-        if self.keeps_alpha() { "image/png" } else { "image/jpeg" }
+        if self.keeps_alpha() {
+            "image/png"
+        } else {
+            "image/jpeg"
+        }
     }
 }
 
 fn path_for(app_id: &str, kind: Kind) -> PathBuf {
-    paths::cache_dir()
-        .join("art")
-        .join(format!("{app_id}-{}.{}", match kind {
+    paths::cache_dir().join("art").join(format!(
+        "{app_id}-{}.{}",
+        match kind {
             Kind::Cover => "cover",
             Kind::Hero => "hero",
             Kind::Logo => "logo",
-        }, kind.extension()))
+        },
+        kind.extension()
+    ))
 }
 
 /// Fetch, resize and store. Returns the bytes ready to serve.
@@ -103,14 +113,23 @@ pub fn fetch(app_id: &str, kind: Kind) -> Option<Vec<u8>> {
     );
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(20))
-        .user_agent(concat!("Marquee/", env!("CARGO_PKG_VERSION"), " (game launcher)"))
+        .user_agent(concat!(
+            "Marquee/",
+            env!("CARGO_PKG_VERSION"),
+            " (game launcher)"
+        ))
         .build()
         .ok()?;
 
     let response = client.get(&url).send().ok()?;
     if !response.status().is_success() {
         // Not every appid has every asset. Record the miss and stop asking.
-        log_debug!("art", "no {} for {app_id} ({})", kind.file(), response.status());
+        log_debug!(
+            "art",
+            "no {} for {app_id} ({})",
+            kind.file(),
+            response.status()
+        );
         let _ = paths::ensure(path.parent()?);
         let _ = std::fs::write(&path, b"");
         return None;
@@ -154,7 +173,11 @@ fn resize(raw: &[u8], kind: Kind) -> Option<Vec<u8>> {
     let scale = kind.max_edge() as f32 / w.max(h) as f32;
     // Lanczos3 costs more than Triangle and this runs once per asset ever, off
     // the UI thread. Downscaled cover art is looked at closely.
-    let img = img.resize((w as f32 * scale) as u32, (h as f32 * scale) as u32, FilterType::Lanczos3);
+    let img = img.resize(
+        (w as f32 * scale) as u32,
+        (h as f32 * scale) as u32,
+        FilterType::Lanczos3,
+    );
 
     let mut out = Cursor::new(Vec::new());
     if kind.keeps_alpha() {
@@ -230,7 +253,11 @@ mod tests {
 
     #[test]
     fn kinds_round_trip_through_their_url_names() {
-        for (name, kind) in [("cover", Kind::Cover), ("hero", Kind::Hero), ("logo", Kind::Logo)] {
+        for (name, kind) in [
+            ("cover", Kind::Cover),
+            ("hero", Kind::Hero),
+            ("logo", Kind::Logo),
+        ] {
             assert_eq!(Kind::parse(name), Some(kind));
         }
         assert_eq!(Kind::parse("../../etc/passwd"), None);

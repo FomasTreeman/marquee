@@ -519,7 +519,7 @@ Two things must change on the way across:
 Each phase has an exit criterion. A phase is not done because the code is
 written; it is done because the criterion is demonstrably met.
 
-### Phase 0 — Spike (target: one week)
+### Phase 0 — Spike ✅ *(macOS)*
 
 The purpose is to kill the project cheaply if it deserves to die.
 
@@ -533,7 +533,7 @@ The purpose is to kill the project cheaply if it deserves to die.
 the grid cannot hold frame rate in a webview, the stack choice was wrong and
 this is the cheapest possible moment to find that out.
 
-### Phase 1 — Skeleton
+### Phase 1 — Skeleton ✅ *(macOS)*
 
 Rust core, SQLite with migrations, the two providers from §5: **Steam** and
 **manual**. Launch by `steam://` and by process spawn respectively. The ported
@@ -542,7 +542,7 @@ prototype UI running on real data.
 **Exit:** the app finds the real Steam library, shows it in the real design, and
 launches a game with a controller. A hand-added executable does the same.
 
-### Phase 2 — Art, metadata, and the add-a-game flow
+### Phase 2 — Art, metadata, and the add-a-game flow ✅ *(macOS)*
 
 Steam appdetails and CDN (no keys), SteamGridDB and RAWG (BYO keys). Ingest
 resizing, content-addressed cache, manual override.
@@ -556,7 +556,14 @@ and make the guess good.
 performance budget in §2 with real images. Adding a non-Steam game takes under
 fifteen seconds and lands the right art without typing a full title.
 
-### Phase 3 — Big-screen behaviour
+### Phase 3 — Big-screen behaviour  ← **next**
+
+Plus the two things Phases 1 and 2 deferred and should not defer again: an
+**on-screen keyboard**, without which search and adding a game are unreachable
+from a sofa, and **Windows and Linux actually being run**. Everything is
+written for all three and CI compiles all three, but compiling is not running,
+and §3 is explicit that a pass on one engine is not a pass.
+
 
 The unglamorous list that decides whether it is actually usable on a TV:
 fullscreen and exclusive mode, first-run without a mouse, gamepad wake,

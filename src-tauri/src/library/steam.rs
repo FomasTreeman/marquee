@@ -70,7 +70,9 @@ impl Steam {
     }
 
     fn root() -> Option<PathBuf> {
-        Self::roots().into_iter().find(|p| p.join("steamapps").is_dir())
+        Self::roots()
+            .into_iter()
+            .find(|p| p.join("steamapps").is_dir())
     }
 
     /// Every library folder Steam knows about, including the root itself.
@@ -128,7 +130,9 @@ impl Steam {
 
         for user in users.flatten() {
             let file = user.path().join("config/localconfig.vdf");
-            let Ok(text) = std::fs::read_to_string(&file) else { continue };
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
             let Ok(parsed) = vdf::parse(&text) else {
                 crate::log_warn!("steam", "could not parse {}", file.display());
                 continue;
@@ -279,7 +283,9 @@ fn windows_steam_path() -> Option<PathBuf> {
     // drive.
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
-    let key = RegKey::predef(HKEY_CURRENT_USER).open_subkey("Software\\Valve\\Steam").ok()?;
+    let key = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey("Software\\Valve\\Steam")
+        .ok()?;
     let path: String = key.get_value("SteamPath").ok()?;
     Some(PathBuf::from(path))
 }
@@ -294,7 +300,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let full = dir.join("appmanifest_365670.acf");
-        std::fs::write(&full, include_str!("../../tests/fixtures/appmanifest_365670.acf")).unwrap();
+        std::fs::write(
+            &full,
+            include_str!("../../tests/fixtures/appmanifest_365670.acf"),
+        )
+        .unwrap();
         let game = Steam::read_manifest(&full).unwrap();
         assert_eq!(game.id, "steam:365670");
         assert_eq!(game.title, "Blender");
@@ -302,7 +312,11 @@ mod tests {
 
         // StateFlags 1026 -- a manifest exists but the game is still updating.
         let partial = dir.join("appmanifest_1145360.acf");
-        std::fs::write(&partial, include_str!("../../tests/fixtures/appmanifest_partial.acf")).unwrap();
+        std::fs::write(
+            &partial,
+            include_str!("../../tests/fixtures/appmanifest_partial.acf"),
+        )
+        .unwrap();
         let game = Steam::read_manifest(&partial).unwrap();
         assert_eq!(game.title, "Hades");
         assert!(!game.installed, "1026 has no fully-installed bit set");
@@ -326,7 +340,10 @@ mod tests {
         // detect() gates scan(); this asserts the contract holds either way.
         let s = Steam;
         if !s.detect() {
-            assert!(s.scan().is_err(), "an absent Steam is an error, not a panic");
+            assert!(
+                s.scan().is_err(),
+                "an absent Steam is an error, not a panic"
+            );
         } else {
             assert!(s.scan().is_ok());
         }

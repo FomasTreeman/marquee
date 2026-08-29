@@ -35,17 +35,39 @@ games Steam has never heard of, and they are strictly optional.
 
 ## Status
 
-**Phase 1 is done on macOS.** Phase 0 passed there too: 0–2 dropped frames out
-of 180 with 2,000 cards, 0.3–2 ms input latency, 0.35 ms IPC. **Windows and
-Linux are unmeasured and unbuilt.**
+**Phases 0–2 are done on macOS.** Not a prototype: it reads a real library,
+looks right, and launches games.
 
-Working: the Steam library (installed *and* played, with real playtime), cover
-art, wide key art and transparent wordmarks, names and metadata with no API
-key, launching, a detail view, favourites that survive a rescan, and adding any
-other game by typing its name.
+```
+INFO  scan       215 games in 0 ms (steam=ok manual=ok)
+INFO  boot       ready in 116 ms · 215 games
+INFO  selfcheck  16 checks passed
+```
 
-Not yet: filters and search within the library, an on-screen keyboard,
-settings, and anything at all on Windows or Linux.
+Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
+0.3–2 ms input latency, 0.35 ms IPC round trip. Budgets and method are in
+[docs/PHASE-0.md](docs/PHASE-0.md).
+
+**Working**
+
+- The Steam library — installed *and* played, with real playtime, from Steam's
+  own local files
+- Cover art, wide key art and transparent wordmarks, fetched once, resized on
+  ingest, then served from disk. The library renders with no network at all
+- Names, descriptions, genres, dates and scores — **no API key anywhere**
+- Launching, by `steam://` for Steam and directly for anything else
+- A detail view, favourites that survive a rescan, filter presets, search
+- **Adding any other game by typing its name**
+
+**Not yet**
+
+- **Windows and Linux are entirely unverified.** The code is written for all
+  three and CI builds all three, but nothing has been *run* anywhere but macOS,
+  and [the plan](docs/PLAN.md) is explicit that a pass on one webview engine is
+  not a pass
+- An on-screen keyboard, so search and adding games need a real keyboard
+- Settings, sort options, categories
+- Anything about a game that is owned but has never been played or installed
 
 - **[docs/PLAN.md](docs/PLAN.md)** — scope, stack, architecture, phasing, and
   the risks worth knowing before starting.
@@ -74,6 +96,9 @@ with two games installed. `?hud=0` hides the HUD, and **P** toggles it.
 | **Y** | Details |
 | **X** | Favourite |
 | **☰** / Tab | Add a game by name |
+| **LB / RB** | Cycle filter presets |
+| **/** or F | Search the library |
+| **P** | Toggle the performance HUD |
 
 `pnpm app` puts a HUD in the bottom right with frame rate, input latency, IPC
 round trip and the webview that drew it. It is there because priority #1 is

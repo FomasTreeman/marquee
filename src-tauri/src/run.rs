@@ -30,7 +30,11 @@ pub enum Launch {
     /// A URI for the platform's handler to resolve.
     Uri(String),
     /// An executable we spawn and own.
-    Process { program: PathBuf, args: Vec<String>, cwd: Option<PathBuf> },
+    Process {
+        program: PathBuf,
+        args: Vec<String>,
+        cwd: Option<PathBuf>,
+    },
 }
 
 /// Work out how a game should start, without starting it.
@@ -40,13 +44,17 @@ pub enum Launch {
 pub fn plan(game: &Game) -> Result<Launch, String> {
     match game.provider.as_str() {
         "steam" => {
-            if game.provider_id.is_empty() || !game.provider_id.chars().all(|c| c.is_ascii_digit()) {
+            if game.provider_id.is_empty() || !game.provider_id.chars().all(|c| c.is_ascii_digit())
+            {
                 return Err(format!("not a valid Steam appid: {:?}", game.provider_id));
             }
             // rungameid, not launch/<id>: it is the form Steam itself uses from
             // the library, and it handles a game that is owned but not yet
             // installed by offering to install it rather than failing.
-            Ok(Launch::Uri(format!("steam://rungameid/{}", game.provider_id)))
+            Ok(Launch::Uri(format!(
+                "steam://rungameid/{}",
+                game.provider_id
+            )))
         }
         "manual" => {
             let path = game
@@ -57,7 +65,11 @@ pub fn plan(game: &Game) -> Result<Launch, String> {
                 return Err(format!("executable is missing: {}", path.display()));
             }
             let cwd = path.parent().map(PathBuf::from);
-            Ok(Launch::Process { program: path, args: Vec::new(), cwd })
+            Ok(Launch::Process {
+                program: path,
+                args: Vec::new(),
+                cwd,
+            })
         }
         other => Err(format!("do not know how to launch a {other} game")),
     }
@@ -96,7 +108,8 @@ fn open_uri(uri: &str) -> Result<(), String> {
         c
     };
 
-    cmd.spawn().map_err(|e| format!("could not open {uri}: {e}"))?;
+    cmd.spawn()
+        .map_err(|e| format!("could not open {uri}: {e}"))?;
     Ok(())
 }
 
@@ -114,7 +127,8 @@ pub fn start(game: &Game) -> Result<Launch, String> {
             if let Some(dir) = cwd {
                 cmd.current_dir(dir);
             }
-            cmd.spawn().map_err(|e| format!("could not start {}: {e}", program.display()))?;
+            cmd.spawn()
+                .map_err(|e| format!("could not start {}: {e}", program.display()))?;
         }
     }
     Ok(plan)

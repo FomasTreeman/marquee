@@ -51,7 +51,10 @@ impl Action {
     /// Only directions and shoulders auto-repeat. A repeating confirm button
     /// launches a game twice.
     fn repeats(self) -> bool {
-        matches!(self, Action::Up | Action::Down | Action::Left | Action::Right | Action::Lb | Action::Rb)
+        matches!(
+            self,
+            Action::Up | Action::Down | Action::Left | Action::Right | Action::Lb | Action::Rb
+        )
     }
 }
 
@@ -166,7 +169,11 @@ pub fn spawn(app: AppHandle, start: Instant) -> Arc<Status> {
         let emit = |action: Action, repeat: bool| {
             let _ = app.emit(
                 "input",
-                InputEvent { action, repeat, t: start.elapsed().as_secs_f64() * 1000.0 },
+                InputEvent {
+                    action,
+                    repeat,
+                    t: start.elapsed().as_secs_f64() * 1000.0,
+                },
             );
         };
 
@@ -202,10 +209,11 @@ pub fn spawn(app: AppHandle, start: Instant) -> Arc<Status> {
                             None => {
                                 // Released back inside the deadzone: stop any
                                 // repeat this stick owned.
-                                if xs.held.is_none() && ys.held.is_none() {
-                                    if matches!(held, Some((h, _)) if h.repeats()) {
-                                        held = None;
-                                    }
+                                if xs.held.is_none()
+                                    && ys.held.is_none()
+                                    && matches!(held, Some((h, _)) if h.repeats())
+                                {
+                                    held = None;
                                 }
                             }
                         }
