@@ -41,6 +41,11 @@ pub fn folder_matches(title: &str, folder: &str) -> bool {
 }
 
 /// Names that are never the game, however large the file.
+///
+/// Kept grouped and compact on purpose: rustfmt would put each string on its
+/// own line, and thirty unlabelled lines is a worse reference than four
+/// labelled groups when you are deciding whether something belongs here.
+#[rustfmt::skip]
 const NEVER: &[&str] = &[
     // Installers and runtimes
     "unins", "uninstall", "setup", "install", "redist", "vcredist", "directx",
