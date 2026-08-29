@@ -35,12 +35,17 @@ games Steam has never heard of, and they are strictly optional.
 
 ## Status
 
-**Phase 1 — the skeleton.** Phase 0 passed on macOS: 0–2 dropped frames out of
-180 with 2,000 cards, 0.3–2 ms input latency, 0.35 ms IPC. Windows and Linux
-are unmeasured.
+**Phase 1 is done on macOS.** Phase 0 passed there too: 0–2 dropped frames out
+of 180 with 2,000 cards, 0.3–2 ms input latency, 0.35 ms IPC. **Windows and
+Linux are unmeasured and unbuilt.**
 
-Now reading a real Steam library and showing it with real cover art. No
-metadata, no launching, no manual games yet.
+Working: the Steam library (installed *and* played, with real playtime), cover
+art, wide key art and transparent wordmarks, names and metadata with no API
+key, launching, a detail view, favourites that survive a rescan, and adding any
+other game by typing its name.
+
+Not yet: filters and search within the library, an on-screen keyboard,
+settings, and anything at all on Windows or Linux.
 
 - **[docs/PLAN.md](docs/PLAN.md)** — scope, stack, architecture, phasing, and
   the risks worth knowing before starting.
@@ -61,7 +66,14 @@ pnpm test       # cargo test + tsc
 ```
 
 `?mock=40` populates the library with real Steam titles — useful on a machine
-with two games installed. `?hud=0` hides the HUD, and so does **Y** on the pad.
+with two games installed. `?hud=0` hides the HUD, and **P** toggles it.
+
+| | |
+|---|---|
+| **A** | Play |
+| **Y** | Details |
+| **X** | Favourite |
+| **☰** / Tab | Add a game by name |
 
 `pnpm app` puts a HUD in the bottom right with frame rate, input latency, IPC
 round trip and the webview that drew it. It is there because priority #1 is

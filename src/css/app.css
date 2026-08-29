@@ -363,3 +363,236 @@ body::after {
   font-size: 0.9em;
   color: var(--fg1);
 }
+
+
+/* --- toasts -------------------------------------------------------
+   Bottom centre, above the legend. Nothing here may require
+   dismissing: on a television there is no pointer and no keyboard. */
+.toasts {
+  position: fixed;
+  left: 50%;
+  bottom: calc(96px * var(--s));
+  z-index: 5000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(8px * var(--s));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+.toast {
+  padding: calc(12px * var(--s)) calc(22px * var(--s));
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: rgb(6 7 9 / 0.94);
+  color: var(--fg1);
+  font-size: calc(15px * var(--s));
+  opacity: 1;
+  transition: opacity calc(var(--motion) * 320ms) ease-out;
+}
+.toast-error { border-color: rgb(255 107 107 / 0.4); color: var(--warning); }
+.toast.is-leaving { opacity: 0; }
+
+
+/* ==================================================================
+   DETAIL VIEW
+
+   Everything at once on one scroll. Read from across a room, so a
+   few large things rather than many small ones, and nothing hidden
+   behind a tab.
+   ================================================================== */
+
+.detail {
+  position: fixed;
+  inset: 0;
+  z-index: 4000;
+  background: var(--bg0);
+}
+.detail[hidden] { display: none; }
+
+.detail-bg { position: absolute; inset: 0; overflow: hidden; }
+.detail-bg img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 60% 15%;
+  opacity: var(--ambient);
+}
+.detail-bg img[hidden] { display: none; }
+.detail-scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(95deg, #000 30%, rgb(0 0 0 / 0.8) 55%, rgb(0 0 0 / 0.35) 100%),
+    linear-gradient(0deg, #000 10%, rgb(0 0 0 / 0) 70%);
+}
+
+.detail-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.detail-scroll::-webkit-scrollbar { display: none; }
+
+.detail-body {
+  max-width: calc(760px * var(--s));
+  padding: calc(96px * var(--s)) calc(var(--pad-edge) * var(--s)) calc(80px * var(--s));
+}
+
+.detail-logo {
+  max-height: calc(150px * var(--s));
+  max-width: 100%;
+  object-fit: contain;
+  object-position: left bottom;
+  filter: drop-shadow(0 calc(2px * var(--s)) calc(20px * var(--s)) rgb(0 0 0 / 0.9));
+}
+.detail-logo[hidden], .detail-title[hidden] { display: none; }
+.detail-title {
+  margin: 0;
+  font-size: calc(48px * var(--s));
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  color: var(--fg1);
+}
+
+.detail-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(8px * var(--s));
+  margin-top: calc(18px * var(--s));
+}
+.tag {
+  padding: calc(5px * var(--s)) calc(13px * var(--s));
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  font-size: calc(13px * var(--s));
+  color: var(--fg2);
+}
+
+.detail-actions { display: flex; gap: calc(12px * var(--s)); margin-top: calc(26px * var(--s)); }
+.action {
+  padding: calc(13px * var(--s)) calc(30px * var(--s));
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--spec);
+  color: var(--fg1);
+  font-family: inherit;
+  font-size: calc(16px * var(--s));
+  cursor: pointer;
+}
+.action-primary { background: var(--accent); color: #000; border-color: transparent; font-weight: 500; }
+
+.detail-desc {
+  margin: calc(28px * var(--s)) 0 0;
+  font-size: calc(17px * var(--s));
+  line-height: 1.65;
+  color: var(--fg2);
+  max-width: calc(620px * var(--s));
+}
+.detail-desc[hidden] { display: none; }
+
+.detail-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: calc(10px * var(--s)) calc(28px * var(--s));
+  margin: calc(32px * var(--s)) 0 0;
+  font-size: calc(15px * var(--s));
+}
+.detail-facts dt { color: var(--fg3); }
+.detail-facts dd { margin: 0; color: var(--fg1); }
+
+
+/* ==================================================================
+   ADD A GAME
+
+   One field. Results are the same covers the grid will show, so a
+   result looks exactly like the card it is about to become.
+   ================================================================== */
+
+.add {
+  position: fixed;
+  inset: 0;
+  z-index: 4500;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 0.86);
+  backdrop-filter: blur(calc(var(--backdrop-blur) / 2));
+}
+.add[hidden] { display: none; }
+
+.add-panel {
+  width: min(90vw, calc(1020px * var(--s)));
+  padding: calc(40px * var(--s));
+  border: 1px solid var(--line);
+  border-radius: calc(var(--r-panel) * var(--s));
+  background: var(--bg0);
+}
+.add-heading {
+  margin: 0;
+  font-size: calc(30px * var(--s));
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  color: var(--fg1);
+}
+.add-sub { margin: calc(8px * var(--s)) 0 calc(24px * var(--s)); color: var(--fg2); font-size: calc(15px * var(--s)); }
+
+.add-field {
+  width: 100%;
+  padding: calc(16px * var(--s)) calc(22px * var(--s));
+  border: 1px solid var(--spec);
+  border-radius: calc(var(--r-inner) * var(--s));
+  background: #0a0b0e;
+  color: var(--fg1);
+  font-family: inherit;
+  font-size: calc(22px * var(--s));
+  font-weight: 300;
+  outline: none;
+}
+.add-field:focus { border-color: var(--focusBorder); }
+.add-field::placeholder { color: var(--fg3); }
+
+.add-status {
+  margin: calc(14px * var(--s)) 0;
+  min-height: calc(20px * var(--s));
+  font-size: calc(14px * var(--s));
+  color: var(--fg2);
+}
+
+.add-results {
+  display: flex;
+  gap: calc(var(--gap) * var(--s));
+  overflow-x: auto;
+  padding-bottom: calc(8px * var(--s));
+  scrollbar-width: none;
+}
+.add-results::-webkit-scrollbar { display: none; }
+
+.add-result {
+  flex: none;
+  width: calc(var(--card-w) * var(--s) * 0.8);
+  display: flex;
+  flex-direction: column;
+  gap: calc(10px * var(--s));
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg2);
+  font-family: inherit;
+  font-size: calc(13px * var(--s));
+  text-align: left;
+  cursor: pointer;
+}
+.add-result img {
+  width: 100%;
+  aspect-ratio: var(--cover-ratio);
+  object-fit: cover;
+  border-radius: calc(var(--r-inner) * var(--s));
+  background: #14161c;
+  /* Outline rather than border: a border would resize the cover and shift
+     every neighbour when selection moves. */
+  outline: calc(3px * var(--s)) solid transparent;
+  outline-offset: calc(3px * var(--s));
+}
+.add-result[data-selected="1"] img { outline-color: var(--accentLight); }
+.add-result[data-selected="1"] { color: var(--fg1); }

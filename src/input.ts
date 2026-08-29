@@ -17,6 +17,9 @@ export type Action =
   | 'a' | 'b' | 'x' | 'y'
   | 'lb' | 'rb'
   | 'menu' | 'mainmenu'
+  /** Keyboard only. The HUD is a development tool and does not deserve a
+   *  face button. */
+  | 'perf'
 
 export interface ActionEvent {
   action: Action
@@ -39,6 +42,7 @@ const KEYMAP: Record<string, Action> = {
   KeyX: 'x', KeyY: 'y',
   KeyQ: 'lb', KeyE: 'rb',
   Tab: 'menu', KeyM: 'menu', KeyG: 'mainmenu',
+  KeyP: 'perf',
 }
 
 interface RustInputEvent { action: Action; repeat: boolean; t: number }
@@ -80,6 +84,16 @@ export async function createInput(dispatch: (e: ActionEvent) => void): Promise<(
   const disposers: Array<() => void> = []
 
   const onKey = (e: KeyboardEvent) => {
+    // While a text field has focus, the keyboard belongs to it. Otherwise the
+    // search box eats no letters at all, because W/A/S/D are bound to
+    // navigation and Space is bound to confirm.
+    //
+    // Escape still gets through: a modal you cannot leave from the keyboard is
+    // a trap, and the pad's B button reaches the same handler by another road.
+    const target = e.target as HTMLElement | null
+    const typing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+    if (typing && e.code !== 'Escape') return
+
     const action = KEYMAP[e.code]
     if (!action) return
     e.preventDefault()

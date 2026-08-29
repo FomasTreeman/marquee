@@ -10,9 +10,12 @@ mod library;
 pub mod log;
 mod meta;
 mod paths;
+mod run;
+mod search;
+mod store;
 mod vdf;
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use tauri::Manager;
@@ -24,6 +27,77 @@ static START: OnceLock<Instant> = OnceLock::new();
 
 fn start() -> Instant {
     *START.get_or_init(Instant::now)
+}
+
+/// The last scan, kept so a launch can resolve a game by id without the
+/// frontend having to send one back. The interface should never be the
+/// authority on what a game is.
+#[derive(Default)]
+struct Library(Mutex<Vec<library::Game>>);
+
+/// Start a game.
+///
+/// Returns what it did rather than just Ok, so the interface can say
+/// "handing off to Steam" rather than a generic spinner -- and so the log
+/// records the exact URI or executable.
+#[tauri::command]
+fn launch_game(id: String, library: tauri::State<'_, Library>) -> Result<String, String> {
+    let game = {
+        let games = library.0.lock().map_err(|_| "library state is poisoned")?;
+        games.iter().find(|g| g.id == id).cloned()
+    };
+    let game = game.ok_or_else(|| format!("no game with id {id}"))?;
+    match run::start(&game) {
+        Ok(run::Launch::Uri(uri)) => Ok(uri),
+        Ok(run::Launch::Process { program, .. }) => Ok(program.display().to_string()),
+        Err(e) => {
+            log_error!("run", "could not launch {}: {e}", game.title);
+            Err(e)
+        }
+    }
+}
+
+/// Add a game by name.
+///
+/// The whole custom-game flow in one call: the interface has already searched
+/// and the user has already picked, so all that is left is to record it. The
+/// executable is set separately and later -- a game is complete once it is
+/// identified, and locating it on disk is a different question.
+#[tauri::command]
+fn add_manual_game(
+    title: String,
+    steam_app_id: Option<String>,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<i64, String> {
+    let id = store.add_manual_game(&title, steam_app_id.as_deref())?;
+    log_info!("store", "added {title:?} as manual:{id}");
+    Ok(id)
+}
+
+#[tauri::command]
+fn set_manual_executable(
+    id: i64,
+    executable: Option<String>,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<(), String> {
+    store.set_executable(id, executable.as_deref())
+}
+
+#[tauri::command]
+fn remove_manual_game(
+    id: i64,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<(), String> {
+    log_info!("store", "removed manual:{id}");
+    store.remove_manual_game(id)
+}
+
+#[tauri::command]
+fn toggle_favourite(
+    game_id: String,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<bool, String> {
+    store.toggle_favourite(&game_id)
 }
 
 /// Round-trip probe for the IPC bridge. Deliberately trivial, so the number it
@@ -39,10 +113,14 @@ fn ping() -> &'static str {
 /// failed shows as a warning beside the games that did come back rather than
 /// as an empty library with no explanation.
 #[tauri::command]
-async fn scan_library() -> library::ScanResult {
+async fn scan_library(
+    library: tauri::State<'_, Library>,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<library::ScanResult, String> {
     // Off the main thread: a cold scan touches the filesystem once per
     // installed game, and docs/PLAN.md §4 says the scan never blocks the UI.
-    match tauri::async_runtime::spawn_blocking(library::scan).await {
+    let store = store.inner().clone();
+    let result = match tauri::async_runtime::spawn_blocking(move || library::scan(&store)).await {
         Ok(result) => {
             log_info!(
                 "scan",
@@ -76,7 +154,12 @@ async fn scan_library() -> library::ScanResult {
             took_ms: 0,
             }
         }
+    };
+
+    if let Ok(mut cached) = library.0.lock() {
+        cached.clone_from(&result.games);
     }
+    Ok(result)
 }
 
 /// Milliseconds since the input epoch.
@@ -104,10 +187,22 @@ pub fn run() {
     }));
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(move |app| {
+            // Opened before anything else needs it. A database that cannot be
+            // opened is fatal and should say so immediately rather than
+            // surfacing as a confusing failure three commands later.
+            match store::Store::open() {
+                Ok(s) => app.manage(std::sync::Arc::new(s)),
+                Err(e) => {
+                    log_error!("store", "could not open the database: {e}");
+                    return Err(e.into());
+                }
+            };
             let status = input::spawn(app.handle().clone(), epoch);
             app.manage(status);
             app.manage(meta::spawn(app.handle().clone()));
+            app.manage(Library::default());
             log_info!("boot", "window up");
             Ok(())
         })
@@ -119,7 +214,13 @@ pub fn run() {
             scan_library,
             log::log_from_ui,
             log::log_path,
-            meta::request_meta
+            meta::request_meta,
+            launch_game,
+            search::search_games,
+            add_manual_game,
+            set_manual_executable,
+            remove_manual_game,
+            toggle_favourite
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Marquee");

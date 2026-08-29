@@ -9,11 +9,14 @@
 //! others or the rest of the scan -- priority #2 is stability, and a launcher
 //! that shows nothing because one parser choked is not stable.
 
+pub mod manual;
 pub mod steam;
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+
+use crate::store::Store;
 
 /// A game as the library knows it, before metadata or artwork.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,6 +35,13 @@ pub struct Game {
     /// Unix seconds, or None if the provider does not track it.
     pub last_played: Option<u64>,
     pub playtime_minutes: u64,
+    /// User-authored, from the `user_game` table. Kept on the Game so the
+    /// interface never has to join two lists, but owned by a different table
+    /// so no scanner can ever clear it.
+    #[serde(default)]
+    pub favourite: bool,
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 /// What a provider reports after a scan.
@@ -66,17 +76,17 @@ pub trait LibraryProvider: Send + Sync {
     fn scan(&self) -> Result<Vec<Game>, String>;
 }
 
-fn providers() -> Vec<Box<dyn LibraryProvider>> {
-    vec![Box::new(steam::Steam::default())]
+fn providers(store: &Store) -> Vec<Box<dyn LibraryProvider + '_>> {
+    vec![Box::new(steam::Steam), Box::new(manual::Manual(store))]
 }
 
 /// Scan every provider. Never fails as a whole.
-pub fn scan() -> ScanResult {
+pub fn scan(store: &Store) -> ScanResult {
     let started = std::time::Instant::now();
     let mut games = Vec::new();
     let mut results = Vec::new();
 
-    for p in providers() {
+    for p in providers(store) {
         let t = std::time::Instant::now();
         let detected = p.detect();
         let (found, error) = if detected {
@@ -110,9 +120,31 @@ pub fn scan() -> ScanResult {
     // changes, so names fill in without anything moving. It is also what every
     // console does by default, and it puts the games worth enriching first at
     // the front of the queue.
+    // User flags are merged after scanning, never during it. The providers do
+    // not know this table exists, which is how docs/PLAN.md §8 guarantees a
+    // scanner can never clear a favourite.
+    match store.user_flags() {
+        Ok(flags) => {
+            let by_id: std::collections::HashMap<_, _> = flags.into_iter().collect();
+            for g in &mut games {
+                if let Some(f) = by_id.get(&g.id) {
+                    g.favourite = f.favourite;
+                    g.hidden = f.hidden;
+                    if let Some(t) = &f.custom_title {
+                        g.title = t.clone();
+                    }
+                }
+            }
+        }
+        Err(e) => crate::log_warn!("scan", "could not read user flags: {e}"),
+    }
+
+    games.retain(|g| !g.hidden);
+
     games.sort_by(|a, b| {
-        b.last_played
-            .cmp(&a.last_played)
+        b.favourite
+            .cmp(&a.favourite)
+            .then(b.last_played.cmp(&a.last_played))
             .then(b.playtime_minutes.cmp(&a.playtime_minutes))
             .then(b.installed.cmp(&a.installed))
             .then(a.provider_id.cmp(&b.provider_id))
@@ -144,7 +176,8 @@ mod tests {
     #[test]
     #[ignore]
     fn real_library() {
-        let r = super::scan();
+        let store = crate::store::Store::open().unwrap();
+        let r = super::scan(&store);
         println!("\nscanned in {} ms", r.took_ms);
         for p in &r.providers {
             println!(

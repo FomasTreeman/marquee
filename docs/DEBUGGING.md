@@ -111,6 +111,24 @@ from a terminal without anyone looking at the window.
 **When you add a feature, add its invariant here.** The check is only worth
 having if it grows with the interface.
 
+## Driving the interface from a console
+
+In a development build, `window.__marquee` exposes the running interface:
+`games`, `focused`, `scan`, `meta`, `grid`, `add`, `detail`, `play`,
+`favourite`, `reloadLibrary`, and `selfCheck()`.
+
+It exists because overlays are otherwise reachable only through real input,
+which makes them awkward to inspect from a console or a driven browser — and
+an overlay nobody can open is an overlay nobody can check.
+
+```js
+__marquee.add.open()                    // the add-a-game overlay
+__marquee.detail.open(__marquee.games[0], undefined, {})
+await __marquee.selfCheck()             // the invariants, as data
+```
+
+Not present in a release build.
+
 ## Measuring
 
 `pnpm app` shows a HUD: webview, refresh rate, frame rate, p99, dropped

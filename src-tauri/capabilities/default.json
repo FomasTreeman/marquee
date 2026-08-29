@@ -3,5 +3,8 @@
   "identifier": "default",
   "description": "Baseline permissions. Nothing is granted that the interface does not already need.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": [
+    "core:default",
+    "dialog:allow-open"
+  ]
 }

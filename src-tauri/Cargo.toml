@@ -19,6 +19,9 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Native file picker, for pointing a hand-added game at its executable.
+tauri-plugin-dialog = "2"
+
 # Gamepad input. Uses SDL_GameControllerDB mappings, which is what makes an
 # off-brand pad work without a per-device patch. See src/input.rs.
 gilrs = "0.11"
@@ -26,6 +29,14 @@ gilrs = "0.11"
 # Steam's store endpoints, for names and metadata. rustls rather than the
 # system TLS stack so a Linux build does not depend on which OpenSSL the
 # distribution shipped.
+# Bundled so there is no system SQLite dependency on any of the three
+# platforms, and so the version is ours rather than the distribution's.
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Bundled so there is no system SQLite dependency to differ across the three
+# platforms. docs/PLAN.md §8: user data must survive, so it gets a real
+# database with real migrations rather than a JSON file.
+
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 
 [target.'cfg(windows)'.dependencies]

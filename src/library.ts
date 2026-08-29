@@ -20,6 +20,8 @@ export interface Game {
   sizeBytes: number
   lastPlayed: number | null
   playtimeMinutes: number
+  favourite: boolean
+  hidden: boolean
 }
 
 export interface Meta {
@@ -59,6 +61,64 @@ export interface ScanResult {
 export async function requestMeta(appIds: string[]): Promise<Meta[]> {
   if (!inApp) return []
   return call<Meta[]>('request_meta', { appIds })
+}
+
+/**
+ * Start a game.
+ *
+ * Resolves to a description of what happened -- the steam:// URI or the
+ * executable path -- so the interface can say "handing off to Steam" rather
+ * than showing a generic spinner. Rejects with a human-readable reason.
+ *
+ * The game is resolved from the library Rust already holds. The interface is
+ * never the authority on what a game is.
+ */
+export interface SearchHit {
+  appId: string
+  name: string
+  cover: string
+}
+
+/**
+ * Find a game by name.
+ *
+ * Steam's store search, which needs no key. That it is Steam's index does not
+ * make this a Steam feature -- a Steam *store page* exists for most PC games
+ * whoever sold them, so a GOG or Epic copy is identified here and then borrows
+ * Steam's artwork by appid.
+ */
+export async function searchGames(term: string): Promise<SearchHit[]> {
+  // `pnpm dev` has no backend. Rather than an overlay that can never show a
+  // result, fall back to the sample titles so the flow is inspectable during
+  // pure CSS work. Never reached in the app.
+  if (!inApp) {
+    const { searchSample } = await import('./sample')
+    return searchSample(term)
+  }
+  return call<SearchHit[]>('search_games', { term })
+}
+
+/** Record a game the user picked from search. Returns its manual id. */
+export async function addManualGame(title: string, steamAppId?: string): Promise<number> {
+  return call<number>('add_manual_game', { title, steamAppId: steamAppId ?? null })
+}
+
+export async function setManualExecutable(id: number, executable: string | null): Promise<void> {
+  return call<void>('set_manual_executable', { id, executable })
+}
+
+export async function removeManualGame(id: number): Promise<void> {
+  return call<void>('remove_manual_game', { id })
+}
+
+/** Toggle, returning the new value. User data, and no scanner can clear it. */
+export async function toggleFavourite(gameId: string): Promise<boolean> {
+  return call<boolean>('toggle_favourite', { gameId })
+}
+
+export async function launchGame(id: string): Promise<string> {
+  if (!inApp) throw new Error('launching needs the app, not a browser tab')
+  return call<string>('launch_game', { id })
 }
 
 export async function onMeta(cb: (meta: Meta) => void): Promise<() => void> {

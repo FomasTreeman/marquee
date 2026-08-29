@@ -7,8 +7,10 @@
 //!
 //! So everything lands in one file, in order, with a source tag:
 //!
-//!     14:22:01.412 INFO  scan     steam: 1 game in 0 ms
-//!     14:22:01.418 ERROR ui       TypeError: g.providerId is undefined
+//! ```text
+//! 14:22:01.412 INFO  scan     steam: 1 game in 0 ms
+//! 14:22:01.418 ERROR ui       TypeError: g.providerId is undefined
+//! ```
 //!
 //! The path is printed on startup and returned by the `log_path` command, so
 //! it can always be found without knowing the platform's conventions.

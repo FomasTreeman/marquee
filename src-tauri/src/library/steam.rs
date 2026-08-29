@@ -30,7 +30,6 @@ fn is_tool(appid: &str, name: &str) -> bool {
         || name.starts_with("Steamworks ")
 }
 
-#[derive(Default)]
 pub struct Steam;
 
 impl Steam {
@@ -167,6 +166,8 @@ impl Steam {
                     size_bytes: 0,
                     last_played,
                     playtime_minutes: playtime,
+                    favourite: false,
+                    hidden: false,
                 });
             }
         }
@@ -202,6 +203,8 @@ impl Steam {
             size_bytes: app.u64_at("SizeOnDisk").unwrap_or(0),
             last_played,
             playtime_minutes: 0,
+            favourite: false,
+            hidden: false,
         })
     }
 }
