@@ -333,6 +333,9 @@ pub fn run() {
             app.manage(status);
             app.manage(meta::spawn(app.handle().clone()));
             app.manage(Library::default());
+            // Before anything draws: cached art from an older pipeline would
+            // otherwise answer first and no new logic would ever reach it.
+            art::migrate_cache();
             log_info!("boot", "window up");
             Ok(())
         })

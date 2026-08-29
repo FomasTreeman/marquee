@@ -94,6 +94,8 @@ export function createGrid(
   let cardW = 188
   let cardH = 282
   let gap = 20
+  /** Horizontal gutter. Wider than the vertical one -- see design/tokens.json. */
+  let gapX = 30
   let padTop = 0
   let focused = 0
   let scheduled = false
@@ -121,6 +123,7 @@ export function createGrid(
     const scale = px('--s', 1) || 1
     const ideal = px('--card-w', 188) * scale
     gap = px('--gap', 20) * scale
+    gapX = px('--gap-x', 30) * scale
     const ratio = px('--cover-ratio', 0.6667) || 0.6667
     padTop = gap
 
@@ -129,7 +132,7 @@ export function createGrid(
 
     // Columns from the *ideal* card width. The gap only exists between
     // columns, hence the +gap on both sides.
-    cols = Math.max(1, Math.floor((inner + gap) / (ideal + gap)))
+    cols = Math.max(1, Math.floor((inner + gapX) / (ideal + gapX)))
 
     // Then widen the cards to consume exactly what is left, rather than
     // leaving it as dead space against the right edge. A fixed card width
@@ -140,13 +143,13 @@ export function createGrid(
     // art stays as large as the space allows. Capped, because at one or two
     // columns the arithmetic would otherwise produce a card the height of the
     // window.
-    const fitted = (inner - gap * (cols - 1)) / cols
+    const fitted = (inner - gapX * (cols - 1)) / cols
     cardW = Math.max(ideal, Math.min(fitted, ideal * 1.35))
     cardH = Math.round(cardW / ratio)
 
     // Whatever the cap left over is centred, so a very wide window is
     // symmetrical rather than left-heavy.
-    sideInset = Math.max(0, (inner - (cols * cardW + gap * (cols - 1))) / 2)
+    sideInset = Math.max(0, (inner - (cols * cardW + gapX * (cols - 1))) / 2)
   }
 
   function rowHeight(): number { return cardH + gap }
@@ -168,13 +171,10 @@ export function createGrid(
       img.style.display = 'none'
       reportArtFailure(img.getAttribute('src') ?? '(no src)')
     })
-    // Some games publish no portrait cover at all, and the artwork pipeline
-    // falls back to the wide store capsule. Cropping that into a 2:3 card would
-    // show a vertical sliver of the middle, so it is contained and centred
-    // against the card's tint instead -- legible, and visibly a fallback.
-    img.addEventListener('load', () => {
-      img.style.objectFit = img.naturalWidth > img.naturalHeight ? 'contain' : 'cover'
-    })
+    // No shape handling here any more: the artwork pipeline rejects anything
+    // that is not portrait and composes a real cover when none exists, so what
+    // arrives is always box art. Deciding shape at paint time was papering
+    // over a banner being accepted in the first place.
     const fallback = document.createElement('div')
     fallback.className = 'card-fallback'
     const ring = document.createElement('div')
@@ -216,7 +216,7 @@ export function createGrid(
     }
     const col = index % cols
     const row = (index / cols) | 0
-    const x = sideInset + col * (cardW + gap)
+    const x = sideInset + col * (cardW + gapX)
     const y = padTop + row * rowHeight()
     const transform = `translate3d(${x}px, ${y}px, 0)`
     if (s.transform !== transform) {
@@ -278,7 +278,7 @@ export function createGrid(
     // -- dead space at the right edge is invisible to every other assertion.
     canvas.dataset['fit'] = JSON.stringify({
       inner: Math.round(viewport.clientWidth - parseFloat(getComputedStyle(viewport).paddingLeft) * 2),
-      used: Math.round(cols * cardW + gap * (cols - 1)),
+      used: Math.round(cols * cardW + gapX * (cols - 1)),
       cols,
     })
     // Card size is computed, not a token, so it is published as a variable the

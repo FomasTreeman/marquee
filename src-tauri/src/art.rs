@@ -17,7 +17,7 @@ use std::path::PathBuf;
 
 use image::imageops::FilterType;
 
-use crate::{log_debug, paths};
+use crate::{log_debug, log_info, paths};
 
 /// Longest edge, in device pixels, for each kind.
 ///
@@ -119,6 +119,86 @@ fn is_placeholder(img: &image::DynamicImage) -> bool {
     deviation < 8
 }
 
+/// Is this the right shape for the slot it is going into?
+///
+/// A cover is portrait and a hero is wide, and neither substitutes for the
+/// other. A banner letterboxed into a 2:3 card looks broken -- which it did --
+/// and cropping one to portrait gives a narrow vertical slice of the middle.
+/// So a wrong-shaped asset is rejected outright, and §compose_cover builds a
+/// real portrait image instead.
+fn right_shape(kind: Kind, width: u32, height: u32) -> bool {
+    if width == 0 || height == 0 {
+        return false;
+    }
+    let ratio = width as f32 / height as f32;
+    match kind {
+        // Real box art is 2:3. Allow some latitude either side, but never
+        // anything wider than it is tall.
+        Kind::Cover => ratio < 0.95,
+        Kind::Hero => ratio > 1.6,
+        Kind::Logo => true,
+    }
+}
+
+/// Crop away fully transparent margins.
+///
+/// Steam's wordmarks are frequently a small logo inside a large transparent
+/// canvas -- Rainbow Six Siege's has so much padding that the artwork renders
+/// tiny and visibly off-centre inside its own box. Trimming to the ink makes
+/// every wordmark fill the space it is given, which is what the hero layout
+/// assumes.
+fn trim_transparent(img: &image::DynamicImage) -> image::DynamicImage {
+    use image::GenericImageView;
+    let rgba = img.to_rgba8();
+    let (w, h) = (rgba.width(), rgba.height());
+
+    // Not fully-opaque: soft edges and drop shadows are part of the artwork,
+    // and trimming to them would clip the glow off a wordmark.
+    const INK: u8 = 8;
+    let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0u32, 0u32);
+    for y in 0..h {
+        for x in 0..w {
+            if rgba.get_pixel(x, y).0[3] > INK {
+                x0 = x0.min(x);
+                y0 = y0.min(y);
+                x1 = x1.max(x);
+                y1 = y1.max(y);
+            }
+        }
+    }
+    if x1 < x0 || y1 < y0 {
+        return img.clone(); // entirely transparent; nothing to trim to
+    }
+    img.view(x0, y0, x1 - x0 + 1, y1 - y0 + 1).to_image().into()
+}
+
+/// Bumped when the pipeline's *output* changes, not merely its code.
+///
+/// Cached art written before banners were rejected is a banner sitting in a
+/// card, and no amount of new logic reaches it -- the cache answers first. The
+/// metadata cache learned this lesson one release earlier; this is the same
+/// lesson applied before it bites rather than after.
+const ART_VERSION: u32 = 2;
+
+/// Throw the artwork cache away if it was written by an older pipeline.
+pub fn migrate_cache() {
+    let dir = paths::cache_dir().join("art");
+    let stamp = dir.join(".version");
+    let current = std::fs::read_to_string(&stamp)
+        .ok()
+        .and_then(|t| t.trim().parse::<u32>().ok())
+        .unwrap_or(1);
+    if current >= ART_VERSION {
+        return;
+    }
+    if dir.exists() {
+        log_info!("art", "artwork pipeline changed; clearing the cache");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    let _ = paths::ensure(&dir);
+    let _ = std::fs::write(&stamp, ART_VERSION.to_string());
+}
+
 fn path_for(app_id: &str, kind: Kind) -> PathBuf {
     paths::cache_dir().join("art").join(format!(
         "{app_id}-{}.{}",
@@ -132,6 +212,79 @@ fn path_for(app_id: &str, kind: Kind) -> PathBuf {
 }
 
 /// Fetch, resize and store. Returns the bytes ready to serve.
+/// Build a portrait cover out of a game's other artwork.
+///
+/// Some games publish no box art anywhere: not on Steam, not on SteamGridDB.
+/// The previous answer was to letterbox the wide capsule into the card, which
+/// looked exactly as broken as it sounds. Every card should carry a real
+/// portrait image, so when none exists, one is made.
+///
+/// A heavily blurred, darkened fill of the game's own key art, with its
+/// wordmark centred on top. It reads as deliberate rather than as a fallback,
+/// and it is built from the game's own colours so it sits correctly beside
+/// real covers.
+///
+/// **A wordmark is required.** Composing without one produces a handsome
+/// abstract blur that identifies nothing -- which is worse than the plain
+/// tinted card carrying the game's name in text, because a launcher's job is
+/// letting you find a game at a glance. So when there is no wordmark, this is
+/// not used and the card falls back to type.
+fn compose_cover(hero: &image::DynamicImage, logo: &image::DynamicImage) -> image::DynamicImage {
+    use image::imageops;
+
+    const W: u32 = 600;
+    const H: u32 = 900;
+
+    // Fill, not fit: the background must reach every edge, and it is about to
+    // be blurred past recognition anyway.
+    let scale = (W as f32 / hero.width() as f32).max(H as f32 / hero.height() as f32);
+    let filled = hero.resize(
+        (hero.width() as f32 * scale).ceil() as u32,
+        (hero.height() as f32 * scale).ceil() as u32,
+        imageops::FilterType::Triangle,
+    );
+    let x = (filled.width().saturating_sub(W)) / 2;
+    let y = (filled.height().saturating_sub(H)) / 2;
+    let cropped = filled.crop_imm(x, y, W, H);
+
+    // Blurred at a small size and then enlarged: a gaussian over 600x900 is
+    // slow, and the result is indistinguishable once it is this soft.
+    let small = cropped.resize_exact(60, 90, imageops::FilterType::Triangle);
+    let blurred = image::imageops::blur(&small.to_rgba8(), 6.0);
+    let mut canvas =
+        image::DynamicImage::ImageRgba8(blurred).resize_exact(W, H, imageops::FilterType::Triangle);
+
+    // Darkened, so a wordmark of any colour stays legible on top.
+    {
+        let buf = canvas.as_mut_rgba8().expect("rgba");
+        for px in buf.pixels_mut() {
+            px.0[0] = (px.0[0] as f32 * 0.42) as u8;
+            px.0[1] = (px.0[1] as f32 * 0.42) as u8;
+            px.0[2] = (px.0[2] as f32 * 0.42) as u8;
+        }
+    }
+
+    {
+        let logo = trim_transparent(logo);
+        // Bounded on both axes so a very wide or very tall wordmark still fits
+        // inside the card with margin.
+        let max_w = (W as f32 * 0.76) as u32;
+        let max_h = (H as f32 * 0.34) as u32;
+        let fit = (max_w as f32 / logo.width() as f32).min(max_h as f32 / logo.height() as f32);
+        let lw = ((logo.width() as f32 * fit) as u32).max(1);
+        let lh = ((logo.height() as f32 * fit) as u32).max(1);
+        let scaled = logo.resize_exact(lw, lh, imageops::FilterType::Lanczos3);
+        imageops::overlay(
+            &mut canvas,
+            &scaled,
+            ((W - lw) / 2) as i64,
+            ((H - lh) / 2) as i64,
+        );
+    }
+
+    canvas
+}
+
 pub fn fetch(app_id: &str, kind: Kind, sgdb_key: Option<&str>) -> Option<Vec<u8>> {
     let path = path_for(app_id, kind);
 
@@ -147,9 +300,11 @@ pub fn fetch(app_id: &str, kind: Kind, sgdb_key: Option<&str>) -> Option<Vec<u8>
     //
     //   1. Steam's own asset. Correct when it exists, and free.
     //   2. SteamGridDB, if a key is configured. Community art, and the only
-    //      source for the many games Steam publishes no wordmark for at all.
-    //   3. The wide store capsule, which for some recent releases is the only
-    //      real artwork published anywhere. Letterboxed rather than cropped.
+    //      source for the many games Steam publishes no wordmark for.
+    //
+    // Notably absent: the wide store capsule as a stand-in for box art. A
+    // banner in a 2:3 card looks broken however it is fitted, so a
+    // wrong-shaped asset is rejected and compose_cover builds a real one.
     let mut candidates = vec![format!(
         "https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/{}",
         kind.file()
@@ -166,11 +321,9 @@ pub fn fetch(app_id: &str, kind: Kind, sgdb_key: Option<&str>) -> Option<Vec<u8>
         }
     }
 
-    if kind != Kind::Logo {
-        // Fetched inline rather than waited for. The background worker will
-        // reach this appid eventually, but a card being drawn now cannot wait
-        // several minutes -- and both paths share one cache and one rate gate,
-        // so this costs at most one request ever.
+    if kind == Kind::Hero {
+        // A hero may fall back to the wide capsule: both are landscape, so it
+        // is the right shape for the slot even if it is lower quality.
         if let crate::meta::Fetched::Found(m) = crate::meta::fetch_one(&client, app_id) {
             if !m.header_image.is_empty() {
                 candidates.push(m.header_image);
@@ -181,7 +334,7 @@ pub fn fetch(app_id: &str, kind: Kind, sgdb_key: Option<&str>) -> Option<Vec<u8>
         ));
     }
 
-    let mut raw = None;
+    let mut chosen = None;
     for url in &candidates {
         let Ok(response) = client.get(url).send() else {
             continue;
@@ -192,44 +345,107 @@ pub fn fetch(app_id: &str, kind: Kind, sgdb_key: Option<&str>) -> Option<Vec<u8>
         let Ok(bytes) = response.bytes() else {
             continue;
         };
+        let Ok(img) = image::load_from_memory(&bytes) else {
+            continue;
+        };
         // A 200 proves nothing: Steam answers with a grey placeholder rather
-        // than a 404. Look at the pixels.
-        if let Ok(img) = image::load_from_memory(&bytes) {
-            if is_placeholder(&img) {
-                log_debug!("art", "{app_id}: {url} is a placeholder, trying the next");
-                continue;
-            }
+        // than a 404. And the right shape matters as much as the right pixels.
+        if is_placeholder(&img) {
+            log_debug!("art", "{app_id}: {url} is a placeholder, trying the next");
+            continue;
         }
-        raw = Some(bytes);
+        if !right_shape(kind, img.width(), img.height()) {
+            log_debug!(
+                "art",
+                "{app_id}: {url} is {}x{}, wrong shape for {kind:?}",
+                img.width(),
+                img.height()
+            );
+            continue;
+        }
+        chosen = Some((bytes, img));
         break;
     }
 
-    let Some(raw) = raw else {
+    // Nothing of the right shape exists. For a cover, build one out of the
+    // game's own key art rather than leaving a blank card.
+    if chosen.is_none() && kind == Kind::Cover {
+        // Both are needed. Key art alone gives an anonymous blur; the wordmark
+        // is what makes it identifiable, and identifiable is the whole point.
+        let hero =
+            fetch(app_id, Kind::Hero, sgdb_key).and_then(|b| image::load_from_memory(&b).ok());
+        let logo =
+            fetch(app_id, Kind::Logo, sgdb_key).and_then(|b| image::load_from_memory(&b).ok());
+        if let (Some(hero), Some(logo)) = (hero, logo) {
+            log_info!("art", "composed a cover for {app_id} from its key art");
+            let composed = compose_cover(&hero, &logo);
+            let mut out = std::io::Cursor::new(Vec::new());
+            if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 86)
+                .encode_image(&composed.to_rgb8())
+                .is_ok()
+            {
+                let bytes = out.into_inner();
+                write_cached(&path, &bytes);
+                return Some(bytes);
+            }
+        }
+    }
+
+    let Some((raw, img)) = chosen else {
         log_debug!("art", "no usable {} for {app_id}", kind.file());
         // Every source was tried, so this miss is real and worth remembering:
         // without it, a game with no artwork costs several requests on every
-        // launch. Adding a SteamGridDB key clears these, so a miss recorded
-        // without one is not permanent.
+        // launch. Adding a SteamGridDB key clears these.
         let _ = paths::ensure(path.parent()?);
         let _ = std::fs::write(&path, b"");
         return None;
     };
 
-    // None means "store what arrived": either nothing needed doing, or we
-    // could not decode it -- and in the second case the webview may well
-    // render what the image crate would not.
-    let encoded = resize(&raw, kind).unwrap_or_else(|| raw.to_vec());
+    // Wordmarks are trimmed to their ink before anything else: Steam's are
+    // frequently a small logo inside a large transparent canvas.
+    let encoded = if kind == Kind::Logo {
+        let trimmed = trim_transparent(&img);
+        let capped = downscale(&trimmed, kind).unwrap_or(trimmed);
+        let mut out = std::io::Cursor::new(Vec::new());
+        capped
+            .write_to(&mut out, image::ImageFormat::Png)
+            .ok()
+            .map(|_| out.into_inner())
+            .unwrap_or_else(|| raw.to_vec())
+    } else {
+        // None means "store what arrived": nothing needed doing.
+        resize(&raw, kind).unwrap_or_else(|| raw.to_vec())
+    };
 
+    write_cached(&path, &encoded);
+    Some(encoded)
+}
+
+/// Temp-then-rename, so a half-written file is never mistaken for a cached one
+/// -- and never for a miss, which is the same thing at zero bytes.
+fn write_cached(path: &std::path::Path, bytes: &[u8]) {
     if let Some(dir) = path.parent() {
         let _ = paths::ensure(dir);
     }
-    // Temp-then-rename, so a half-written file is never mistaken for a cached
-    // one -- and never for a miss, which is the same thing at zero bytes.
     let tmp = path.with_extension("tmp");
-    if std::fs::write(&tmp, &encoded).is_ok() {
-        let _ = std::fs::rename(&tmp, &path);
+    if std::fs::write(&tmp, bytes).is_ok() {
+        let _ = std::fs::rename(&tmp, path);
     }
-    Some(encoded)
+}
+
+/// Scale an already-decoded image down to its cap, or None if it is small
+/// enough already.
+fn downscale(img: &image::DynamicImage, kind: Kind) -> Option<image::DynamicImage> {
+    let (w, h) = (img.width(), img.height());
+    if w.max(h) <= kind.max_edge() {
+        return None;
+    }
+    let scale = kind.max_edge() as f32 / w.max(h) as f32;
+    Some(img.resize(
+        (w as f32 * scale) as u32,
+        (h as f32 * scale) as u32,
+        image::imageops::FilterType::Lanczos3,
+    ))
 }
 
 /// Throw away every cached image and every recorded miss.
@@ -242,6 +458,8 @@ pub fn clear_cache() -> std::io::Result<()> {
     if dir.exists() {
         std::fs::remove_dir_all(&dir)?;
     }
+    paths::ensure(&dir)?;
+    std::fs::write(dir.join(".version"), ART_VERSION.to_string())?;
     Ok(())
 }
 
@@ -391,6 +609,101 @@ mod tests {
         assert!(resize(&[], Kind::Hero).is_none());
     }
 
+    /// A banner in a 2:3 card looks broken however it is fitted. This is the
+    /// check that stopped one being used as box art.
+    #[test]
+    fn a_banner_is_never_accepted_as_a_cover() {
+        assert!(!right_shape(Kind::Cover, 460, 215));
+        assert!(!right_shape(Kind::Cover, 1920, 620));
+        assert!(!right_shape(Kind::Cover, 512, 512), "square is not box art");
+        assert!(right_shape(Kind::Cover, 600, 900));
+        assert!(right_shape(Kind::Cover, 300, 450));
+    }
+
+    #[test]
+    fn a_portrait_image_is_never_accepted_as_a_hero() {
+        assert!(!right_shape(Kind::Hero, 600, 900));
+        assert!(right_shape(Kind::Hero, 1920, 620));
+        // A wordmark is any shape at all.
+        assert!(right_shape(Kind::Logo, 10, 400));
+    }
+
+    /// Steam's wordmarks are frequently a small logo inside a large
+    /// transparent canvas. Rainbow Six Siege's has enough padding that the
+    /// artwork renders tiny and visibly off-centre in its own box.
+    #[test]
+    fn a_wordmark_is_trimmed_to_its_ink() {
+        let padded =
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(1000, 800, |x, y| {
+                let inside = (400..600).contains(&x) && (300..500).contains(&y);
+                image::Rgba([255, 255, 255, if inside { 255 } else { 0 }])
+            }));
+        let trimmed = trim_transparent(&padded);
+        assert_eq!((trimmed.width(), trimmed.height()), (200, 200));
+    }
+
+    /// Soft edges and drop shadows are part of the artwork; trimming to fully
+    /// opaque pixels would clip the glow off a wordmark.
+    #[test]
+    fn faint_edges_survive_trimming() {
+        let glow = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(100, 100, |x, y| {
+            let core = (40..60).contains(&x) && (40..60).contains(&y);
+            let halo = (30..70).contains(&x) && (30..70).contains(&y);
+            image::Rgba([
+                255,
+                255,
+                255,
+                if core {
+                    255
+                } else if halo {
+                    40
+                } else {
+                    0
+                },
+            ])
+        }));
+        let trimmed = trim_transparent(&glow);
+        assert_eq!(
+            (trimmed.width(), trimmed.height()),
+            (40, 40),
+            "halo should survive"
+        );
+    }
+
+    #[test]
+    fn an_entirely_transparent_image_is_left_alone() {
+        let blank = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+            50,
+            50,
+            image::Rgba([0, 0, 0, 0]),
+        ));
+        assert_eq!(trim_transparent(&blank).width(), 50);
+    }
+
+    /// Every card must carry a real portrait image, so when no box art exists
+    /// anywhere, one is built from the game's own key art.
+    #[test]
+    fn a_cover_is_composed_at_the_right_shape() {
+        let hero = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(1920, 620, |x, _| {
+            image::Rgba([(x % 255) as u8, 90, 160, 255])
+        }));
+        let logo = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(800, 200, |x, y| {
+            let ink = (100..700).contains(&x) && (50..150).contains(&y);
+            image::Rgba([255, 255, 255, if ink { 255 } else { 0 }])
+        }));
+
+        let composed = compose_cover(&hero, &logo);
+        assert_eq!((composed.width(), composed.height()), (600, 900));
+        assert!(right_shape(
+            Kind::Cover,
+            composed.width(),
+            composed.height()
+        ));
+        // Built from real artwork, so it must not itself look like a
+        // placeholder -- the wordmark alone guarantees variation.
+        assert!(!is_placeholder(&composed));
+    }
+
     #[test]
     fn kinds_round_trip_through_their_url_names() {
         for (name, kind) in [
@@ -442,6 +755,40 @@ mod live {
             if must_have {
                 assert!(got.is_some(), "{kind:?} should have resolved to something");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod compose_preview {
+    /// Renders a composed cover from a real game's assets so a human can look
+    /// at it. Not an assertion -- the question "does this look right" is not
+    /// one a test can answer.
+    ///
+    ///     cargo test compose_preview -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn preview() {
+        let client = crate::meta::http_client().unwrap();
+        for (app_id, name) in [("440", "team-fortress-2"), ("620", "portal-2")] {
+            let get = |file: &str| {
+                client
+                    .get(format!(
+                        "https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/{file}"
+                    ))
+                    .send()
+                    .ok()
+                    .and_then(|r| r.bytes().ok())
+                    .and_then(|b| image::load_from_memory(&b).ok())
+            };
+            let (Some(hero), Some(logo)) = (get("library_hero.jpg"), get("logo.png")) else {
+                println!("  {name}: missing source art");
+                continue;
+            };
+            let composed = super::compose_cover(&hero, &logo);
+            let out = std::env::temp_dir().join(format!("marquee-composed-{name}.jpg"));
+            composed.to_rgb8().save(&out).unwrap();
+            println!("  {name}: {}", out.display());
         }
     }
 }

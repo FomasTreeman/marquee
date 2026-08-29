@@ -399,8 +399,25 @@ Steam has never heard of:
   wordmark is what the hero is built around.
 
 So the artwork chain is: Steam's own asset, then SteamGridDB if a key is
-configured, then the wide store capsule letterboxed. Every candidate is checked
-by looking at its pixels, because a 200 proves nothing.
+configured. Every candidate is checked by looking at its pixels, because a 200
+proves nothing — and by its **shape**, because a banner in a 2:3 card looks
+broken however it is fitted. Letterboxing the wide capsule was tried and was a
+mistake; a wrong-shaped asset is now rejected outright.
+
+**When no box art exists anywhere, one is composed** from the game's own key
+art with its wordmark centred on a blurred, darkened fill. It reads as
+deliberate and sits correctly beside real covers.
+
+A wordmark is required for that, and the reason is worth recording: composing
+without one produces a handsome abstract blur that identifies nothing, which is
+worse than a plain tinted card carrying the game's name in text. A launcher's
+job is letting you find a game at a glance, so legibility beats decoration.
+This is the clearest thing a SteamGridDB key buys — it supplies the wordmarks
+Steam does not have, and those turn blank cards into composed ones.
+
+Wordmarks are also **trimmed to their ink** on ingest. Steam's are frequently a
+small logo inside a large transparent canvas; Rainbow Six Siege's has enough
+padding that it renders tiny and visibly off-centre.
 
 The key is free, per-user, and carries no client secret — no proxy, no server.
 Strictly opt-in, and the settings screen says so rather than presenting an empty

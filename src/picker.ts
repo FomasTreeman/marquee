@@ -84,8 +84,8 @@ export function createPicker(): Picker {
         }
         img.style.visibility = 'hidden'
       })
-      // A wide image in a portrait slot is a fallback capsule, not a cover.
-      // Cropping it would show a vertical sliver of the middle.
+      // Only reached for Steam's own thumbnail, which is a wide capsule. A
+      // cover from the artwork pipeline is always portrait.
       img.addEventListener('load', () => {
         if (img.naturalWidth > img.naturalHeight) img.style.objectFit = 'contain'
       })
