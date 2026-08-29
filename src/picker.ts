@@ -21,8 +21,40 @@ export interface PickRequest {
   heading: string
   sub: string
   initial?: string
-  /** Return true to close. Rejecting leaves the overlay up with its results. */
-  onPick(hit: SearchHit): Promise<boolean>
+  /** Offer a file picker alongside the search field. */
+  browse?: {
+    label: string
+    /** Runs the dialog; resolves to the chosen path, or null if cancelled. */
+    choose(): Promise<string | null>
+  }
+  /** Return true to close. Rejecting leaves the overlay up with its results.
+   *  `file` is whatever `browse` produced, if anything. */
+  onPick(hit: SearchHit, file: string | null): Promise<boolean>
+}
+
+/**
+ * Guess a game's name from the path to its executable.
+ *
+ * The folder is named after the game far more often than the executable is --
+ * `.../Elden Ring/Game/eldenring.exe` -- so walk up past the structural
+ * directories every engine creates and use the first name that looks like a
+ * title. It only has to be close: it seeds a search the user confirms.
+ */
+export function nameFromPath(path: string): string {
+  const parts = path.split(/[/\\]/).filter(Boolean)
+  // Drop the file itself, and a .app bundle's internals on macOS.
+  const structural = new Set([
+    'bin', 'bin64', 'binaries', 'win64', 'win32', 'x64', 'x86', 'game', 'games',
+    'retail', 'shipping', 'contents', 'macos', 'resources', 'build', 'redist',
+  ])
+  for (let i = parts.length - 2; i >= 0; i--) {
+    const part = parts[i]!
+    const bare = part.replace(/\.(app|exe)$/i, '')
+    if (structural.has(bare.toLowerCase())) continue
+    // Separators vary by release group; spaces search better than dots.
+    return bare.replace(/[._]+/g, ' ').replace(/\s+/g, ' ').trim()
+  }
+  return (parts[parts.length - 1] ?? '').replace(/\.[^.]+$/, '')
 }
 
 export interface Picker {
@@ -55,6 +87,8 @@ export function createPicker(): Picker {
   field.spellcheck = false
   const status = el('div', 'add-status', panel)
   const results = el('div', 'add-results', panel)
+  const extras = el('div', 'detail-actions', panel)
+  const browseButton = el('button', 'action', extras)
 
   let open = false
   let hits: SearchHit[] = []
@@ -63,6 +97,8 @@ export function createPicker(): Picker {
   /** Guards against a slow response for an old term overwriting a newer one. */
   let generation = 0
   let request: PickRequest | undefined
+  /** A file chosen through `browse`, carried through to onPick. */
+  let file: string | null = null
 
   function paint(): void {
     results.textContent = ''
@@ -128,7 +164,20 @@ export function createPicker(): Picker {
   async function choose(): Promise<void> {
     const hit = hits[selected]
     if (!hit || !request) return
-    if (await request.onPick(hit)) close()
+    if (await request.onPick(hit, file)) close()
+  }
+
+  browseButton.onclick = async () => {
+    if (!request?.browse) return
+    const chosen = await request.browse.choose()
+    if (!chosen) return
+    file = chosen
+    // The file answers "where is it"; the search still answers "what is it",
+    // because artwork and metadata are keyed by the game, not the path.
+    const guess = nameFromPath(chosen)
+    field.value = guess
+    status.textContent = `Found ${chosen.split(/[/\\]/).pop()} — now pick the game it is`
+    await run(guess)
   }
 
   function close(): void {
@@ -153,8 +202,11 @@ export function createPicker(): Picker {
 
     open(next) {
       request = next
+      file = null
       open = true
       root.hidden = false
+      browseButton.hidden = !next.browse
+      browseButton.textContent = next.browse?.label ?? ''
       heading.textContent = next.heading
       sub.textContent = next.sub
       field.value = next.initial ?? ''

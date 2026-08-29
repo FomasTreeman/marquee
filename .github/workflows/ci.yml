@@ -67,6 +67,9 @@ jobs:
 
       - run: pnpm exec tsc --noEmit
 
+      - name: Frontend tests
+        run: pnpm exec vitest run
+
       - run: pnpm exec vite build
 
       # Warnings are errors here but not locally: a warning that blocks the

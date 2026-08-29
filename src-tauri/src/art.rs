@@ -17,6 +17,8 @@ use std::path::PathBuf;
 
 use image::imageops::FilterType;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{log_debug, log_info, paths};
 
 /// Longest edge, in device pixels, for each kind.
@@ -28,7 +30,7 @@ const COVER_MAX: u32 = 480;
 const HERO_MAX: u32 = 1920;
 const LOGO_MAX: u32 = 640;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Kind {
     Cover,
     Hero,
@@ -45,12 +47,28 @@ impl Kind {
         })
     }
 
-    fn file(self) -> &'static str {
+    /// Every filename Steam publishes this asset under, best first.
+    ///
+    /// More than one, because Steam is inconsistent about which it has.
+    /// Rainbow Six Siege 404s on `library_600x900.jpg` and serves a perfect
+    /// 600x900 `portrait.png`; Battlefield 6 has both and both are grey
+    /// placeholders. Trying one name and giving up was leaving real artwork on
+    /// the table.
+    fn files(self) -> &'static [&'static str] {
         match self {
-            Kind::Cover => "library_600x900.jpg",
-            Kind::Hero => "library_hero.jpg",
-            Kind::Logo => "logo.png",
+            Kind::Cover => &[
+                "library_600x900.jpg",
+                "portrait.png",
+                "library_600x900_2x.jpg",
+            ],
+            Kind::Hero => &["library_hero.jpg", "library_hero_2x.jpg"],
+            Kind::Logo => &["logo.png", "logo_2x.png"],
         }
+    }
+
+    /// The canonical name, for logging and cache keys.
+    fn file(self) -> &'static str {
+        self.files()[0]
     }
 
     fn max_edge(self) -> u32 {
@@ -178,7 +196,7 @@ fn trim_transparent(img: &image::DynamicImage) -> image::DynamicImage {
 /// card, and no amount of new logic reaches it -- the cache answers first. The
 /// metadata cache learned this lesson one release earlier; this is the same
 /// lesson applied before it bites rather than after.
-const ART_VERSION: u32 = 2;
+const ART_VERSION: u32 = 4;
 
 /// Throw the artwork cache away if it was written by an older pipeline.
 pub fn migrate_cache() {
@@ -285,140 +303,273 @@ fn compose_cover(hero: &image::DynamicImage, logo: &image::DynamicImage) -> imag
     canvas
 }
 
-pub fn fetch(app_id: &str, kind: Kind, sgdb_key: Option<&str>) -> Option<Vec<u8>> {
-    let path = path_for(app_id, kind);
+/// Where each of a game's three assets came from.
+///
+/// Recorded rather than inferred. "Is the artwork working" was previously only
+/// answerable by looking at the screen; now every game carries a manifest
+/// saying what was tried, what was rejected and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+    Steam,
+    SteamGridDb,
+    /// Built here from key art plus a wordmark.
+    Composed,
+    /// Nothing usable exists at any source.
+    None,
+}
 
-    // A zero-byte file records "no source has this", so a game without a
-    // wordmark is not re-asked about on every launch.
-    if let Ok(bytes) = std::fs::read(&path) {
-        return if bytes.is_empty() { None } else { Some(bytes) };
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Manifest {
+    pub app_id: String,
+    pub cover: Source,
+    pub hero: Source,
+    pub logo: Source,
+    /// True when Steam alone supplied every field at the right shape.
+    pub steam_complete: bool,
+    pub version: u32,
+}
+
+fn manifest_path(app_id: &str) -> PathBuf {
+    paths::cache_dir()
+        .join("art")
+        .join(format!("{app_id}-manifest.json"))
+}
+
+pub fn manifest(app_id: &str) -> Option<Manifest> {
+    let text = std::fs::read_to_string(manifest_path(app_id)).ok()?;
+    let m: Manifest = serde_json::from_str(&text).ok()?;
+    if m.version < ART_VERSION {
+        return None;
     }
+    Some(m)
+}
 
-    let client = crate::meta::http_client()?;
-
-    // Sources in preference order.
-    //
-    //   1. Steam's own asset. Correct when it exists, and free.
-    //   2. SteamGridDB, if a key is configured. Community art, and the only
-    //      source for the many games Steam publishes no wordmark for.
-    //
-    // Notably absent: the wide store capsule as a stand-in for box art. A
-    // banner in a 2:3 card looks broken however it is fitted, so a
-    // wrong-shaped asset is rejected and compose_cover builds a real one.
-    let mut candidates = vec![format!(
-        "https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/{}",
-        kind.file()
-    )];
-
-    if let Some(key) = sgdb_key.filter(|k| !k.is_empty()) {
-        let want = match kind {
-            Kind::Cover => crate::sgdb::Want::Grid,
-            Kind::Hero => crate::sgdb::Want::Hero,
-            Kind::Logo => crate::sgdb::Want::Logo,
-        };
-        if let Some(url) = crate::sgdb::best_for_steam_app(&client, key, app_id, want) {
-            candidates.push(url);
-        }
+/// Download a URL and return it only if it is genuinely usable for `kind`.
+///
+/// Both halves matter. A 200 means nothing -- Steam answers with a flat grey
+/// placeholder rather than a 404 -- and neither does a decodable image, because
+/// a banner decodes perfectly and is still not box art.
+fn usable(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    kind: Kind,
+) -> Option<(bytes::Bytes, image::DynamicImage)> {
+    let response = client.get(url).send().ok()?;
+    if !response.status().is_success() {
+        return None;
     }
+    let bytes = response.bytes().ok()?;
+    let img = image::load_from_memory(&bytes).ok()?;
+    if is_placeholder(&img) {
+        log_debug!("art", "{url}: placeholder");
+        return None;
+    }
+    if !right_shape(kind, img.width(), img.height()) {
+        log_debug!(
+            "art",
+            "{url}: {}x{} wrong shape for {kind:?}",
+            img.width(),
+            img.height()
+        );
+        return None;
+    }
+    Some((bytes, img))
+}
 
-    if kind == Kind::Hero {
-        // A hero may fall back to the wide capsule: both are landscape, so it
-        // is the right shape for the slot even if it is lower quality.
-        if let crate::meta::Fetched::Found(m) = crate::meta::fetch_one(&client, app_id) {
-            if !m.header_image.is_empty() {
-                candidates.push(m.header_image);
+fn steam_urls(app_id: &str, kind: Kind) -> Vec<String> {
+    kind.files()
+        .iter()
+        .map(|f| format!("https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/{f}"))
+        .collect()
+}
+
+const KINDS: [Kind; 3] = [Kind::Cover, Kind::Hero, Kind::Logo];
+
+/// Resolve all three assets for a game, and record where each came from.
+///
+/// Deliberately per-game rather than per-request. Steam is tried first for
+/// everything; only if it cannot supply the complete set does SteamGridDB get
+/// asked, and then it is asked for **every** field rather than just the missing
+/// ones -- a Steam cover beside a SteamGridDB wordmark is two artists' work in
+/// one card, and it shows.
+fn resolve(app_id: &str, sgdb_key: Option<&str>) -> Manifest {
+    let mut m = Manifest {
+        app_id: app_id.to_string(),
+        cover: Source::None,
+        hero: Source::None,
+        logo: Source::None,
+        steam_complete: false,
+        version: ART_VERSION,
+    };
+    let Some(client) = crate::meta::http_client() else {
+        return m;
+    };
+
+    // --- Steam, for the whole set -------------------------------------
+    let mut found: Vec<(Kind, bytes::Bytes, image::DynamicImage, Source)> = Vec::new();
+    for kind in KINDS {
+        for url in steam_urls(app_id, kind) {
+            if let Some((b, i)) = usable(&client, &url, kind) {
+                found.push((kind, b, i, Source::Steam));
+                break;
             }
         }
-        candidates.push(format!(
+    }
+    m.steam_complete = found.len() == KINDS.len();
+
+    // --- SteamGridDB, for anything Steam could not complete ------------
+    if !m.steam_complete {
+        if let Some(key) = sgdb_key.filter(|k| !k.is_empty()) {
+            let mut replacements = Vec::new();
+            for kind in KINDS {
+                let want = match kind {
+                    Kind::Cover => crate::sgdb::Want::Grid,
+                    Kind::Hero => crate::sgdb::Want::Hero,
+                    Kind::Logo => crate::sgdb::Want::Logo,
+                };
+                // Every submission, not just the top-ranked one: community
+                // art includes dead links and mislabelled images, and the
+                // first acceptable *download* is what matters, not the first
+                // acceptable listing.
+                for url in crate::sgdb::candidates_for_steam_app(&client, key, app_id, want) {
+                    if let Some((b, i)) = usable(&client, &url, kind) {
+                        replacements.push((kind, b, i, Source::SteamGridDb));
+                        break;
+                    }
+                }
+            }
+            // Wholesale when it can cover the set, otherwise fill the gaps.
+            if replacements.len() == KINDS.len() {
+                found = replacements;
+            } else {
+                for (kind, b, i, s) in replacements {
+                    if !found.iter().any(|(k, ..)| *k == kind) {
+                        found.push((kind, b, i, s));
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Hero may fall back to the wide store capsule -------------------
+    // Same shape as a hero, so it is a legitimate substitute even at lower
+    // quality. A cover never falls back this way -- that is what composing is.
+    if !found.iter().any(|(k, ..)| *k == Kind::Hero) {
+        let mut capsules = Vec::new();
+        if let crate::meta::Fetched::Found(meta) = crate::meta::fetch_one(&client, app_id) {
+            if !meta.header_image.is_empty() {
+                capsules.push(meta.header_image);
+            }
+        }
+        capsules.push(format!(
             "https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg"
         ));
+        for url in capsules {
+            if let Some((b, i)) = usable(&client, &url, Kind::Hero) {
+                found.push((Kind::Hero, b, i, Source::Steam));
+                break;
+            }
+        }
     }
 
-    let mut chosen = None;
-    for url in &candidates {
-        let Ok(response) = client.get(url).send() else {
-            continue;
+    // --- Write what was found ------------------------------------------
+    let mut have: std::collections::HashMap<Kind, image::DynamicImage> = Default::default();
+    for (kind, raw, img, source) in found {
+        let encoded = if kind == Kind::Logo {
+            // Steam's wordmarks are frequently a small image inside a large
+            // transparent canvas; trimmed, they fill the space they are given.
+            let trimmed = trim_transparent(&img);
+            let capped = downscale(&trimmed, kind).unwrap_or(trimmed);
+            let mut out = std::io::Cursor::new(Vec::new());
+            match capped.write_to(&mut out, image::ImageFormat::Png) {
+                Ok(()) => out.into_inner(),
+                Err(_) => raw.to_vec(),
+            }
+        } else {
+            resize(&raw, kind).unwrap_or_else(|| raw.to_vec())
         };
-        if !response.status().is_success() {
-            continue;
+        write_cached(&path_for(app_id, kind), &encoded);
+        have.insert(kind, img);
+        match kind {
+            Kind::Cover => m.cover = source,
+            Kind::Hero => m.hero = source,
+            Kind::Logo => m.logo = source,
         }
-        let Ok(bytes) = response.bytes() else {
-            continue;
-        };
-        let Ok(img) = image::load_from_memory(&bytes) else {
-            continue;
-        };
-        // A 200 proves nothing: Steam answers with a grey placeholder rather
-        // than a 404. And the right shape matters as much as the right pixels.
-        if is_placeholder(&img) {
-            log_debug!("art", "{app_id}: {url} is a placeholder, trying the next");
-            continue;
-        }
-        if !right_shape(kind, img.width(), img.height()) {
-            log_debug!(
-                "art",
-                "{app_id}: {url} is {}x{}, wrong shape for {kind:?}",
-                img.width(),
-                img.height()
-            );
-            continue;
-        }
-        chosen = Some((bytes, img));
-        break;
     }
 
-    // Nothing of the right shape exists. For a cover, build one out of the
-    // game's own key art rather than leaving a blank card.
-    if chosen.is_none() && kind == Kind::Cover {
-        // Both are needed. Key art alone gives an anonymous blur; the wordmark
-        // is what makes it identifiable, and identifiable is the whole point.
-        let hero =
-            fetch(app_id, Kind::Hero, sgdb_key).and_then(|b| image::load_from_memory(&b).ok());
-        let logo =
-            fetch(app_id, Kind::Logo, sgdb_key).and_then(|b| image::load_from_memory(&b).ok());
-        if let (Some(hero), Some(logo)) = (hero, logo) {
-            log_info!("art", "composed a cover for {app_id} from its key art");
-            let composed = compose_cover(&hero, &logo);
+    // --- Compose a cover, if there is anything to compose from ----------
+    if m.cover == Source::None {
+        if let (Some(hero), Some(logo)) = (have.get(&Kind::Hero), have.get(&Kind::Logo)) {
+            let composed = compose_cover(hero, logo);
             let mut out = std::io::Cursor::new(Vec::new());
             if image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 86)
                 .encode_image(&composed.to_rgb8())
                 .is_ok()
             {
-                let bytes = out.into_inner();
-                write_cached(&path, &bytes);
-                return Some(bytes);
+                write_cached(&path_for(app_id, Kind::Cover), &out.into_inner());
+                m.cover = Source::Composed;
             }
         }
     }
 
-    let Some((raw, img)) = chosen else {
-        log_debug!("art", "no usable {} for {app_id}", kind.file());
-        // Every source was tried, so this miss is real and worth remembering:
-        // without it, a game with no artwork costs several requests on every
-        // launch. Adding a SteamGridDB key clears these.
-        let _ = paths::ensure(path.parent()?);
-        let _ = std::fs::write(&path, b"");
-        return None;
-    };
+    // Record misses so a game with genuinely no artwork is not re-asked about
+    // on every launch.
+    for (kind, source) in [
+        (Kind::Cover, m.cover),
+        (Kind::Hero, m.hero),
+        (Kind::Logo, m.logo),
+    ] {
+        if source == Source::None {
+            log_debug!("art", "{app_id}: no source has a usable {}", kind.file());
+            write_cached(&path_for(app_id, kind), b"");
+        }
+    }
 
-    // Wordmarks are trimmed to their ink before anything else: Steam's are
-    // frequently a small logo inside a large transparent canvas.
-    let encoded = if kind == Kind::Logo {
-        let trimmed = trim_transparent(&img);
-        let capped = downscale(&trimmed, kind).unwrap_or(trimmed);
-        let mut out = std::io::Cursor::new(Vec::new());
-        capped
-            .write_to(&mut out, image::ImageFormat::Png)
-            .ok()
-            .map(|_| out.into_inner())
-            .unwrap_or_else(|| raw.to_vec())
-    } else {
-        // None means "store what arrived": nothing needed doing.
-        resize(&raw, kind).unwrap_or_else(|| raw.to_vec())
-    };
+    let path = manifest_path(app_id);
+    if let Ok(text) = serde_json::to_string(&m) {
+        write_cached(&path, text.as_bytes());
+    }
+    log_info!(
+        "art",
+        "{app_id}: cover={:?} hero={:?} logo={:?}{}",
+        m.cover,
+        m.hero,
+        m.logo,
+        if m.steam_complete {
+            " (steam complete)"
+        } else {
+            ""
+        }
+    );
+    m
+}
 
-    write_cached(&path, &encoded);
-    Some(encoded)
+pub fn fetch(app_id: &str, kind: Kind, sgdb_key: Option<&str>) -> Option<Vec<u8>> {
+    let path = path_for(app_id, kind);
+
+    // The manifest is the authority on whether this game has been resolved.
+    // A file alone is not: a zero-byte miss and a not-yet-fetched asset look
+    // identical on disk.
+    if manifest(app_id).is_some() {
+        return match std::fs::read(&path) {
+            Ok(bytes) if !bytes.is_empty() => Some(bytes),
+            _ => None,
+        };
+    }
+
+    resolve(app_id, sgdb_key);
+    match std::fs::read(&path) {
+        Ok(bytes) if !bytes.is_empty() => Some(bytes),
+        _ => None,
+    }
+}
+
+/// What the pipeline decided for a game, for the interface and the log.
+#[tauri::command]
+pub fn artwork_report(app_ids: Vec<String>) -> Vec<Manifest> {
+    app_ids.iter().filter_map(|id| manifest(id)).collect()
 }
 
 /// Temp-then-rename, so a half-written file is never mistaken for a cached one
@@ -704,6 +855,18 @@ mod tests {
         assert!(!is_placeholder(&composed));
     }
 
+    /// Steam is inconsistent about which filename it publishes an asset under,
+    /// and trying one and giving up was leaving real artwork unfetched.
+    #[test]
+    fn every_kind_has_more_than_one_name_to_try() {
+        for kind in [Kind::Cover, Kind::Hero, Kind::Logo] {
+            assert!(kind.files().len() > 1, "{kind:?} should have alternatives");
+            assert_eq!(kind.file(), kind.files()[0], "canonical name is the first");
+        }
+        // Rainbow Six Siege 404s on the jpg and serves a perfect 600x900 png.
+        assert!(Kind::Cover.files().contains(&"portrait.png"));
+    }
+
     #[test]
     fn kinds_round_trip_through_their_url_names() {
         for (name, kind) in [
@@ -730,6 +893,30 @@ mod live {
     /// exercised by this one appid, which is why it is the fixture.
     ///
     ///     cargo test live -- --ignored --nocapture
+    /// Prints the resolution report for a spread of real games: an old one
+    /// Steam has everything for, a recent one it does not, and a couple in
+    /// between. This is the "can it certifiably tell" question, answered.
+    ///
+    ///     cargo test live -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn resolution_report() {
+        let _ = clear_cache();
+        for (app_id, name) in [
+            ("440", "Team Fortress 2"),
+            ("620", "Portal 2"),
+            ("2807960", "Battlefield 6"),
+            ("377560", "Rainbow Six Siege"),
+            ("1091500", "Cyberpunk 2077"),
+        ] {
+            let m = super::resolve(app_id, None);
+            println!(
+                "  {:<22} cover={:<12?} hero={:<12?} logo={:<12?} steam_complete={}",
+                name, m.cover, m.hero, m.logo, m.steam_complete
+            );
+        }
+    }
+
     #[test]
     #[ignore]
     fn a_recent_release_still_gets_artwork() {

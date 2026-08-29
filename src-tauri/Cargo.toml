@@ -19,6 +19,9 @@ tauri = { version = "2", features = [] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# Shared with reqwest; used to pass response bodies around without copying.
+bytes = "1"
+
 # Native file picker, for pointing a hand-added game at its executable.
 tauri-plugin-dialog = "2"
 

@@ -1961,6 +1961,7 @@ dependencies = [
 name = "marquee"
 version = "0.0.1"
 dependencies = [
+ "bytes",
  "gilrs",
  "image",
  "reqwest 0.12.28",

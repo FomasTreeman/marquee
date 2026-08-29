@@ -98,26 +98,63 @@ impl Want {
 ///
 /// Never an error: this is a fallback, and a fallback that can fail loudly is
 /// worse than one that quietly does not apply.
-pub fn best_for_steam_app(
+/// How many community submissions to consider for one asset.
+///
+/// Bounded rather than unlimited: a popular game can have hundreds, each one is
+/// a download to validate, and if the first eight are all unusable the ninth
+/// will not save the day.
+const MAX_CANDIDATES: usize = 8;
+
+/// Pull the usable candidate URLs out of a response, in the API's own ranking
+/// order.
+///
+/// Separated from the request so the filtering can be tested without a key or
+/// a network, which is the part that actually decides what appears on screen.
+fn candidates_from(body: &Response, want: Want) -> Vec<String> {
+    if !body.success {
+        return Vec::new();
+    }
+    body.data
+        .iter()
+        .filter(|a| want.accepts(a.width, a.height))
+        .filter(|a| !a.url.trim().is_empty())
+        .take(MAX_CANDIDATES)
+        .map(|a| a.url.clone())
+        .collect()
+}
+
+/// Every usable asset URL for a Steam appid, best first.
+///
+/// A list rather than one URL, and that is the point: SteamGridDB is community
+/// submitted, so a given entry may be a dead link, the wrong shape despite its
+/// metadata, or an image that turns out to be a placeholder once downloaded.
+/// Taking only the top-ranked one meant a single bad submission left a game
+/// with no artwork while a dozen good ones sat behind it.
+///
+/// Never an error: this is a fallback, and a fallback that fails loudly is
+/// worse than one that quietly does not apply.
+pub fn candidates_for_steam_app(
     client: &reqwest::blocking::Client,
     key: &str,
     app_id: &str,
     want: Want,
-) -> Option<String> {
+) -> Vec<String> {
     if key.is_empty() {
-        return None;
+        return Vec::new();
     }
     let url = format!("{BASE}/{}/steam/{app_id}", want.path());
-    let response = client
+    let Ok(response) = client
         .get(&url)
         .query(&want.query())
         .bearer_auth(key)
         .send()
-        .ok()?;
+    else {
+        return Vec::new();
+    };
 
     if response.status() == 401 || response.status() == 403 {
         log_warn!("sgdb", "key rejected — check it in Settings");
-        return None;
+        return Vec::new();
     }
     if !response.status().is_success() {
         log_debug!(
@@ -126,20 +163,25 @@ pub fn best_for_steam_app(
             want.path(),
             response.status()
         );
-        return None;
+        return Vec::new();
     }
 
-    let body: Response = response.json().ok()?;
+    let Ok(body) = response.json::<Response>() else {
+        return Vec::new();
+    };
     if !body.success {
         log_debug!("sgdb", "{} for {app_id}: {:?}", want.path(), body.errors);
-        return None;
+        return Vec::new();
     }
-    // Ordered by the API's own ranking, so the first acceptable one is the
-    // community's preferred choice rather than ours.
-    body.data
-        .into_iter()
-        .find(|a| want.accepts(a.width, a.height))
-        .map(|a| a.url)
+    let out = candidates_from(&body, want);
+    log_debug!(
+        "sgdb",
+        "{} for {app_id}: {} of {} submissions usable",
+        want.path(),
+        out.len(),
+        body.data.len()
+    );
+    out
 }
 
 #[cfg(test)]
@@ -173,7 +215,80 @@ mod tests {
     #[test]
     fn no_key_means_no_request() {
         let client = reqwest::blocking::Client::new();
-        assert!(best_for_steam_app(&client, "", "1091500", Want::Grid).is_none());
+        assert!(candidates_for_steam_app(&client, "", "1091500", Want::Grid).is_empty());
+    }
+
+    fn body(assets: &[(u32, u32, &str)]) -> Response {
+        Response {
+            success: true,
+            errors: Vec::new(),
+            data: assets
+                .iter()
+                .map(|(w, h, url)| Asset {
+                    url: (*url).into(),
+                    width: *w,
+                    height: *h,
+                })
+                .collect(),
+        }
+    }
+
+    /// The reason this returns a list at all. Community submissions include
+    /// dead links and mislabelled images, so one bad top-ranked entry must not
+    /// leave a game blank while a dozen good ones sit behind it.
+    #[test]
+    fn every_usable_submission_is_offered_in_order() {
+        let got = candidates_from(
+            &body(&[(600, 900, "a"), (600, 900, "b"), (660, 930, "c")]),
+            Want::Grid,
+        );
+        assert_eq!(got, vec!["a", "b", "c"], "ranking order must be preserved");
+    }
+
+    #[test]
+    fn wrong_shapes_are_filtered_out_of_the_list() {
+        let got = candidates_from(
+            &body(&[
+                (1920, 620, "banner"),
+                (600, 900, "cover"),
+                (512, 512, "square"),
+            ]),
+            Want::Grid,
+        );
+        assert_eq!(got, vec!["cover"]);
+    }
+
+    /// A popular game can have hundreds of submissions and each one is a
+    /// download to validate. If the first eight are unusable the ninth will
+    /// not save the day.
+    #[test]
+    fn the_candidate_list_is_bounded() {
+        let many: Vec<(u32, u32, String)> = (0..50).map(|i| (600, 900, format!("u{i}"))).collect();
+        let refs: Vec<(u32, u32, &str)> =
+            many.iter().map(|(w, h, u)| (*w, *h, u.as_str())).collect();
+        assert_eq!(
+            candidates_from(&body(&refs), Want::Grid).len(),
+            MAX_CANDIDATES
+        );
+    }
+
+    #[test]
+    fn an_unsuccessful_or_empty_response_yields_nothing() {
+        assert!(candidates_from(&body(&[]), Want::Grid).is_empty());
+        let failed = Response {
+            success: false,
+            errors: vec!["nope".into()],
+            data: Vec::new(),
+        };
+        assert!(candidates_from(&failed, Want::Grid).is_empty());
+    }
+
+    /// A blank URL is not a candidate, and would otherwise waste one of the
+    /// eight slots on a guaranteed failure.
+    #[test]
+    fn blank_urls_are_skipped() {
+        let got = candidates_from(&body(&[(600, 900, "   "), (600, 900, "real")]), Want::Grid);
+        assert_eq!(got, vec!["real"]);
     }
 
     #[test]

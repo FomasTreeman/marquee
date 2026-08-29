@@ -142,6 +142,20 @@ export async function setSteamGridDbKey(key: string): Promise<void> {
   return call<void>('set_steamgriddb_key', { key })
 }
 
+/** Where each of a game's assets came from, as the pipeline recorded it. */
+export interface ArtworkManifest {
+  appId: string
+  cover: 'steam' | 'steamgriddb' | 'composed' | 'none'
+  hero: 'steam' | 'steamgriddb' | 'composed' | 'none'
+  logo: 'steam' | 'steamgriddb' | 'composed' | 'none'
+  steamComplete: boolean
+}
+
+export async function artworkReport(appIds: string[]): Promise<ArtworkManifest[]> {
+  if (!inApp) return []
+  return call<ArtworkManifest[]>('artwork_report', { appIds })
+}
+
 export async function setArtSource(gameId: string, appId: string | null): Promise<void> {
   return call<void>('set_art_source', { gameId, appId })
 }

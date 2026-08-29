@@ -10,14 +10,17 @@
  * cursor somewhere the user did not leave it.
  */
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
-import { setManualExecutable, removeManualGame, findExecutable, type Game, type Meta, type Artwork } from './library'
+import {
+  setManualExecutable, removeManualGame, findExecutable,
+  type ArtworkManifest, type Game, type Meta, type Artwork,
+} from './library'
 import { toast } from './toast'
 import { logInfo } from './log'
 import { inApp } from './host'
 
 export interface DetailView {
   readonly isOpen: boolean
-  open(game: Game, meta: Meta | undefined, art: Artwork): void
+  open(game: Game, meta: Meta | undefined, art: Artwork, provenance?: ArtworkManifest): void
   close(): void
   /** Returns true if the action was consumed. */
   handle(action: string): boolean
@@ -30,6 +33,23 @@ function el<K extends keyof HTMLElementTagNameMap>(
   if (className) node.className = className
   parent?.appendChild(node)
   return node
+}
+
+const SOURCE_NAMES: Record<string, string> = {
+  steam: 'Steam',
+  steamgriddb: 'SteamGridDB',
+  composed: 'made from key art',
+  none: 'missing',
+}
+
+function describeArtwork(m: ArtworkManifest | undefined): string {
+  if (!m) return 'not resolved yet'
+  if (m.steamComplete) return 'Steam — complete'
+  // Named per field, because "partly Steam" is not actionable and "no
+  // wordmark" is.
+  const parts = [`cover ${SOURCE_NAMES[m.cover]}`, `art ${SOURCE_NAMES[m.hero]}`, `logo ${SOURCE_NAMES[m.logo]}`]
+  const missing = m.cover === 'none' || m.logo === 'none'
+  return parts.join(', ') + (missing ? ' — a SteamGridDB key would fill these' : '')
 }
 
 function minutesLabel(minutes: number): string {
@@ -137,7 +157,7 @@ export function createDetail(hooks: DetailHooks): DetailView {
   return {
     get isOpen() { return open },
 
-    open(game, meta, art) {
+    open(game, meta, art, provenance) {
       open = true
       root.hidden = false
       scroll.scrollTop = 0
@@ -224,6 +244,10 @@ export function createDetail(hooks: DetailHooks): DetailView {
       addFact('Status', game.installed ? 'Installed' : 'Not installed')
       addFact('Store', game.provider === 'steam' ? 'Steam' : 'Added by hand')
       addFact('Executable', game.installDir ?? '')
+      // Where the artwork came from, stated rather than left to be guessed
+      // from the screen. "Is it working" should be answerable without
+      // squinting at a card.
+      addFact('Artwork', describeArtwork(provenance))
     },
 
     close() {

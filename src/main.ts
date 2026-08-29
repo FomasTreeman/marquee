@@ -11,6 +11,7 @@ import { createShell, setHints } from './shell'
 import { createBackdrop } from './backdrop'
 import { createDetail } from './detail'
 import { createPicker } from './picker'
+import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import { createHud } from './hud'
 import { createOsk } from './osk'
 import { createSettings } from './settings'
@@ -19,7 +20,8 @@ import { hostInfo, pingMs, inApp } from './host'
 import { createInput, padStatus, type Action } from './input'
 import {
   scanLibrary, requestMeta, onMeta, launchGame, toggleFavourite,
-  addManualGame, setArtSource, initArtwork, steamArtwork, artIdFor, tintFor,
+  addManualGame, setManualExecutable, setArtSource, artworkReport,
+  initArtwork, steamArtwork, artIdFor, tintFor,
   type Artwork, type Game, type Meta, type ScanResult,
 } from './library'
 import { installErrorHandlers, logInfo, logWarn, logError, renderFatal, logPath } from './log'
@@ -370,12 +372,36 @@ async function main(): Promise<void> {
   function openAdd(): void {
     picker.open({
       heading: 'Add a game',
-      sub: 'Type its name. Everything else comes from that.',
-      async onPick(hit) {
+      sub: 'Type its name — or browse for it, and the name is worked out for you.',
+      // Browsing answers "where is it"; the search still answers "what is it",
+      // because artwork and metadata are keyed by the game rather than by a
+      // path. Doing both in one pass means a hand-added game arrives complete
+      // and playable instead of needing a second visit to set its executable.
+      browse: {
+        label: 'Browse for a file…',
+        async choose() {
+          if (!inApp) return null
+          const picked = await openFileDialog({
+            multiple: false,
+            directory: false,
+            title: 'Where is the game?',
+            filters: [{ name: 'Programs', extensions: ['exe', 'app', 'sh', 'bat', 'cmd', 'AppImage', '*'] }],
+          })
+          return typeof picked === 'string' ? picked : null
+        },
+      },
+      async onPick(hit, file) {
         try {
-          await addManualGame(hit.name, hit.appId)
-          logInfo('add', `added ${hit.name} (steam appid ${hit.appId})`)
-          toast(`Added ${hit.name}.`, 'info', 5000)
+          const id = await addManualGame(hit.name, hit.appId)
+          if (file) await setManualExecutable(id, file)
+          logInfo('add', `added ${hit.name} (appid ${hit.appId})${file ? ` at ${file}` : ''}`)
+          toast(
+            file
+              ? `Added ${hit.name}, ready to play.`
+              : `Added ${hit.name}. Press Y to set its executable.`,
+            'info',
+            5000,
+          )
           await reloadLibrary()
           return true
         } catch (e) {
@@ -479,6 +505,15 @@ async function main(): Promise<void> {
         const game = gameAt(grid.focused)
         if (game) {
           detail.open(game, meta.get(game.providerId), artAt(grid.focused))
+          // The manifest is written when artwork resolves, which may be after
+          // the card was drawn, so it is fetched on open rather than cached.
+          void artworkReport([game.providerId])
+            .then((r) => {
+              if (r[0] && detail.isOpen) {
+                detail.open(game, meta.get(game.providerId), artAt(grid.focused), r[0])
+              }
+            })
+            .catch(() => { /* a missing report is a fact that says "not yet" */ })
           checkNow('detail')
         }
         return

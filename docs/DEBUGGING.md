@@ -173,6 +173,44 @@ await __marquee.selfCheck()             // the invariants, as data
 
 Not present in a release build.
 
+## Is the artwork working?
+
+Answerable without looking at the screen, which was the point.
+
+Every game gets a manifest recording where each of its three assets came from,
+and one log line saying so:
+
+```
+INFO  art  440:     cover=Steam hero=Steam logo=Steam (steam complete)
+INFO  art  377560:  cover=Steam hero=Steam logo=None
+INFO  art  2807960: cover=None  hero=Steam logo=None
+```
+
+The same thing appears on a game's detail page under **Artwork**, naming the
+source per field so "no wordmark" is distinguishable from "partly Steam".
+
+```bash
+cd src-tauri && cargo test resolution_report -- --ignored --nocapture
+```
+
+prints that table for a spread of real games — one Steam has everything for,
+one it has nothing for, and cases in between. Run it after touching the
+pipeline.
+
+### What "working" means here
+
+An asset is accepted only if it **downloads, decodes, is not a placeholder, and
+is the right shape.** Each of those rejected something real:
+
+- Steam answers with a flat grey placeholder rather than a 404, so a 200 proves
+  nothing.
+- A banner decodes perfectly and is still not box art.
+- Steam publishes assets under more than one filename and is inconsistent about
+  which it has. Rainbow Six Siege 404s on `library_600x900.jpg` and serves a
+  perfect 600×900 `portrait.png`.
+- SteamGridDB is community submitted, so its top-ranked entry can be a dead
+  link or mislabelled. Every submission is tried, not just the first.
+
 ## Measuring
 
 `pnpm app` shows a HUD: webview, refresh rate, frame rate, p99, dropped

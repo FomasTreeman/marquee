@@ -19,9 +19,13 @@ export interface HostInfo {
 }
 
 /** True when running inside the Tauri shell rather than a plain browser tab.
+ *
  *  `pnpm dev` alone is a useful fast loop for pure CSS work, so the frontend
- *  is built to degrade rather than throw. */
-export const inApp = '__TAURI_INTERNALS__' in window
+ *  is built to degrade rather than throw. The `typeof` guard is not
+ *  defensiveness for its own sake: without it this module throws at import
+ *  time under a test runner, which makes every pure function downstream of it
+ *  untestable. */
+export const inApp = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 /**
  * Every call into Rust goes through here.

@@ -359,7 +359,8 @@ pub fn run() {
             set_custom_title,
             locate::find_executable,
             get_settings,
-            set_steamgriddb_key
+            set_steamgriddb_key,
+            art::artwork_report
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Marquee");
