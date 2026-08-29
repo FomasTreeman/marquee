@@ -41,6 +41,13 @@ interface Slot {
    *  p99. */
   transform: string
   focus: boolean
+  /** Whether the node is currently showing anything.
+   *
+   *  Tracked separately from `index` because layout() resets index to -1 for
+   *  every slot, which made the "park it" branch below a no-op -- so shrinking
+   *  the item list left the old cards on screen, fully visible. That is how
+   *  filtering to two results still showed forty-eight. */
+  visible: boolean
 }
 
 const OVERSCAN_ROWS = 2
@@ -154,7 +161,7 @@ export function createGrid(
     // image bug three times.
     el.style.visibility = 'hidden'
     canvas.appendChild(el)
-    return { el, art, fallback, img, index: -1, transform: '', focus: false }
+    return { el, art, fallback, img, index: -1, transform: '', focus: false, visible: false }
   }
 
   /** Size the pool to cover the viewport plus overscan, once, on resize. */
@@ -172,11 +179,12 @@ export function createGrid(
     const item = items[index]
     if (!item) {
       // Parked: kept in the pool, hidden rather than removed.
-      if (s.index !== -1) {
+      if (s.visible) {
         s.el.style.visibility = 'hidden'
-        s.index = -1
-        s.focus = false
+        s.visible = false
       }
+      s.index = -1
+      s.focus = false
       return
     }
     const col = index % cols
@@ -189,8 +197,11 @@ export function createGrid(
       s.transform = transform
     }
 
-    if (s.index !== index) {
+    if (!s.visible) {
       s.el.style.visibility = 'visible'
+      s.visible = true
+    }
+    if (s.index !== index) {
       s.el.style.setProperty('--card-tint', item.tint)
       s.fallback.textContent = item.title
       if (item.art) {
@@ -233,6 +244,9 @@ export function createGrid(
     // A resize can change the column count under the cursor; keep the focused
     // card on screen rather than leaving the user somewhere else entirely.
     for (const s of slots) { s.index = -1; s.transform = ''; s.focus = false }
+    // The grid publishes its item count so the self-check can assert that no
+    // more cards are visible than there are items -- the exact bug above.
+    canvas.dataset['items'] = String(items.length)
     scrollIntoView()
     render()
   }
@@ -293,7 +307,7 @@ export function createGrid(
       const item = items[index]
       if (!item) return
       item.title = title
-      const slot = slots.find((s) => s.index === index)
+      const slot = slots.find((s) => s.index === index && s.visible)
       if (slot) slot.fallback.textContent = title
     },
     move(dx, dy) { setFocus(focused + dx + dy * cols) },

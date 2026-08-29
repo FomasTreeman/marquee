@@ -177,6 +177,29 @@ export function runSelfCheck(): Check[] {
       `${heroMeta?.childElementCount ?? 0} facts`))
   }
 
+  // --- the grid shows what it was given --------------------------------
+  // Pooled slots are hidden rather than removed, so a shrinking item list can
+  // leave stale cards on screen looking entirely correct. Filtering to two
+  // results once showed forty-eight of them, and nothing errored.
+  const canvas = document.querySelector<HTMLElement>('.grid-canvas')
+  const declared = Number(canvas?.dataset['items'] ?? NaN)
+  if (Number.isFinite(declared)) {
+    const shown = [...document.querySelectorAll<HTMLElement>('.card')]
+      .filter((c) => c.style.visibility !== 'hidden').length
+    out.push(check('no more cards visible than items', shown <= declared,
+      `${shown} cards for ${declared} items`))
+  }
+
+  // --- filter presets --------------------------------------------------
+  // Exactly one preset is active. Zero means the pills are decoration; two
+  // means the grid is showing one filter and the bar is claiming another.
+  const pills = [...document.querySelectorAll<HTMLElement>('.preset')]
+  if (pills.length) {
+    const active = pills.filter((p) => p.dataset['active'] === '1')
+    out.push(check('exactly one filter preset is active', active.length === 1,
+      `${active.length} of ${pills.length}`))
+  }
+
   // --- the shell is present -------------------------------------------
   for (const sel of ['.topbar', '.hero', '.grid-viewport', '.hints']) {
     const el = document.querySelector(sel)

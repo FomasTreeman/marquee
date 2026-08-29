@@ -20,6 +20,8 @@ export type Action =
   /** Keyboard only. The HUD is a development tool and does not deserve a
    *  face button. */
   | 'perf'
+  /** Open the library search field. */
+  | 'search'
 
 export interface ActionEvent {
   action: Action
@@ -43,6 +45,7 @@ const KEYMAP: Record<string, Action> = {
   KeyQ: 'lb', KeyE: 'rb',
   Tab: 'menu', KeyM: 'menu', KeyG: 'mainmenu',
   KeyP: 'perf',
+  Slash: 'search', KeyF: 'search',
 }
 
 interface RustInputEvent { action: Action; repeat: boolean; t: number }

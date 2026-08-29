@@ -5,7 +5,7 @@
  * substance lives in its own module; this file is the assembly and should stay
  * short enough to read in one go.
  */
-import { createGrid, type GridItem } from './grid'
+import { createGrid } from './grid'
 import { createFrameMeter, installGrainTile } from './perf'
 import { createShell, setHints } from './shell'
 import { createBackdrop } from './backdrop'
@@ -22,6 +22,7 @@ import {
 } from './library'
 import { installErrorHandlers, logInfo, logWarn, logError, renderFatal, logPath } from './log'
 import { scheduleSelfCheck } from './selfcheck'
+import { apply as applyFilter, describe as describeFilter, PRESETS, type Preset } from './filter'
 import { SAMPLE_LIBRARY } from './sample'
 
 const params = new URLSearchParams(location.search)
@@ -93,7 +94,10 @@ async function main(): Promise<void> {
 
   const shell = createShell(document.getElementById('app')!)
   const backdrop = createBackdrop(shell.backdropA, shell.backdropB)
-  setHints(shell.hints, [['A', 'Play'], ['Y', 'Details'], ['X', 'Favourite'], ['☰', 'Add a game']])
+  setHints(shell.hints, [
+    ['A', 'Play'], ['Y', 'Details'], ['X', 'Favourite'],
+    ['LB/RB', 'Filter'], ['/', 'Search'], ['☰', 'Add a game'],
+  ])
 
   // Library state. Rebuilt wholesale by reloadLibrary(), so adding a game
   // arrives through exactly the same path as every other one rather than a
@@ -103,10 +107,21 @@ async function main(): Promise<void> {
   let scan: ScanResult = { games: [], providers: [], tookMs: 0 }
   const meta = new Map<string, Meta>()
 
-  function refreshHero(index: number): void {
-    const game = games[index]
+  // What the grid is currently showing: indices into `games`, in grid order.
+  // Keeping the filtered view as indices rather than a second array of games
+  // means a metadata update or a favourite toggle has exactly one place to
+  // write, whatever is on screen.
+  let view: number[] = []
+  let preset: Preset = 'all'
+  let query = ''
+
+  const gameAt = (viewIndex: number): Game | undefined => games[view[viewIndex] ?? -1]
+  const artAt = (viewIndex: number): Artwork => art[view[viewIndex] ?? -1] ?? {}
+
+  function refreshHero(viewIndex: number): void {
+    const game = gameAt(viewIndex)
     if (!game) return
-    const a = art[index] ?? {}
+    const a = artAt(viewIndex)
     backdrop.show(a.hero)
 
     // The transparent wordmark is the design's preferred title. Type is the
@@ -154,9 +169,58 @@ async function main(): Promise<void> {
     shell.gridViewport.appendChild(box)
   }
 
+  function paintPresets(): void {
+    shell.presets.textContent = ''
+    for (const p of PRESETS) {
+      const pill = document.createElement('span')
+      pill.className = 'preset'
+      pill.dataset['active'] = p.id === preset ? '1' : '0'
+      // A preset that would show nothing is dimmed rather than hidden --
+      // hiding it would shift every other pill as the library changes.
+      pill.dataset['empty'] = applyFilter(games, p.id, '').length ? '0' : '1'
+      pill.textContent = p.label
+      shell.presets.appendChild(pill)
+    }
+  }
+
+  /** Rebuild the grid from the current preset and query, keeping the cursor on
+   *  the same game where it survives the filter. */
+  function applyView(): void {
+    const keepId = gameAt(grid.focused)?.id
+    view = applyFilter(games, preset, query)
+    paintPresets()
+    shell.count.textContent = describeFilter(preset, query, view.length, games.length)
+
+    shell.gridViewport.querySelector('.empty')?.remove()
+    if (!view.length) {
+      grid.setItems([])
+      if (!games.length) { showEmpty(); return }
+      const box = document.createElement('div')
+      box.className = 'empty'
+      const b = document.createElement('b')
+      b.textContent = 'Nothing matches'
+      const span = document.createElement('span')
+      span.textContent = query.trim()
+        ? `No game here is called “${query.trim()}”.`
+        : 'This filter has no games in it.'
+      box.append(b, span)
+      shell.gridViewport.appendChild(box)
+      return
+    }
+
+    grid.setItems(view.map((g, i) => ({
+      id: i,
+      title: games[g]!.title,
+      tint: tintFor(games[g]!.title || games[g]!.providerId),
+      art: art[g]?.cover,
+    })))
+
+    const restored = keepId ? view.findIndex((g) => games[g]!.id === keepId) : -1
+    if (restored > 0) grid.focus(restored)
+  }
+
   /** Rescan and rebuild everything, keeping the cursor on the same game. */
   async function reloadLibrary(): Promise<void> {
-    const keepId = games[grid.focused]?.id
     try {
       scan = MOCK ? { games: [], providers: [], tookMs: 0 } : await scanLibrary()
       for (const p of scan.providers) if (p.error) logWarn('scan', `${p.provider}: ${p.error}`)
@@ -170,23 +234,8 @@ async function main(): Promise<void> {
     // A title already known beats waiting for the worker to re-announce it.
     games.forEach((g) => { const m = meta.get(g.providerId); if (m && !g.title) g.title = m.name })
 
-    shell.gridViewport.querySelector('.empty')?.remove()
-    shell.count.textContent = games.length
-      ? `${games.length} ${games.length === 1 ? 'game' : 'games'}`
-      : ''
-
-    if (!games.length) { grid.setItems([]); showEmpty(); return }
-
-    const items: GridItem[] = games.map((g, i) => ({
-      id: i,
-      title: g.title,
-      tint: tintFor(g.title || g.providerId),
-      art: art[i]?.cover,
-    }))
-    grid.setItems(items)
-
-    const restored = keepId ? games.findIndex((g) => g.id === keepId) : -1
-    if (restored > 0) grid.focus(restored)
+    applyView()
+    if (!games.length) return
 
     // Artwork needs no names -- every asset is keyed by appid alone -- so the
     // library looks right immediately and fills in its text afterwards.
@@ -201,11 +250,14 @@ async function main(): Promise<void> {
   function applyMeta(m: Meta): void {
     meta.set(m.appId, m)
     if (!m.name) return
-    games.forEach((g, i) => {
+    games.forEach((g, gameIndex) => {
       if (g.providerId !== m.appId || g.title === m.name) return
       g.title = m.name
-      grid.setTitle(i, m.name)
-      if (i === grid.focused) refreshHero(i)
+      // Only the grid position, if this game is currently shown at all.
+      const viewIndex = view.indexOf(gameIndex)
+      if (viewIndex < 0) return
+      grid.setTitle(viewIndex, m.name)
+      if (viewIndex === grid.focused) refreshHero(viewIndex)
     })
   }
 
@@ -221,7 +273,7 @@ async function main(): Promise<void> {
   // get two windows or none.
   let launching = false
   async function play(index: number): Promise<void> {
-    const game = games[index]
+    const game = gameAt(index)
     if (!game || launching) return
     if (game.provider === 'manual' && !game.installed) {
       toast(`${game.title} has no executable yet. Press Y to set one.`, 'error', 6000)
@@ -241,16 +293,51 @@ async function main(): Promise<void> {
   }
 
   async function favourite(index: number): Promise<void> {
-    const game = games[index]
+    const game = gameAt(index)
     if (!game) return
     try {
       game.favourite = await toggleFavourite(game.id)
-      refreshHero(index)
+      // A game unfavourited while the Favourites preset is showing must leave
+      // the grid, or the filter is a lie.
+      if (preset === 'favourites') applyView()
+      else { paintPresets(); refreshHero(index) }
       toast(game.favourite ? `Favourited ${game.title}` : `Removed ${game.title} from favourites`)
     } catch (e) {
       toast(`Could not save that. ${String(e)}`, 'error')
     }
   }
+
+  function cyclePreset(direction: number): void {
+    const at = PRESETS.findIndex((p) => p.id === preset)
+    const next = PRESETS[(at + direction + PRESETS.length) % PRESETS.length]!
+    preset = next.id
+    query = ''
+    shell.query.hidden = true
+    shell.query.value = ''
+    grid.focus(0)
+    applyView()
+  }
+
+  function openSearch(): void {
+    shell.query.hidden = false
+    shell.query.focus()
+    shell.query.select()
+  }
+
+  shell.query.addEventListener('input', () => {
+    query = shell.query.value
+    grid.focus(0)
+    applyView()
+  })
+  shell.query.addEventListener('blur', () => {
+    // An empty search box left on screen is clutter; a populated one is state
+    // the user can see, so it stays.
+    if (!query.trim()) shell.query.hidden = true
+  })
+  shell.query.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { query = ''; shell.query.value = ''; shell.query.blur(); applyView() }
+    if (e.key === 'Enter') shell.query.blur()
+  })
 
   const detail = createDetail(() => void play(grid.focused), () => void reloadLibrary())
   const add = createAdd(() => void reloadLibrary())
@@ -287,11 +374,17 @@ async function main(): Promise<void> {
       if (e.action === 'x') { void favourite(grid.focused); return }
       if (e.action === 'menu' || e.action === 'mainmenu') { add.open(); return }
       if (e.action === 'y') {
-        const game = games[grid.focused]
-        if (game) detail.open(game, meta.get(game.providerId), art[grid.focused] ?? {})
+        const game = gameAt(grid.focused)
+        if (game) detail.open(game, meta.get(game.providerId), artAt(grid.focused))
         return
       }
+      if (e.action === 'search') { openSearch(); return }
+      if (e.action === 'lb' || e.action === 'rb') { cyclePreset(e.action === 'rb' ? 1 : -1); return }
     }
+
+    // Shoulder buttons repeat, so preset cycling is handled before this and
+    // must not fall through to navigation.
+    if (e.action === 'lb' || e.action === 'rb') { cyclePreset(e.action === 'rb' ? 1 : -1); return }
 
     const d = NAV[e.action]
     if (d) grid.move(d[0], d[1])

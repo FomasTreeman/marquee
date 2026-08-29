@@ -13,6 +13,8 @@
  */
 
 export interface Shell {
+  presets: HTMLElement
+  query: HTMLInputElement
   backdropA: HTMLImageElement
   backdropB: HTMLImageElement
   heroLogo: HTMLImageElement
@@ -76,7 +78,17 @@ export function createShell(root: HTMLElement): Shell {
   const topbar = el('header', 'topbar', stage)
   const brand = el('div', 'brand', topbar)
   brand.textContent = 'Library'
+  const presets = el('nav', 'presets', topbar)
   el('div', 'spacer', topbar)
+
+  // Hidden until there is a query. A search box occupying the top bar
+  // permanently would be a desktop habit imposed on a television.
+  const query = el('input', 'query', topbar)
+  query.type = 'text'
+  query.placeholder = 'Search'
+  query.autocomplete = 'off'
+  query.spellcheck = false
+  query.hidden = true
   const status = el('div', 'status', topbar)
   const count = el('span', 'count', status)
   const clock = el('span', 'clock', status)
@@ -103,7 +115,7 @@ export function createShell(root: HTMLElement): Shell {
   tick()
   setInterval(tick, 20_000)
 
-  return { backdropA, backdropB, heroLogo, heroTitle, heroMeta, gridViewport, count, clock, hints }
+  return { presets, query, backdropA, backdropB, heroLogo, heroTitle, heroMeta, gridViewport, count, clock, hints }
 }
 
 /** The button legend along the bottom. Labels follow the Xbox layout, with
