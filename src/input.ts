@@ -23,6 +23,8 @@ export type Action =
   /** Open the library search field. */
   | 'search'
   | 'fullscreen'
+  /** Cycle the sort order. */
+  | 'sort'
 
 export interface ActionEvent {
   action: Action
@@ -48,6 +50,7 @@ const KEYMAP: Record<string, Action> = {
   KeyP: 'perf',
   Slash: 'search', KeyF: 'search',
   F11: 'fullscreen',
+  KeyO: 'sort',
 }
 
 interface RustInputEvent { action: Action; repeat: boolean; t: number }

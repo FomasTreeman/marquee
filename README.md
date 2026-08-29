@@ -77,13 +77,19 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
   while you browse — a controller is not an input device as far as the OS is
   concerned, so ten minutes of browsing looks like ten minutes of idle
 
+- Sorting by recency, playtime, name or size — remembered, with favourites
+  leading every order. Search matches genre and studio too, so "roguelike" or
+  "larian" finds something
+- A game that spawns and dies immediately says so, rather than looking like it
+  launched
+
 **Not yet**
 
 - **Windows and Linux are entirely unverified.** The code is written for all
   three and CI builds all three, but nothing has been *run* anywhere but macOS,
   and [the plan](docs/PLAN.md) is explicit that a pass on one webview engine is
   not a pass
-- Sort options and categories
+- Categories and collections
 - Anything about a game that is owned but has never been played or installed
 
 - **[docs/PLAN.md](docs/PLAN.md)** — scope, stack, architecture, phasing, and
@@ -115,6 +121,8 @@ with two games installed. `?hud=0` hides the HUD, and **P** toggles it.
 | **☰** / Tab | Add a game by name |
 | **LB / RB** | Cycle filter presets |
 | **/** or F | Search the library |
+| **LT** / O | Cycle sort order |
+| **F11** | Fullscreen |
 | **P** | Toggle the performance HUD |
 
 `pnpm app` puts a HUD in the bottom right with frame rate, input latency, IPC

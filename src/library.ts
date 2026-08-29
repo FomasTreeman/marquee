@@ -151,10 +151,18 @@ export async function removeManualGame(id: number): Promise<void> {
  */
 export interface Settings {
   steamgriddbKey: string
+  /** Sort order, remembered across launches. */
+  sort: string
+}
+
+/** Store any single setting. */
+export async function setSetting(key: string, value: string): Promise<void> {
+  if (!inApp) return
+  return call<void>('set_setting', { key, value })
 }
 
 export async function getSettings(): Promise<Settings> {
-  if (!inApp) return { steamgriddbKey: '' }
+  if (!inApp) return { steamgriddbKey: '', sort: 'recent' }
   return call<Settings>('get_settings')
 }
 
@@ -218,6 +226,20 @@ export async function toggleFavourite(gameId: string): Promise<boolean> {
 export async function launchGame(id: string): Promise<string> {
   if (!inApp) throw new Error('launching needs the app, not a browser tab')
   return call<string>('launch_game', { id })
+}
+
+/**
+ * A game that spawned and then died.
+ *
+ * Reported after the fact because `spawn` succeeding says nothing about
+ * whether the program ran — a missing runtime or a wrong working directory
+ * looks identical to a successful launch until the process is gone.
+ */
+export async function onLaunchFailed(
+  cb: (info: { title: string; detail: string }) => void,
+): Promise<() => void> {
+  if (!inApp) return () => {}
+  return listen<{ title: string; detail: string }>('launch-failed', (e) => cb(e.payload))
 }
 
 export async function onMeta(cb: (meta: Meta) => void): Promise<() => void> {

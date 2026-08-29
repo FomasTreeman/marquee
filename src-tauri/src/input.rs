@@ -45,6 +45,8 @@ pub enum Action {
     Rb,
     Menu,
     MainMenu,
+    /// Cycle the sort order.
+    Sort,
 }
 
 impl Action {
@@ -82,6 +84,7 @@ fn button_action(b: Button) -> Option<Action> {
         Button::North => Action::Y,
         Button::LeftTrigger => Action::Lb,
         Button::RightTrigger => Action::Rb,
+        Button::LeftTrigger2 => Action::Sort,
         Button::Start => Action::Menu,
         Button::Select => Action::MainMenu,
         _ => return None,

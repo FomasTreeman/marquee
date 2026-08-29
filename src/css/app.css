@@ -747,3 +747,11 @@ body::after {
   from { opacity: 0; transform: translateY(calc(10px * var(--s))); }
   to   { opacity: 1; transform: none; }
 }
+
+
+.empty-prompt {
+  display: block;
+  margin-top: calc(22px * var(--s));
+  color: var(--fg1);
+  font-size: calc(15px * var(--s));
+}

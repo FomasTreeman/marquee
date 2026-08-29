@@ -23,7 +23,7 @@ use std::process::Command;
 use serde::Serialize;
 
 use crate::library::Game;
-use crate::log_info;
+use crate::{log_info, log_warn};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum Launch {
@@ -113,12 +113,24 @@ fn open_uri(uri: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn start(game: &Game) -> Result<Launch, String> {
+/// How long to watch a spawned game before deciding it started successfully.
+///
+/// A missing DLL, a bad working directory or an unsupported binary exits within
+/// a few hundred milliseconds. A game that is still alive after this is one the
+/// user is about to see.
+const STARTUP_GRACE: std::time::Duration = std::time::Duration::from_millis(900);
+
+pub fn start(
+    game: &Game,
+    on_failure: impl FnOnce(String) + Send + 'static,
+) -> Result<Launch, String> {
     let plan = plan(game)?;
     match &plan {
         Launch::Uri(uri) => {
             log_info!("run", "launching {} via {}", game.title, uri);
             open_uri(uri)?;
+            // Nothing to watch: the URI handler returns immediately and the
+            // game belongs to Steam. Whether it started is Steam's to report.
         }
         Launch::Process { program, args, cwd } => {
             log_info!("run", "spawning {}", program.display());
@@ -127,8 +139,38 @@ pub fn start(game: &Game) -> Result<Launch, String> {
             if let Some(dir) = cwd {
                 cmd.current_dir(dir);
             }
-            cmd.spawn()
+            let mut child = cmd
+                .spawn()
                 .map_err(|e| format!("could not start {}: {e}", program.display()))?;
+
+            // A process that spawns and then dies immediately is the common
+            // failure -- a missing runtime, a wrong working directory -- and
+            // spawn() reports none of it, so the launch looks successful and
+            // nothing happens. Watched off-thread so the interface never waits.
+            let title = game.title.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(STARTUP_GRACE);
+                match child.try_wait() {
+                    Ok(Some(status)) if !status.success() => {
+                        let detail = match status.code() {
+                            Some(code) => format!("exited immediately with code {code}"),
+                            None => "was terminated immediately".to_string(),
+                        };
+                        log_warn!("run", "{title} {detail}");
+                        on_failure(detail);
+                    }
+                    Ok(Some(_)) => {
+                        // Exited cleanly and at once. A launcher stub handing
+                        // off to a store client looks exactly like this, so it
+                        // is not treated as a failure.
+                        log_info!(
+                            "run",
+                            "{title} exited immediately, cleanly -- probably a launcher stub"
+                        );
+                    }
+                    _ => log_info!("run", "{title} is running"),
+                }
+            });
         }
     }
     Ok(plan)
@@ -170,6 +212,57 @@ mod tests {
         for bad in ["", "12; rm -rf /", "../../etc", "abc", "12 34"] {
             assert!(plan(&steam_game(bad)).is_err(), "{bad:?} should be refused");
         }
+    }
+
+    /// A game that spawns and dies at once is the common manual-launch
+    /// failure, and spawn() reports none of it. `false` exits non-zero
+    /// immediately, which is exactly that shape.
+    #[test]
+    fn a_process_that_dies_immediately_is_reported() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut g = steam_game("1");
+        g.provider = "manual".into();
+        g.install_dir = Some(PathBuf::from(if cfg!(windows) {
+            "C:\\Windows\\System32\\cmd.exe"
+        } else {
+            "/usr/bin/false"
+        }));
+        if !g.install_dir.as_ref().unwrap().exists() {
+            return; // no such binary on this machine; nothing to assert
+        }
+        // cmd.exe without arguments does not exit, so only the unix shape is
+        // asserted -- the mechanism is identical either way.
+        if cfg!(windows) {
+            return;
+        }
+        start(&g, move |detail| {
+            let _ = tx.send(detail);
+        })
+        .unwrap();
+        let reported = rx.recv_timeout(std::time::Duration::from_secs(4));
+        assert!(reported.is_ok(), "a failed launch should be reported");
+        assert!(reported.unwrap().contains("code 1"));
+    }
+
+    /// A launcher stub that hands off to a store client exits cleanly and at
+    /// once, and must not be reported as a failure.
+    #[test]
+    fn a_clean_immediate_exit_is_not_a_failure() {
+        if cfg!(windows) || !std::path::Path::new("/usr/bin/true").exists() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut g = steam_game("1");
+        g.provider = "manual".into();
+        g.install_dir = Some(PathBuf::from("/usr/bin/true"));
+        start(&g, move |detail| {
+            let _ = tx.send(detail);
+        })
+        .unwrap();
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(3)).is_err(),
+            "a clean exit must not be reported as a failure"
+        );
     }
 
     #[test]

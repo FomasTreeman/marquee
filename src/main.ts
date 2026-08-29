@@ -19,14 +19,18 @@ import { toast } from './toast'
 import { hostInfo, pingMs, inApp } from './host'
 import { createInput, padStatus, type Action } from './input'
 import {
-  scanLibrary, requestMeta, onMeta, launchGame, toggleFavourite, getSettings, toggleFullscreen,
+  scanLibrary, requestMeta, onMeta, onLaunchFailed, launchGame, toggleFavourite,
+  getSettings, setSetting, toggleFullscreen,
   addManualGame, setManualExecutable, setArtSource, artworkReport,
   initArtwork, steamArtwork, artIdFor, tintFor,
   type Artwork, type Game, type Meta, type ScanResult,
 } from './library'
 import { installErrorHandlers, logInfo, logWarn, logError, renderFatal, logPath } from './log'
 import { scheduleSelfCheck } from './selfcheck'
-import { apply as applyFilter, describe as describeFilter, PRESETS, type Preset } from './filter'
+import {
+  apply as applyFilter, describe as describeFilter,
+  PRESETS, SORTS, type Preset, type Sort,
+} from './filter'
 import { SAMPLE_LIBRARY } from './sample'
 
 const params = new URLSearchParams(location.search)
@@ -105,7 +109,7 @@ async function main(): Promise<void> {
   const backdrop = createBackdrop(shell.backdropA, shell.backdropB)
   setHints(shell.hints, [
     ['A', 'Play'], ['Y', 'Details'], ['X', 'Favourite'],
-    ['LB/RB', 'Filter'], ['/', 'Search'], ['☰', 'Add a game'], ['⧉', 'Settings'],
+    ['LB/RB', 'Filter'], ['LT', 'Sort'], ['/', 'Search'], ['☰', 'Add'], ['⧉', 'Settings'],
   ])
   // Long-pressing a face button is the console convention for fullscreen, but
   // it needs a hold timer and a pad to test it on. F11 is the keyboard one and
@@ -126,6 +130,7 @@ async function main(): Promise<void> {
   let view: number[] = []
   let preset: Preset = 'all'
   let query = ''
+  let sort: Sort = 'recent'
 
   const gameAt = (viewIndex: number): Game | undefined => games[view[viewIndex] ?? -1]
   const artAt = (viewIndex: number): Artwork => art[view[viewIndex] ?? -1] ?? {}
@@ -188,7 +193,13 @@ async function main(): Promise<void> {
     b.textContent = title
     const span = document.createElement('span')
     span.textContent = body
-    box.append(b, span)
+    // First run has no games to select and therefore nothing for A to do, so
+    // the prompt says what A does instead. A screen that can only be left with
+    // a mouse is not a screen for a television.
+    const prompt = document.createElement('span')
+    prompt.className = 'empty-prompt'
+    prompt.textContent = 'Press A to add a game by name'
+    box.append(b, span, prompt)
     shell.gridViewport.appendChild(box)
   }
 
@@ -210,9 +221,11 @@ async function main(): Promise<void> {
    *  the same game where it survives the filter. */
   function applyView(): void {
     const keepId = gameAt(grid.focused)?.id
-    view = applyFilter(games, preset, query)
+    // Metadata feeds the search, so "roguelike" or "larian" finds something
+    // once a game's details have arrived.
+    view = applyFilter(games, preset, query, sort, (g) => meta.get(g.providerId))
     paintPresets()
-    shell.count.textContent = describeFilter(preset, query, view.length, games.length)
+    shell.count.textContent = describeFilter(preset, query, view.length, games.length, sort)
 
     shell.gridViewport.querySelector('.empty')?.remove()
     if (!view.length) {
@@ -284,10 +297,22 @@ async function main(): Promise<void> {
       grid.setTitle(viewIndex, m.name)
       if (viewIndex === grid.focused) refreshHero(viewIndex)
     })
+    // A name landing can change where its game belongs.
+    resortLater()
   }
 
   const unlistenMeta = await onMeta(applyMeta)
-  window.addEventListener('beforeunload', () => unlistenMeta())
+  // A launch that fails after spawning has no other way to reach the user:
+  // the button worked, the toast said "starting", and then nothing happened.
+  const unlistenFailed = await onLaunchFailed(({ title, detail }) => {
+    toast(
+      `${title || 'That game'} ${detail}. Its executable may have moved, or need ` +
+        'files that are no longer there.',
+      'error',
+      9000,
+    )
+  })
+  window.addEventListener('beforeunload', () => { unlistenMeta(); unlistenFailed() })
 
   await reloadLibrary()
 
@@ -344,6 +369,29 @@ async function main(): Promise<void> {
   }
 
   const osk = createOsk()
+
+  /**
+   * Change the order, and remember it.
+   *
+   * Re-sorting is debounced when names are still arriving: sorting by name on a
+   * first run would otherwise reshuffle the grid under the cursor once per
+   * metadata event, which is intolerable on a pad.
+   */
+  function cycleSort(): void {
+    const at = SORTS.findIndex((s) => s.id === sort)
+    sort = SORTS[(at + 1) % SORTS.length]!.id
+    void setSetting('sort', sort).catch(() => { /* an unsaved preference is not worth a toast */ })
+    grid.focus(0)
+    applyView()
+    toast(`Sorted by ${SORTS.find((s) => s.id === sort)!.label.toLowerCase()}`, 'info', 2500)
+  }
+
+  let resortPending: number | undefined
+  function resortLater(): void {
+    if (sort !== 'name') return
+    window.clearTimeout(resortPending)
+    resortPending = window.setTimeout(() => applyView(), 900)
+  }
 
   function openSearch(): void {
     shell.query.hidden = false
@@ -475,14 +523,18 @@ async function main(): Promise<void> {
   // Whether the second artwork source is available at all. Read once at start
   // and refreshed when settings change.
   let steamGridDbKey = ''
+  let savedSort = 'recent'
   async function refreshSettings(): Promise<void> {
     try {
-      steamGridDbKey = (await getSettings()).steamgriddbKey
+      const s = await getSettings()
+      steamGridDbKey = s.steamgriddbKey
+      savedSort = s.sort || 'recent'
     } catch {
       steamGridDbKey = ''
     }
   }
   await refreshSettings()
+  sort = (SORTS.find((s) => s.id === savedSort)?.id ?? 'recent') as Sort
 
   const settings = createSettings(() => {
     void refreshSettings()
@@ -538,7 +590,12 @@ async function main(): Promise<void> {
         void toggleFullscreen().catch((err) => toast(`Could not switch. ${String(err)}`, 'error'))
         return
       }
-      if (e.action === 'a') { void play(grid.focused); return }
+      if (e.action === 'a') {
+        // Nothing to play on an empty library, so A does the only useful thing.
+        if (!view.length) openAdd()
+        else void play(grid.focused)
+        return
+      }
       if (e.action === 'x') { void favourite(grid.focused); return }
       if (e.action === 'menu') { openAdd(); return }
       if (e.action === 'mainmenu') {
@@ -566,6 +623,7 @@ async function main(): Promise<void> {
       }
       if (e.action === 'search') { openSearch(); return }
       if (e.action === 'lb' || e.action === 'rb') { cyclePreset(e.action === 'rb' ? 1 : -1); return }
+      if (e.action === 'sort') { cycleSort(); return }
     }
 
     // Shoulder buttons repeat, so preset cycling is handled before this and

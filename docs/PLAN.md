@@ -589,9 +589,18 @@ fifteen seconds and lands the right art without typing a full title.
 ### Phase 3 — Big-screen behaviour  ← **in progress**
 
 Done: fullscreen and its persistence, keeping the display awake while browsing
-with a pad, an on-screen keyboard. Remaining: first run without a mouse,
-gamepad wake, detecting a game that failed to start, and returning to the
-launcher when one exits.
+with a pad, an on-screen keyboard, a first run that says what **A** does when
+there is nothing to select, and detecting a game that spawns and dies.
+
+Remaining: **gamepad wake** — raising the window on a button press — which is
+deliberately not built yet. The obvious implementation steals focus from a
+running game, which is precisely when nobody wants it, and there is no reliable
+way to know a game is running when it was launched through `steam://`. Better
+absent than wrong.
+
+Returning to the launcher when a game exits needs nothing: the OS restores
+focus on its own, and the window already rescans on focus, so playtime updates
+from Steam's own records without anything watching.
 
 
 Plus the thing Phases 1 and 2 deferred and must not defer again: **Windows and

@@ -31,28 +31,127 @@ function normalise(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '')
 }
 
-export function matches(game: Game, preset: Preset, query: string): boolean {
+/** Extra text a query may match, beyond the title.
+ *
+ *  Searching "roguelike" or "larian" is a natural thing to try and previously
+ *  found nothing. Genres and studios come from metadata, so this only works for
+ *  games whose metadata has arrived — which is why it supplements the title
+ *  match rather than replacing it. */
+export interface Searchable {
+  genres?: string[]
+  developers?: string[]
+  publishers?: string[]
+}
+
+export function matches(
+  game: Game,
+  preset: Preset,
+  query: string,
+  extra?: Searchable,
+): boolean {
   switch (preset) {
     case 'favourites': if (!game.favourite) return false; break
     case 'installed': if (!game.installed) return false; break
     case 'unplayed': if (game.playtimeMinutes > 0 || game.lastPlayed) return false; break
     case 'all': break
   }
-  if (!query.trim()) return true
-  return normalise(game.title).includes(normalise(query))
+  const q = normalise(query)
+  if (!q) return true
+  if (normalise(game.title).includes(q)) return true
+  // Genre and studio, when metadata has arrived for this game.
+  const others = [
+    ...(extra?.genres ?? []),
+    ...(extra?.developers ?? []),
+    ...(extra?.publishers ?? []),
+  ]
+  return others.some((t) => normalise(t).includes(q))
 }
 
-export function apply(games: Game[], preset: Preset, query: string): number[] {
+/**
+ * Sort orders.
+ *
+ * `recent` is the default and is deliberately not alphabetical: titles arrive
+ * progressively from the metadata worker on a first run, so an alphabetical
+ * library would reshuffle itself under the cursor for minutes. See the note on
+ * `sortKey` for how `name` copes with that.
+ */
+export type Sort = 'recent' | 'played' | 'name' | 'size'
+
+export const SORTS: Array<{ id: Sort; label: string }> = [
+  { id: 'recent', label: 'Recently played' },
+  { id: 'played', label: 'Most played' },
+  { id: 'name', label: 'Name' },
+  { id: 'size', label: 'Size' },
+]
+
+/** Sort "The Witcher 3" under W. Lowercase, so case never splits the list. */
+export function sortKey(title: string): string {
+  const t = title.trim()
+  for (const article of ['The ', 'A ', 'An ']) {
+    if (t.startsWith(article)) return t.slice(article.length).toLowerCase()
+  }
+  return t.toLowerCase()
+}
+
+export function compare(a: Game, b: Game, sort: Sort): number {
+  // Favourites first in every order. Someone who marked a game wants it near
+  // the front whichever way the library is arranged.
+  if (a.favourite !== b.favourite) return a.favourite ? -1 : 1
+
+  switch (sort) {
+    case 'played':
+      if (a.playtimeMinutes !== b.playtimeMinutes) return b.playtimeMinutes - a.playtimeMinutes
+      break
+    case 'name': {
+      // A game whose name has not arrived sorts last rather than under the
+      // empty string, where it would sit above everything and jump when the
+      // name lands.
+      const an = a.title ? sortKey(a.title) : '\uffff'
+      const bn = b.title ? sortKey(b.title) : '\uffff'
+      if (an !== bn) return an < bn ? -1 : 1
+      break
+    }
+    case 'size':
+      if (a.sizeBytes !== b.sizeBytes) return b.sizeBytes - a.sizeBytes
+      break
+    case 'recent':
+      if ((a.lastPlayed ?? 0) !== (b.lastPlayed ?? 0)) return (b.lastPlayed ?? 0) - (a.lastPlayed ?? 0)
+      if (a.playtimeMinutes !== b.playtimeMinutes) return b.playtimeMinutes - a.playtimeMinutes
+      break
+  }
+  // Every order ends the same way, so it is total: two games that tie on the
+  // chosen key must not swap places between renders.
+  if (a.installed !== b.installed) return a.installed ? -1 : 1
+  return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+}
+
+export function apply(
+  games: Game[],
+  preset: Preset,
+  query: string,
+  sort: Sort = 'recent',
+  extra?: (game: Game) => Searchable | undefined,
+): number[] {
   const out: number[] = []
   for (let i = 0; i < games.length; i++) {
-    if (matches(games[i]!, preset, query)) out.push(i)
+    if (matches(games[i]!, preset, query, extra?.(games[i]!))) out.push(i)
   }
+  // Indices, sorted by the games behind them, so the caller keeps a stable
+  // mapping back into the library.
+  out.sort((x, y) => compare(games[x]!, games[y]!, sort))
   return out
 }
 
-export function describe(preset: Preset, query: string, shown: number, total: number): string {
+export function describe(
+  preset: Preset,
+  query: string,
+  shown: number,
+  total: number,
+  sort: Sort = 'recent',
+): string {
   const label = PRESETS.find((p) => p.id === preset)?.label ?? 'All'
-  if (query.trim()) return `“${query.trim()}” · ${shown} of ${total}`
-  if (preset === 'all') return `${total} ${total === 1 ? 'game' : 'games'}`
-  return `${label} · ${shown}`
+  const order = sort === 'recent' ? '' : ` · ${SORTS.find((s) => s.id === sort)?.label}`
+  if (query.trim()) return `“${query.trim()}” · ${shown} of ${total}${order}`
+  if (preset === 'all') return `${total} ${total === 1 ? 'game' : 'games'}${order}`
+  return `${label} · ${shown}${order}`
 }

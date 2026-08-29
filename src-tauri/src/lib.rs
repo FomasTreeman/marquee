@@ -22,7 +22,7 @@ mod vdf;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// Process start, used as the epoch for input timestamps. The frontend pairs
 /// it with `clock_sync` to measure input delivery latency against the budget
@@ -59,13 +59,26 @@ struct Library(Mutex<Vec<library::Game>>);
 /// "handing off to Steam" rather than a generic spinner -- and so the log
 /// records the exact URI or executable.
 #[tauri::command]
-fn launch_game(id: String, library: tauri::State<'_, Library>) -> Result<String, String> {
+fn launch_game(
+    app: tauri::AppHandle,
+    id: String,
+    library: tauri::State<'_, Library>,
+) -> Result<String, String> {
     let game = {
         let games = library.0.lock().map_err(|_| "library state is poisoned")?;
         games.iter().find(|g| g.id == id).cloned()
     };
     let game = game.ok_or_else(|| format!("no game with id {id}"))?;
-    match run::start(&game) {
+    // A game that dies on startup is reported after the fact, because spawn()
+    // succeeding says nothing about whether the thing actually ran.
+    let title = game.title.clone();
+    let notify = move |detail: String| {
+        let _ = app.emit(
+            "launch-failed",
+            serde_json::json!({ "title": title, "detail": detail }),
+        );
+    };
+    match run::start(&game, notify) {
         Ok(run::Launch::Uri(uri)) => Ok(uri),
         Ok(run::Launch::Process { program, .. }) => Ok(program.display().to_string()),
         Err(e) => {
@@ -174,6 +187,23 @@ fn toggle_fullscreen(
     Ok(next)
 }
 
+/// Store a single setting. Preferences the interface owns, like sort order.
+#[tauri::command]
+fn set_setting(
+    key: String,
+    value: String,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<(), String> {
+    // Allowlisted rather than open: a command that writes an arbitrary key is a
+    // command the interface can use to store anything anywhere, and the key
+    // space is small enough to name.
+    const ALLOWED: &[&str] = &["sort", "fullscreen"];
+    if !ALLOWED.contains(&key.as_str()) {
+        return Err(format!("not a settable preference: {key}"));
+    }
+    store.set_setting(&key, &value)
+}
+
 #[tauri::command]
 fn set_custom_title(
     game_id: String,
@@ -190,6 +220,7 @@ fn get_settings(
 ) -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
         "steamgriddbKey": store.setting(sgdb::SETTING_KEY)?.unwrap_or_default(),
+        "sort": store.setting("sort")?.unwrap_or_default(),
     }))
 }
 
@@ -428,6 +459,7 @@ pub fn run() {
             locate::find_executable,
             get_settings,
             set_steamgriddb_key,
+            set_setting,
             art::artwork_report,
             search_artwork
         ])
