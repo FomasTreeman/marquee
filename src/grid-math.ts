@@ -115,11 +115,30 @@ export function scrollToShow(
   m: Metrics,
   viewportHeight: number,
   gapY: number,
+  /**
+   * How far a card's shadow reaches past its own box.
+   *
+   * Cards cast a shadow below themselves, so scrolling to leave a full `gapY`
+   * above a row leaves the *previous* row's shadow in view against the top
+   * edge — a smudge, and a sliver of card under it.
+   *
+   * The geometry does not allow both: the previous row's shadow ends `gapY -
+   * shadow` above the focused row, so any clearance larger than that shows it.
+   * Scrolling exactly that far puts the shadow's last pixel on the top edge.
+   *
+   * A small gap inside the grid is not a cramped one — the hero sits directly
+   * above with its own padding, so what the eye reads is the sum of the two.
+   */
+  shadowReach = 0,
 ): number {
   const row = Math.floor(index / m.cols)
   const top = gapY + row * m.rowH
   const bottom = top + m.cardH
-  if (top - gapY < scrollY) return Math.max(0, top - gapY)
+  // The first row has nothing above it to clip, so it keeps its full gap.
+  // Charging it the shadow clearance would scroll that gap away and press the
+  // top row against the hero.
+  const above = row === 0 ? gapY : Math.max(0, gapY - shadowReach)
+  if (top - above < scrollY) return Math.max(0, top - above)
   if (bottom + gapY > scrollY + viewportHeight) return Math.max(0, bottom + gapY - viewportHeight)
   return scrollY
 }

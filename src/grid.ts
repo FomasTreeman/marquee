@@ -36,6 +36,15 @@ interface Slot {
   art: HTMLElement
   fallback: HTMLElement
   img: HTMLImageElement
+  /** Bumped on every reassignment.
+   *
+   *  A slot recycled while scrolling keeps showing its previous cover until
+   *  the new one decodes -- which is why fast scrolling appeared to show
+   *  duplicates: the same artwork on two cards, one of them stale. The image
+   *  is hidden on assignment and revealed on load, and this guards against a
+   *  slow load for an assignment that has since been superseded revealing the
+   *  wrong game's art. */
+  generation: number
   /** Which item this pooled node currently shows, or -1 when parked. */
   index: number
   /** Last values written to the DOM. Every write is compared against these
@@ -106,6 +115,8 @@ export function createGrid(
   let gap = 20
   /** Horizontal gutter. Wider than the vertical one -- see design/tokens.json. */
   let gapX = 30
+  /** How far a card's shadow reaches below it, so scrolling can clear it. */
+  let shadowReach = 34
   let focused = 0
   let scheduled = false
   /* Our own copies of the two scroll-related layout values.
@@ -138,6 +149,7 @@ export function createGrid(
     const scale = px('--s', 1) || 1
     gap = px('--gap', 20) * scale
     gapX = px('--gap-x', 30) * scale
+    shadowReach = px('--card-shadow-reach', 34) * scale
 
     viewH = viewport.clientHeight
     m = metrics({
@@ -190,7 +202,10 @@ export function createGrid(
     // image bug three times.
     el.style.visibility = 'hidden'
     canvas.appendChild(el)
-    return { el, art, fallback, img, index: -1, transform: '', focus: false, visible: false }
+    return {
+      el, art, fallback, img,
+      index: -1, transform: '', focus: false, visible: false, generation: 0,
+    }
   }
 
   /** Size the pool to cover the viewport plus overscan, once, on resize. */
@@ -229,10 +244,24 @@ export function createGrid(
     if (s.index !== index) {
       s.el.style.setProperty('--card-tint', item.tint)
       s.fallback.textContent = item.title
+      const generation = ++s.generation
       if (item.art) {
         if (s.img.getAttribute('src') !== item.art) {
-          s.img.style.display = ''
+          // Hidden until the new artwork has actually decoded. Without this the
+          // previous game's cover stays on screen underneath the new game's
+          // title, which reads as the grid showing duplicates.
+          s.img.style.display = 'none'
           s.img.src = item.art
+          const reveal = () => {
+            if (s.generation !== generation) return
+            s.img.style.display = ''
+          }
+          // decode() resolves once the image is ready to paint, so revealing it
+          // cannot land on a half-decoded frame. It rejects on a 404 or when
+          // superseded, and both mean "leave the fallback showing".
+          s.img.decode().then(reveal).catch(() => {})
+        } else {
+          s.img.style.display = ''
         }
       } else {
         s.img.removeAttribute('src')
@@ -304,7 +333,7 @@ export function createGrid(
    * Writes only, never reads back, so it cannot force a layout.
    */
   function scrollIntoView(): void {
-    const next = scrollToShow(focused, scrollTarget, m, viewH, gap)
+    const next = scrollToShow(focused, scrollTarget, m, viewH, gap, shadowReach)
     if (next === scrollTarget) return
 
     const duration = scrollDuration()

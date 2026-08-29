@@ -259,3 +259,57 @@ describe('scroll glide', () => {
     expect(easeOut(1)).toBe(1)
   })
 })
+
+describe('top-edge clearance', () => {
+  const m = at()
+
+  /**
+   * Cards cast a shadow below themselves, so leaving exactly one gap above a
+   * row lets the *previous* row's shadow sit in view against the top of the
+   * grid — a sliver of card and a smudge under it.
+   */
+  it('clears the shadow of the row above, not just the gap', () => {
+    const shadow = 14
+    const target = m.cols * 3
+    const y = scrollToShow(target, 99999, m, base.viewportHeight, base.gapY, shadow)
+
+    // Nothing of the previous row, shadow included, may remain below the top.
+    const previousShadowBottom = base.gapY + 2 * m.rowH + m.cardH + shadow
+    expect(previousShadowBottom).toBeLessThanOrEqual(y + 0.001)
+
+    // And the focused row must still be fully visible.
+    const top = base.gapY + 3 * m.rowH
+    expect(top).toBeGreaterThanOrEqual(y)
+    expect(top + m.cardH).toBeLessThanOrEqual(y + base.viewportHeight)
+  })
+
+  it('leaves a full gap above when there is no shadow to clear', () => {
+    const target = m.cols * 3
+    const y = scrollToShow(target, 99999, m, base.viewportHeight, base.gapY, 0)
+    const top = base.gapY + 3 * m.rowH
+    expect(top - y).toBeCloseTo(base.gapY, 5)
+  })
+
+  /** A shadow larger than the gap cannot be cleared *and* leave room; the card
+   *  goes flush to the edge rather than the row above bleeding through. */
+  it('goes flush rather than showing the row above', () => {
+    const y = scrollToShow(m.cols * 3, 99999, m, base.viewportHeight, base.gapY, 999)
+    expect(base.gapY + 3 * m.rowH - y).toBe(0)
+  })
+
+  /** The first row has nothing above it to clip, so it keeps its full gap
+   *  rather than being pressed against the hero. */
+  it('gives the first row its full gap regardless of the shadow', () => {
+    expect(scrollToShow(0, 99999, m, base.viewportHeight, base.gapY, 200)).toBe(0)
+    expect(scrollToShow(0, 99999, m, base.viewportHeight, base.gapY, 0)).toBe(0)
+  })
+
+  /** Scrolling *down* is unaffected: a shadow below the last visible row falls
+   *  outside the viewport anyway. */
+  it('does not change the downward case', () => {
+    const rows = Math.floor(base.viewportHeight / m.rowH)
+    const target = m.cols * (rows + 2)
+    expect(scrollToShow(target, 0, m, base.viewportHeight, base.gapY, 34))
+      .toBe(scrollToShow(target, 0, m, base.viewportHeight, base.gapY, 0))
+  })
+})

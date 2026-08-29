@@ -85,7 +85,11 @@ body::after {
   overflow: hidden;
   contain: paint;
   background: var(--card-tint, #14161c);
-  box-shadow: 0 10px 24px rgb(0 0 0 / 0.55);
+  /* Scaled like everything else. An unscaled shadow is proportionally huge on
+     a small window and invisible on a large one -- and its reach has to stay in
+     step with --card-shadow-reach, which the grid uses to decide how far to
+     scroll so the row above is fully clipped. */
+  box-shadow: 0 calc(5px * var(--s)) calc(14px * var(--s)) rgb(0 0 0 / 0.5);
   /* Transform only. The card's *position* is a transform set by the grid, and
      this is a separate element, so the two never fight. Scaling here reflows
      nothing: the grid's arithmetic works on the unscaled box. */
