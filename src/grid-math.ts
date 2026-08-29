@@ -116,31 +116,44 @@ export function scrollToShow(
   viewportHeight: number,
   gapY: number,
   /**
-   * How far a card's shadow reaches past its own box.
+   * Minimum space to leave above the focused row.
    *
-   * Cards cast a shadow below themselves, so scrolling to leave a full `gapY`
-   * above a row leaves the *previous* row's shadow in view against the top
-   * edge — a smudge, and a sliver of card under it.
+   * More than the gap, because the focused card is *bigger than its box*: it
+   * scales up and draws a ring outside its own edges, and both are clipped
+   * against the top of the grid if the scroll leaves only a gap. That was
+   * visible as the focused card growing into a cut-off border.
    *
-   * The geometry does not allow both: the previous row's shadow ends `gapY -
-   * shadow` above the focused row, so any clearance larger than that shows it.
-   * Scrolling exactly that far puts the shadow's last pixel on the top edge.
-   *
-   * A small gap inside the grid is not a cramped one — the hero sits directly
-   * above with its own padding, so what the eye reads is the sum of the two.
+   * It also has to cover the fade at the top edge, or the focused card sits
+   * half-dimmed. Callers compute it from those two; see `topClearance`.
    */
-  shadowReach = 0,
+  minTopClearance = 0,
 ): number {
   const row = Math.floor(index / m.cols)
   const top = gapY + row * m.rowH
   const bottom = top + m.cardH
-  // The first row has nothing above it to clip, so it keeps its full gap.
-  // Charging it the shadow clearance would scroll that gap away and press the
-  // top row against the hero.
-  const above = row === 0 ? gapY : Math.max(0, gapY - shadowReach)
+  // The first row has nothing above it and cannot be scrolled off anyway.
+  const above = row === 0 ? gapY : Math.max(gapY, minTopClearance)
   if (top - above < scrollY) return Math.max(0, top - above)
   if (bottom + gapY > scrollY + viewportHeight) return Math.max(0, bottom + gapY - viewportHeight)
   return scrollY
+}
+
+/**
+ * How much room the focused row needs above it.
+ *
+ * The focused card is larger than the box the grid lays out: it scales about
+ * its centre, so it grows by half the extra height upwards, and its ring sits
+ * outside that again. Add the fade at the top edge, which would otherwise dim
+ * the card it is meant to be drawing attention to.
+ */
+export function topClearance(
+  cardHeight: number,
+  focusScale: number,
+  ringOffset: number,
+  fadeHeight: number,
+): number {
+  const grown = (cardHeight * Math.max(1, focusScale) - cardHeight) / 2
+  return grown + ringOffset + fadeHeight
 }
 
 /**

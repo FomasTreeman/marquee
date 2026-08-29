@@ -1,7 +1,7 @@
 import { logWarn } from './log'
 import {
-  firstVisibleIndex, glide, metrics, move as moveIndex, poolSize, positionOf, scrollToShow,
-  type Metrics,
+  firstVisibleIndex, glide, metrics, move as moveIndex, poolSize, positionOf,
+  scrollToShow, topClearance, type Metrics,
 } from './grid-math'
 
 /**
@@ -115,8 +115,9 @@ export function createGrid(
   let gap = 20
   /** Horizontal gutter. Wider than the vertical one -- see design/tokens.json. */
   let gapX = 30
-  /** How far a card's shadow reaches below it, so scrolling can clear it. */
-  let shadowReach = 34
+  /** Space the focused row needs above it: it scales, draws a ring outside its
+   *  box, and must clear the fade at the top edge. */
+  let clearance = 40
   let focused = 0
   let scheduled = false
   /* Our own copies of the two scroll-related layout values.
@@ -149,7 +150,12 @@ export function createGrid(
     const scale = px('--s', 1) || 1
     gap = px('--gap', 20) * scale
     gapX = px('--gap-x', 30) * scale
-    shadowReach = px('--card-shadow-reach', 34) * scale
+    clearance = topClearance(
+      m.cardH,
+      px('--focus-scale', 1) || 1,
+      px('--ring-offset', 4) * scale,
+      px('--grid-fade', 28) * scale,
+    )
 
     viewH = viewport.clientHeight
     m = metrics({
@@ -333,7 +339,7 @@ export function createGrid(
    * Writes only, never reads back, so it cannot force a layout.
    */
   function scrollIntoView(): void {
-    const next = scrollToShow(focused, scrollTarget, m, viewH, gap, shadowReach)
+    const next = scrollToShow(focused, scrollTarget, m, viewH, gap, clearance)
     if (next === scrollTarget) return
 
     const duration = scrollDuration()
