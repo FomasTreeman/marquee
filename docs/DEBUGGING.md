@@ -110,6 +110,11 @@ So `src/selfcheck.ts` asserts the invariants that would have failed, and it
 - Toasts do not intercept pointer events.
 - **The grid fills its width.** Dead space at the right edge is invisible to
   every other assertion: each card is painted, aligned and correct.
+- **Nothing animates a layout property.** "We only animate transform and
+  opacity" was a promise nothing checked. Animating `width` is invisible until
+  a television with a slow GPU drops frames on a menu, so every stylesheet rule
+  and keyframe is scanned instead. Verified by adding a transition on `width`
+  and a keyframe on `margin-left` and watching it fail, then pass again.
 
 ### It runs when overlays open, not only at boot
 

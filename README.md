@@ -73,13 +73,17 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
   a custom folder on whichever drive had room gets found, which guessing at
   `Program Files` never would
 
+- Fullscreen (**F11**, remembered across launches), and the screen kept awake
+  while you browse — a controller is not an input device as far as the OS is
+  concerned, so ten minutes of browsing looks like ten minutes of idle
+
 **Not yet**
 
 - **Windows and Linux are entirely unverified.** The code is written for all
   three and CI builds all three, but nothing has been *run* anywhere but macOS,
   and [the plan](docs/PLAN.md) is explicit that a pass on one webview engine is
   not a pass
-- Settings, sort options, categories
+- Sort options and categories
 - Anything about a game that is owned but has never been played or installed
 
 - **[docs/PLAN.md](docs/PLAN.md)** — scope, stack, architecture, phasing, and

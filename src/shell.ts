@@ -13,6 +13,7 @@
  */
 
 export interface Shell {
+  hero: HTMLElement
   presets: HTMLElement
   query: HTMLInputElement
   backdropA: HTMLImageElement
@@ -115,7 +116,7 @@ export function createShell(root: HTMLElement): Shell {
   tick()
   setInterval(tick, 20_000)
 
-  return { presets, query, backdropA, backdropB, heroLogo, heroTitle, heroMeta, gridViewport, count, clock, hints }
+  return { hero, presets, query, backdropA, backdropB, heroLogo, heroTitle, heroMeta, gridViewport, count, clock, hints }
 }
 
 /** The button legend along the bottom. Labels follow the Xbox layout, with

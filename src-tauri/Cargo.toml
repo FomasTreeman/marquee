@@ -47,6 +47,9 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 
 [target.'cfg(windows)'.dependencies]
+# Only for SetThreadExecutionState, to stop the screen blanking while someone
+# is browsing with a controller. See src/screen.rs.
+windows-sys = { version = "0.59", features = ["Win32_System_Power"] }
 # Steam records its own install path in the registry. Reading it beats
 # guessing Program Files, because a lot of people move Steam to another drive.
 winreg = "0.52"

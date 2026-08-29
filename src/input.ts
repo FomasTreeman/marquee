@@ -22,6 +22,7 @@ export type Action =
   | 'perf'
   /** Open the library search field. */
   | 'search'
+  | 'fullscreen'
 
 export interface ActionEvent {
   action: Action
@@ -46,6 +47,7 @@ const KEYMAP: Record<string, Action> = {
   Tab: 'menu', KeyM: 'menu', KeyG: 'mainmenu',
   KeyP: 'perf',
   Slash: 'search', KeyF: 'search',
+  F11: 'fullscreen',
 }
 
 interface RustInputEvent { action: Action; repeat: boolean; t: number }

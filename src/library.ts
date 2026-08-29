@@ -160,6 +160,17 @@ export async function getSettings(): Promise<Settings> {
 
 /** Saving also clears the artwork cache, so games that previously found
  *  nothing are re-resolved against the new source. */
+/** Toggle fullscreen, returning the new state. Remembered across launches. */
+export async function toggleFullscreen(): Promise<boolean> {
+  if (!inApp) {
+    // A browser tab has its own fullscreen and no window to remember.
+    if (document.fullscreenElement) { await document.exitFullscreen(); return false }
+    await document.documentElement.requestFullscreen()
+    return true
+  }
+  return call<boolean>('toggle_fullscreen')
+}
+
 export async function setSteamGridDbKey(key: string): Promise<void> {
   return call<void>('set_steamgriddb_key', { key })
 }

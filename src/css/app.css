@@ -86,6 +86,11 @@ body::after {
   contain: paint;
   background: var(--card-tint, #14161c);
   box-shadow: 0 10px 24px rgb(0 0 0 / 0.55);
+  /* Transform only. The card's *position* is a transform set by the grid, and
+     this is a separate element, so the two never fight. Scaling here reflows
+     nothing: the grid's arithmetic works on the unscaled box. */
+  transition: transform calc(var(--motion) * 170ms) cubic-bezier(0.2, 0.7, 0.3, 1);
+  will-change: transform;
 }
 
 .card-art img {
@@ -129,10 +134,23 @@ body::after {
   border: calc(var(--ring-w) * var(--s)) solid var(--accentLight);
   border-radius: calc((var(--r-card) + var(--ring-offset)) * var(--s));
   opacity: 0;
-  transition: opacity calc(var(--motion) * 120ms) ease-out;
+  /* Same curve and duration as the art, so the ring and the card it surrounds
+     arrive together. A ring that lands before the card looks detached. */
+  transition:
+    opacity calc(var(--motion) * 120ms) ease-out,
+    transform calc(var(--motion) * 170ms) cubic-bezier(0.2, 0.7, 0.3, 1);
   pointer-events: none;
 }
 .card[data-focus="1"] .card-ring { opacity: 1; }
+
+/* The focused card lifts.
+   Both elements take the *same* transform about the same origin, so the ring
+   stays concentric with the art at every point in the animation rather than
+   only at the ends. --focus-scale is a token: set it to 1 to turn this off. */
+.card[data-focus="1"] .card-art,
+.card[data-focus="1"] .card-ring {
+  transform: scale(var(--focus-scale));
+}
 
 /* --- HUD ----------------------------------------------------------
    Phase 0 instrumentation. Every number the spike has to produce is on
@@ -238,6 +256,20 @@ body::after {
   transition: opacity calc(var(--motion) * 420ms) ease-out;
 }
 .backdrop-img.is-visible { opacity: var(--ambient); }
+
+/* --- hero -----------------------------------------------------------
+   The hero's contents change on every selection. Swapping them
+   instantly reads as a flicker at navigation speed, so they settle in.
+   Opacity and transform only; the layout is identical either way. */
+.hero-inner > * {
+  transition:
+    opacity calc(var(--motion) * 200ms) ease-out,
+    transform calc(var(--motion) * 200ms) cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+.hero.is-changing .hero-inner > * {
+  opacity: 0;
+  transform: translateY(calc(6px * var(--s)));
+}
 
 /* Two stops in one direction and one in the other, so the hero text sits on
    near-solid black while the art stays legible in the opposite corner. Pure
@@ -383,6 +415,9 @@ body::after {
   pointer-events: none;
 }
 .toast {
+  /* Arrives from below rather than appearing. Transform and opacity only, so
+     a toast can never cost a layout while a game is launching. */
+  animation: toast-in calc(var(--motion) * 220ms) cubic-bezier(0.2, 0.7, 0.3, 1);
   padding: calc(12px * var(--s)) calc(22px * var(--s));
   border: 1px solid var(--line);
   border-radius: var(--r-pill);
@@ -409,8 +444,15 @@ body::after {
   inset: 0;
   z-index: 4000;
   background: var(--bg0);
+  opacity: 1;
+  transition: opacity calc(var(--motion) * 180ms) ease-out;
 }
 .detail[hidden] { display: none; }
+/* Set for one frame on open, then removed, so the view fades in rather than
+   appearing. Cannot be an @keyframes: the element is display:none until the
+   moment it opens, and an animation on a just-shown element does not always
+   run in WebKit. */
+.detail.is-entering { opacity: 0; }
 
 .detail-bg { position: absolute; inset: 0; overflow: hidden; }
 .detail-bg img {
@@ -520,8 +562,16 @@ body::after {
   place-items: center;
   background: rgb(0 0 0 / 0.86);
   backdrop-filter: blur(calc(var(--backdrop-blur) / 2));
+  opacity: 1;
+  transition: opacity calc(var(--motion) * 160ms) ease-out;
 }
 .add[hidden] { display: none; }
+.add.is-entering { opacity: 0; }
+.add.is-entering .add-panel { transform: scale(0.985); }
+
+.add-panel {
+  transition: transform calc(var(--motion) * 180ms) cubic-bezier(0.2, 0.7, 0.3, 1);
+}
 
 .add-panel {
   width: min(90vw, calc(1020px * var(--s)));
@@ -690,4 +740,10 @@ body::after {
   font-size: calc(14px * var(--s));
   line-height: 1.6;
   color: var(--fg3);
+}
+
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(calc(10px * var(--s))); }
+  to   { opacity: 1; transform: none; }
 }

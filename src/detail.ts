@@ -158,8 +158,17 @@ export function createDetail(hooks: DetailHooks): DetailView {
     get isOpen() { return open },
 
     open(game, meta, art, provenance) {
+      const wasOpen = open
       open = true
       root.hidden = false
+      // Two frames, not one: the first makes the element displayed, and a
+      // transition started in the same frame as `display` changing does not
+      // run in WebKit. Skipped when already open -- reopening to attach the
+      // artwork report must not re-animate.
+      if (!wasOpen) {
+        root.classList.add('is-entering')
+        requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('is-entering')))
+      }
       scroll.scrollTop = 0
 
       if (art.hero) { bgImg.src = art.hero; bgImg.hidden = false } else { bgImg.hidden = true }

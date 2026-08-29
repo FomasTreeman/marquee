@@ -187,6 +187,15 @@ export function runSelfCheck(): Check[] {
     }
   }
 
+  // --- animation stays on the compositor -------------------------------
+  // Priority #1 is performance, and "we only animate transform and opacity" is
+  // a promise nothing checked. Animating a layout property is invisible until
+  // a television with a slow GPU is dropping frames on a menu, so it is
+  // asserted here where it costs nothing to be sure.
+  const offenders = animatedLayoutProperties()
+  out.push(check('nothing animates a layout property', offenders.length === 0,
+    offenders.length ? offenders.slice(0, 3).join('; ') : 'transform and opacity only'))
+
   // --- layout ---------------------------------------------------------
   const de = document.documentElement
   out.push(
@@ -350,6 +359,51 @@ export function runSelfCheck(): Check[] {
   }
 
   return out
+}
+
+/**
+ * Properties that are cheap to animate.
+ *
+ * `transform` and `opacity` are handled by the compositor and never touch
+ * layout or paint. `backdrop-filter` and `filter` do repaint, but there is no
+ * other way to express a couple of things the design needs, so they are
+ * permitted and used sparingly rather than banned.
+ */
+const COMPOSITOR_SAFE = new Set(['transform', 'opacity', 'filter', 'backdrop-filter', 'all', 'none', ''])
+
+/** Every transitioned or keyframed property that is not compositor-safe. */
+function animatedLayoutProperties(): string[] {
+  const bad: string[] = []
+  const note = (where: string, prop: string) => {
+    const clean = prop.trim().toLowerCase()
+    if (clean && !COMPOSITOR_SAFE.has(clean)) bad.push(`${where} animates ${clean}`)
+  }
+
+  const walk = (rules: CSSRuleList, from: string): void => {
+    for (const rule of Array.from(rules)) {
+      if (rule instanceof CSSStyleRule) {
+        const t = rule.style.transitionProperty
+        if (t) for (const p of t.split(',')) note(rule.selectorText, p)
+      } else if (rule instanceof CSSKeyframesRule) {
+        for (const frame of Array.from(rule.cssRules)) {
+          if (!(frame instanceof CSSKeyframeRule)) continue
+          for (const p of Array.from(frame.style)) note(`@keyframes ${rule.name}`, p)
+        }
+      } else if ('cssRules' in rule) {
+        // Media queries and other groupings.
+        walk((rule as CSSGroupingRule).cssRules, from)
+      }
+    }
+  }
+
+  for (const sheet of Array.from(document.styleSheets)) {
+    try {
+      walk(sheet.cssRules, sheet.href ?? 'inline')
+    } catch {
+      // A stylesheet we are not allowed to read is not one we wrote.
+    }
+  }
+  return bad
 }
 
 function ancestorsOf(el: HTMLElement): HTMLElement[] {

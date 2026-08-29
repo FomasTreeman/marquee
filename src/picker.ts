@@ -222,6 +222,10 @@ export function createPicker(): Picker {
       file = null
       open = true
       root.hidden = false
+      // See the note in detail.ts: a transition started in the same frame as
+      // `display` changing does not run in WebKit.
+      root.classList.add('is-entering')
+      requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('is-entering')))
       browseButton.hidden = !next.browse
       browseButton.textContent = next.browse?.label ?? ''
       heading.textContent = next.heading

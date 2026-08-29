@@ -106,6 +106,8 @@ export function createSettings(onChanged: () => void): SettingsView {
     open() {
       open = true
       root.hidden = false
+      root.classList.add('is-entering')
+      requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('is-entering')))
       status.textContent = ''
       field.value = ''
       void getSettings()

@@ -19,7 +19,7 @@ import { toast } from './toast'
 import { hostInfo, pingMs, inApp } from './host'
 import { createInput, padStatus, type Action } from './input'
 import {
-  scanLibrary, requestMeta, onMeta, launchGame, toggleFavourite, getSettings,
+  scanLibrary, requestMeta, onMeta, launchGame, toggleFavourite, getSettings, toggleFullscreen,
   addManualGame, setManualExecutable, setArtSource, artworkReport,
   initArtwork, steamArtwork, artIdFor, tintFor,
   type Artwork, type Game, type Meta, type ScanResult,
@@ -107,6 +107,9 @@ async function main(): Promise<void> {
     ['A', 'Play'], ['Y', 'Details'], ['X', 'Favourite'],
     ['LB/RB', 'Filter'], ['/', 'Search'], ['☰', 'Add a game'], ['⧉', 'Settings'],
   ])
+  // Long-pressing a face button is the console convention for fullscreen, but
+  // it needs a hold timer and a pad to test it on. F11 is the keyboard one and
+  // it works everywhere today.
 
   // Library state. Rebuilt wholesale by reloadLibrary(), so adding a game
   // arrives through exactly the same path as every other one rather than a
@@ -127,9 +130,20 @@ async function main(): Promise<void> {
   const gameAt = (viewIndex: number): Game | undefined => games[view[viewIndex] ?? -1]
   const artAt = (viewIndex: number): Artwork => art[view[viewIndex] ?? -1] ?? {}
 
+  /** Cleared on the next selection, so holding a direction does not leave the
+   *  hero stuck mid-fade. */
+  let heroSettle: number | undefined
+
   function refreshHero(viewIndex: number): void {
     const game = gameAt(viewIndex)
     if (!game) return
+
+    // Out, swap, in. The class is removed on the next frame rather than after
+    // the transition, so navigating quickly re-triggers cleanly instead of
+    // queueing a fade per keypress.
+    shell.hero.classList.add('is-changing')
+    window.clearTimeout(heroSettle)
+    heroSettle = window.setTimeout(() => shell.hero.classList.remove('is-changing'), 60)
     const a = artAt(viewIndex)
     backdrop.show(a.hero)
 
@@ -520,6 +534,10 @@ async function main(): Promise<void> {
 
     if (!e.repeat) {
       if (e.action === 'perf') { hud.toggle(); return }
+      if (e.action === 'fullscreen') {
+        void toggleFullscreen().catch((err) => toast(`Could not switch. ${String(err)}`, 'error'))
+        return
+      }
       if (e.action === 'a') { void play(grid.focused); return }
       if (e.action === 'x') { void favourite(grid.focused); return }
       if (e.action === 'menu') { openAdd(); return }

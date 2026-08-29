@@ -13,6 +13,7 @@ pub mod log;
 mod meta;
 mod paths;
 mod run;
+mod screen;
 mod search;
 mod sgdb;
 mod store;
@@ -154,6 +155,23 @@ async fn search_artwork(
     })
     .await
     .map_err(|e| format!("search task failed: {e}"))?
+}
+
+/// Toggle fullscreen, returning the new state.
+///
+/// Remembered, so the app comes back the way it was left. A launcher used on a
+/// television is fullscreen essentially always, and asking every launch would
+/// be a poor way to treat that.
+#[tauri::command]
+fn toggle_fullscreen(
+    window: tauri::Window,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<bool, String> {
+    let next = !window.is_fullscreen().map_err(|e| e.to_string())?;
+    window.set_fullscreen(next).map_err(|e| e.to_string())?;
+    store.set_setting("fullscreen", if next { "1" } else { "" })?;
+    log_info!("window", "fullscreen {}", if next { "on" } else { "off" });
+    Ok(next)
 }
 
 #[tauri::command]
@@ -356,6 +374,35 @@ pub fn run() {
             // Before anything draws: cached art from an older pipeline would
             // otherwise answer first and no new logic would ever reach it.
             art::migrate_cache();
+            // Come back the way it was left. A launcher on a television is
+            // fullscreen essentially always, and asking every launch would be
+            // a poor way to treat that.
+            if let Some(w) = app.get_webview_window("main") {
+                let store = app.state::<std::sync::Arc<store::Store>>();
+                if store.setting("fullscreen").ok().flatten().is_some() {
+                    let _ = w.set_fullscreen(true);
+                }
+
+                // Hold the display awake only while focused, and only when a
+                // pad is connected: with a keyboard and mouse the OS already
+                // sees activity, and a launcher sitting behind a running game
+                // has no business keeping a screen on.
+                let handle = app.handle().clone();
+                w.on_window_event(move |event| match event {
+                    tauri::WindowEvent::Focused(focused) => {
+                        let pads = handle
+                            .try_state::<std::sync::Arc<input::Status>>()
+                            .map(|s: tauri::State<'_, std::sync::Arc<input::Status>>| {
+                                s.connected.load(std::sync::atomic::Ordering::Relaxed)
+                            })
+                            .unwrap_or(0);
+                        screen::keep_awake(*focused && pads > 0);
+                    }
+                    tauri::WindowEvent::Destroyed => screen::release_on_exit(),
+                    _ => {}
+                });
+            }
+
             log_info!("boot", "window up");
             Ok(())
         })
@@ -375,6 +422,7 @@ pub fn run() {
             set_manual_executable,
             remove_manual_game,
             toggle_favourite,
+            toggle_fullscreen,
             set_art_source,
             set_custom_title,
             locate::find_executable,

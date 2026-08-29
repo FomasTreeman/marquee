@@ -49,7 +49,7 @@
   --motion: 1;
   --ring-w: 4px;
   --ring-offset: 4px;
-  --focus-scale: 1;
+  --focus-scale: 1.055;
 
   /* --- derived ---
      Cover height follows the card width and the box-art ratio, so

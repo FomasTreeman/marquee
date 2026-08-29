@@ -586,7 +586,13 @@ and make the guess good.
 performance budget in §2 with real images. Adding a non-Steam game takes under
 fifteen seconds and lands the right art without typing a full title.
 
-### Phase 3 — Big-screen behaviour  ← **next**
+### Phase 3 — Big-screen behaviour  ← **in progress**
+
+Done: fullscreen and its persistence, keeping the display awake while browsing
+with a pad, an on-screen keyboard. Remaining: first run without a mouse,
+gamepad wake, detecting a game that failed to start, and returning to the
+launcher when one exits.
+
 
 Plus the thing Phases 1 and 2 deferred and must not defer again: **Windows and
 Linux actually being run.** Everything is written for all three and CI compiles
