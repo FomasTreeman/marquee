@@ -14,11 +14,18 @@ fn home() -> PathBuf {
 
 /// Durable application data: the library, user data, settings.
 ///
+/// Redirected under test for the same reason as the log directory: a test run
+/// must never touch a real user's database.
+///
 /// Unused until the SQLite store lands. Defined now so the cache/data split is
 /// established before anything writes user data into the wrong one -- that is
 /// a mistake you cannot take back once people have libraries.
 #[allow(dead_code)]
 pub fn data_dir() -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir().join("marquee-test-data");
+    }
+
     #[cfg(target_os = "macos")]
     return home().join("Library/Application Support/Marquee");
 
@@ -39,6 +46,10 @@ pub fn data_dir() -> PathBuf {
 /// responses and, later, resized artwork. Kept separate from `data_dir` so
 /// "clear the cache" can never touch anything the user authored.
 pub fn cache_dir() -> PathBuf {
+    if cfg!(test) {
+        return std::env::temp_dir().join("marquee-test-cache");
+    }
+
     #[cfg(target_os = "macos")]
     return home().join("Library/Caches/Marquee");
 

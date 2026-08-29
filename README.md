@@ -57,7 +57,9 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
 - Names, descriptions, genres, dates and scores — **no API key anywhere**
 - Launching, by `steam://` for Steam and directly for anything else
 - A detail view, favourites that survive a rescan, filter presets, search
-- **Adding any other game by typing its name**
+- **Adding any other game by typing its name**, with an on-screen keyboard
+  when a pad is connected — the whole premise is a launcher used from a sofa,
+  and until that existed the headline feature needed a desk
 
 **Not yet**
 
@@ -65,7 +67,6 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
   three and CI builds all three, but nothing has been *run* anywhere but macOS,
   and [the plan](docs/PLAN.md) is explicit that a pass on one webview engine is
   not a pass
-- An on-screen keyboard, so search and adding games need a real keyboard
 - Settings, sort options, categories
 - Anything about a game that is owned but has never been played or installed
 

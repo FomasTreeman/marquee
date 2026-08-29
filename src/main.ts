@@ -12,6 +12,7 @@ import { createBackdrop } from './backdrop'
 import { createDetail } from './detail'
 import { createAdd } from './add'
 import { createHud } from './hud'
+import { createOsk } from './osk'
 import { toast } from './toast'
 import { hostInfo, pingMs, inApp } from './host'
 import { createInput, padStatus, type Action } from './input'
@@ -323,10 +324,15 @@ async function main(): Promise<void> {
     applyView()
   }
 
+  const osk = createOsk()
+
   function openSearch(): void {
     shell.query.hidden = false
     shell.query.focus()
     shell.query.select()
+    // Only when there is a pad. On a desk the physical keyboard is faster and
+    // an on-screen one is just a panel covering the results.
+    if (padConnected) osk.attach(shell.query)
   }
 
   shell.query.addEventListener('input', () => {
@@ -335,6 +341,7 @@ async function main(): Promise<void> {
     applyView()
   })
   shell.query.addEventListener('blur', () => {
+    osk.close()
     // An empty search box left on screen is clutter; a populated one is state
     // the user can see, so it stays.
     if (!query.trim()) shell.query.hidden = true
@@ -363,6 +370,10 @@ async function main(): Promise<void> {
     left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1],
   }
   const hud = createHud(grid, createFrameMeter())
+  // Whether to offer the on-screen keyboard at all. Read once at startup; a
+  // pad plugged in later is handled by the status the input layer reports.
+  const pad = await padStatus()
+  const padConnected = pad.connected > 0
 
   await createInput((e) => {
     hud.noteInput(e.latency)
@@ -370,6 +381,9 @@ async function main(): Promise<void> {
     // Overlays take input entirely while open, innermost first. Letting
     // navigation fall through would move the selection behind them, so closing
     // one would land the cursor somewhere the user never put it.
+    //
+    // The keyboard is innermost of all: while it is up, the pad is typing.
+    if (osk.handle(e.action)) return
     if (add.handle(e.action)) return
     if (detail.handle(e.action)) return
 
@@ -377,7 +391,11 @@ async function main(): Promise<void> {
       if (e.action === 'perf') { hud.toggle(); return }
       if (e.action === 'a') { void play(grid.focused); return }
       if (e.action === 'x') { void favourite(grid.focused); return }
-      if (e.action === 'menu' || e.action === 'mainmenu') { add.open(); return }
+      if (e.action === 'menu' || e.action === 'mainmenu') {
+        add.open()
+        if (padConnected) osk.attach(add.field)
+        return
+      }
       if (e.action === 'y') {
         const game = gameAt(grid.focused)
         if (game) detail.open(game, meta.get(game.providerId), artAt(grid.focused))
@@ -398,7 +416,7 @@ async function main(): Promise<void> {
   await hud.attach({
     host: await hostInfo(),
     ipc: await pingMs(),
-    pad: await padStatus(),
+    pad,
     scan,
     total: games.length,
   })

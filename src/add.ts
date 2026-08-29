@@ -18,6 +18,8 @@ const DEBOUNCE_MS = 280
 
 export interface AddView {
   readonly isOpen: boolean
+  /** The real input, so the on-screen keyboard can drive it. */
+  readonly field: HTMLInputElement
   open(): void
   close(): void
   handle(action: string): boolean
@@ -134,6 +136,7 @@ export function createAdd(onAdded: () => void): AddView {
 
   return {
     get isOpen() { return open },
+    get field() { return field },
 
     open() {
       open = true

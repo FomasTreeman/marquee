@@ -558,11 +558,13 @@ fifteen seconds and lands the right art without typing a full title.
 
 ### Phase 3 — Big-screen behaviour  ← **next**
 
-Plus the two things Phases 1 and 2 deferred and should not defer again: an
-**on-screen keyboard**, without which search and adding a game are unreachable
-from a sofa, and **Windows and Linux actually being run**. Everything is
-written for all three and CI compiles all three, but compiling is not running,
-and §3 is explicit that a pass on one engine is not a pass.
+Plus the thing Phases 1 and 2 deferred and must not defer again: **Windows and
+Linux actually being run.** Everything is written for all three and CI compiles
+all three, but compiling is not running, and §3 is explicit that a pass on one
+engine is not a pass.
+
+The on-screen keyboard landed early, at the end of Phase 2, because without it
+the headline feature of §5 needed a desk — which contradicts the premise.
 
 
 The unglamorous list that decides whether it is actually usable on a TV:

@@ -68,6 +68,14 @@ static SINK: OnceLock<Mutex<Sink>> = OnceLock::new();
 /// an AppHandle, so logging works before Tauri has finished starting -- which
 /// is exactly when the interesting failures happen.
 fn log_dir() -> PathBuf {
+    // Tests must not write into the log of a running app. Otherwise `cargo
+    // test` interleaves migration lines into the diagnostic record someone is
+    // reading to debug something else -- which was exactly what happened, four
+    // identical "migrated to schema v1" lines from four in-memory databases.
+    if cfg!(test) {
+        return std::env::temp_dir().join("marquee-test-logs");
+    }
+
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)

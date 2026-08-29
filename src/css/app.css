@@ -630,3 +630,47 @@ body::after {
 }
 .query[hidden] { display: none; }
 .query::placeholder { color: var(--fg3); }
+
+
+/* --- on-screen keyboard --------------------------------------------
+   Sits below whatever field it is driving. Deliberately not a modal:
+   the results it filters must stay visible while you type, or you are
+   typing blind. */
+.osk {
+  position: fixed;
+  left: 50%;
+  bottom: calc(28px * var(--s));
+  z-index: 6000;
+  transform: translateX(-50%);
+  padding: calc(18px * var(--s));
+  border: 1px solid var(--line);
+  border-radius: calc(var(--r-panel) * var(--s));
+  background: rgb(4 5 7 / 0.97);
+}
+.osk[hidden] { display: none; }
+
+.osk-row { display: flex; gap: calc(6px * var(--s)); }
+.osk-row + .osk-row { margin-top: calc(6px * var(--s)); }
+.osk-key {
+  display: grid;
+  place-items: center;
+  width: calc(46px * var(--s));
+  height: calc(46px * var(--s));
+  border: 1px solid transparent;
+  border-radius: calc(var(--r-row) * var(--s));
+  font-size: calc(18px * var(--s));
+  color: var(--fg2);
+}
+.osk-key[data-on="1"] {
+  border-color: var(--accentLight);
+  background: var(--spec);
+  color: var(--fg1);
+}
+.osk-open .add { align-items: start; padding-top: calc(48px * var(--s)); }
+
+.osk-hint {
+  margin-top: calc(14px * var(--s));
+  text-align: center;
+  font-size: calc(13px * var(--s));
+  color: var(--fg3);
+}
