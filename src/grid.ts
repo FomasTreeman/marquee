@@ -1,6 +1,6 @@
 import { logWarn } from './log'
 import {
-  firstVisibleIndex, metrics, move as moveIndex, poolSize, positionOf, scrollToShow,
+  firstVisibleIndex, glide, metrics, move as moveIndex, poolSize, positionOf, scrollToShow,
   type Metrics,
 } from './grid-math'
 
@@ -81,7 +81,7 @@ export interface Grid {
   /** The layout the grid is actually using. Development only — the arithmetic
    *  is testable in isolation, but "what did it compute *here*" is a different
    *  question and was previously only answerable by inference. */
-  debug(): { metrics: Metrics; scrollY: number; viewH: number; gap: number; gapX: number; focused: number; items: number }
+  debug(): { metrics: Metrics; scrollY: number; scrollTarget: number; gliding: boolean; viewH: number; gap: number; gapX: number; focused: number; items: number }
   move(dx: number, dy: number): void
   get focused(): number
   get columns(): number
@@ -116,6 +116,14 @@ export function createGrid(
      which is where we read it. */
   let scrollY = 0
   let viewH = 0
+  /** Where the scroll is heading, which is not where it is during a glide.
+   *  Successive moves must accumulate from the destination, or holding a
+   *  direction under-scrolls by however far the last glide had left to go. */
+  let scrollTarget = 0
+  let glideFrom = 0
+  let glideStart = 0
+  let glideMs = 190
+  let gliding = false
 
   function readMetrics(): void {
     const cs = getComputedStyle(document.documentElement)
@@ -286,19 +294,72 @@ export function createGrid(
     render()
   }
 
-  /** Keeps the focused card on screen. Writes only — never reads back — so
-   *  it cannot force a layout. */
+  /**
+   * Bring the focused card into view, gliding rather than jumping.
+   *
+   * Computed from where the scroll is *heading*, not where it currently is:
+   * during a glide those differ, and using the current position would leave a
+   * held direction permanently a fraction of a row behind.
+   *
+   * Writes only, never reads back, so it cannot force a layout.
+   */
   function scrollIntoView(): void {
-    const next = scrollToShow(focused, scrollY, m, viewH, gap)
-    if (next !== scrollY) {
+    const next = scrollToShow(focused, scrollTarget, m, viewH, gap)
+    if (next === scrollTarget) return
+
+    const duration = scrollDuration()
+    if (duration <= 0) {
+      scrollTarget = next
       scrollY = next
       viewport.scrollTop = next
+      return
     }
+
+    // Retarget from wherever the current glide has reached rather than
+    // restarting from a standstill.
+    glideFrom = scrollY
+    glideStart = performance.now()
+    glideMs = duration
+    scrollTarget = next
+    if (!gliding) {
+      gliding = true
+      requestAnimationFrame(stepGlide)
+    }
+  }
+
+  /** Zero when the platform or the design asks for no motion, in which case the
+   *  scroll is instant -- which is the correct reduced-motion behaviour, not a
+   *  degraded one. */
+  function scrollDuration(): number {
+    const cs = getComputedStyle(document.documentElement)
+    const motion = parseFloat(cs.getPropertyValue('--motion'))
+    const base = parseFloat(cs.getPropertyValue('--scroll-ms'))
+    return (Number.isFinite(motion) ? motion : 1) * (Number.isFinite(base) ? base : 190)
+  }
+
+  function stepGlide(now: number): void {
+    // Duration is read when the glide starts, not per frame: getComputedStyle
+    // forces a style resolution, and doing that every frame of an animation is
+    // the exact cost this whole component is arranged to avoid.
+    const value = glide(glideFrom, scrollTarget, now - glideStart, glideMs)
+    scrollY = value
+    viewport.scrollTop = value
+    if (value === scrollTarget) {
+      gliding = false
+      return
+    }
+    requestAnimationFrame(stepGlide)
   }
 
   const ro = new ResizeObserver(() => layout())
   ro.observe(viewport)
-  const onScroll = () => { scrollY = viewport.scrollTop; schedule() }
+  const onScroll = () => {
+    scrollY = viewport.scrollTop
+    // A wheel or trackpad scroll overrides a glide: the user's hand beats an
+    // animation that was already in flight.
+    if (!gliding) scrollTarget = scrollY
+    schedule()
+  }
   viewport.addEventListener('scroll', onScroll, { passive: true })
 
   function setFocus(next: number): void {
@@ -343,7 +404,7 @@ export function createGrid(
     get focused() { return focused },
     get columns() { return m.cols },
     debug() {
-      return { metrics: m, scrollY, viewH, gap, gapX, focused, items: items.length }
+      return { metrics: m, scrollY, scrollTarget, gliding, viewH, gap, gapX, focused, items: items.length }
     },
     destroy() { ro.disconnect(); viewport.removeEventListener('scroll', onScroll); canvas.remove() },
   }

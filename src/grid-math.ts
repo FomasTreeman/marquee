@@ -145,3 +145,32 @@ export function poolSize(m: Metrics, viewportHeight: number, overscanRows: numbe
   const rows = Math.ceil(viewportHeight / m.rowH) + overscanRows * 2
   return rows * m.cols
 }
+
+/**
+ * Ease-out for the scroll glide.
+ *
+ * Out, not in-out: the movement should start at full speed and settle, because
+ * a press is an instruction and easing *into* it reads as lag. The same reason
+ * every console list moves this way.
+ */
+export function easeOut(t: number): number {
+  const c = Math.min(1, Math.max(0, t))
+  return 1 - Math.pow(1 - c, 3)
+}
+
+/**
+ * Where a scroll glide should be right now.
+ *
+ * Retargeting rather than restarting is the important part. Holding a direction
+ * repeats every 95 ms while the glide lasts ~200 ms, so a glide that restarted
+ * from a standstill on every repeat would stutter at exactly the moment
+ * smoothness matters most. Continuing from wherever the last one had reached
+ * turns a held direction into one continuous movement.
+ */
+export function glide(from: number, to: number, elapsed: number, duration: number): number {
+  if (duration <= 0) return to
+  const value = from + (to - from) * easeOut(elapsed / duration)
+  // Snap the last fraction of a pixel: an animation that never quite arrives
+  // keeps scheduling frames forever.
+  return Math.abs(to - value) < 0.5 ? to : value
+}

@@ -130,6 +130,10 @@ with two games installed. `?hud=0` hides the HUD, and **P** toggles it.
 | **F11** | Fullscreen |
 | **P** | Toggle the performance HUD |
 
+Motion is tunable in `design/tokens.json`: `--scroll-ms` for the grid glide,
+`--motion` as a global multiplier. Both go to zero under
+`prefers-reduced-motion`, which makes everything instant rather than degraded.
+
 `pnpm app` puts a HUD in the bottom right with frame rate, input latency, IPC
 round trip and the webview that drew it. It is there because priority #1 is
 performance and [a budget nobody can see is a budget nobody keeps](docs/PLAN.md).

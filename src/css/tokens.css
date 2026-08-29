@@ -47,6 +47,7 @@
   --ambient: 0.85;
   --backdrop-blur: 30px;
   --motion: 1;
+  --scroll-ms: 190;
   --ring-w: 4px;
   --ring-offset: 4px;
   --focus-scale: 1.055;

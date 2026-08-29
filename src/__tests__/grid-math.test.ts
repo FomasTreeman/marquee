@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  MAX_GROWTH, firstVisibleIndex, metrics, move, poolSize, positionOf, scrollToShow,
-  type MetricsInput,
+  MAX_GROWTH, easeOut, firstVisibleIndex, glide, metrics, move, poolSize,
+  positionOf, scrollToShow, type MetricsInput,
 } from '../grid-math'
 
 const base: MetricsInput = {
@@ -200,5 +200,62 @@ describe('virtualisation', () => {
       const lastVisible = lastVisibleRow * m.cols + (m.cols - 1)
       expect(start + size - 1, `scrollY=${y}`).toBeGreaterThanOrEqual(lastVisible)
     }
+  })
+})
+
+describe('scroll glide', () => {
+  it('starts where it started and ends where it was sent', () => {
+    expect(glide(0, 300, 0, 200)).toBe(0)
+    expect(glide(0, 300, 200, 200)).toBe(300)
+    expect(glide(0, 300, 999, 200)).toBe(300)
+  })
+
+  /** Ease-out, not ease-in-out: a press is an instruction, and easing into it
+   *  reads as lag. So most of the distance is covered early. */
+  it('moves fastest at the start', () => {
+    const firstHalf = glide(0, 100, 100, 200) - glide(0, 100, 0, 200)
+    const secondHalf = glide(0, 100, 200, 200) - glide(0, 100, 100, 200)
+    expect(firstHalf).toBeGreaterThan(secondHalf)
+    expect(glide(0, 100, 100, 200)).toBeGreaterThan(50)
+  })
+
+  it('never overshoots or reverses', () => {
+    let previous = -1
+    for (let t = 0; t <= 220; t += 5) {
+      const v = glide(0, 400, t, 200)
+      expect(v).toBeGreaterThanOrEqual(previous)
+      expect(v).toBeLessThanOrEqual(400)
+      previous = v
+    }
+  })
+
+  it('works downwards as well as upwards', () => {
+    expect(glide(400, 0, 0, 200)).toBe(400)
+    expect(glide(400, 0, 200, 200)).toBe(0)
+    expect(glide(400, 0, 100, 200)).toBeLessThan(200)
+  })
+
+  /** An animation that never quite arrives keeps scheduling frames forever. */
+  it('snaps the last fraction of a pixel so it can finish', () => {
+    expect(glide(0, 300, 199.9, 200)).toBe(300)
+    expect(glide(100, 100.4, 0, 200)).toBe(100.4)
+  })
+
+  /** Zero duration is the reduced-motion path, and must be instant rather than
+   *  dividing by zero. */
+  it('is instant at zero duration', () => {
+    expect(glide(0, 300, 0, 0)).toBe(300)
+    expect(glide(0, 300, 50, -1)).toBe(300)
+  })
+
+  it('eases within bounds for any input', () => {
+    for (const t of [-1, 0, 0.5, 1, 2, NaN]) {
+      const v = easeOut(t)
+      if (Number.isNaN(t)) continue
+      expect(v).toBeGreaterThanOrEqual(0)
+      expect(v).toBeLessThanOrEqual(1)
+    }
+    expect(easeOut(0)).toBe(0)
+    expect(easeOut(1)).toBe(1)
   })
 })
