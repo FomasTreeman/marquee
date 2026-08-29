@@ -1,0 +1,81 @@
+# CI on all three platforms.
+#
+# docs/PLAN.md §3 names three webview engines as the defining risk of the
+# stack, and the mitigation is that divergence is found in week one rather than
+# month four. That only works if every commit is built everywhere, so this runs
+# on all three from the start rather than "before release".
+#
+# The repository is private and there is no release pipeline yet; this exists to
+# catch the compile-time half of that risk now. The runtime half needs the
+# screenshot diff in §3, which is not built yet.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # WebKitGTK and its build dependencies. Nothing else in the matrix needs
+      # anything: WebView2 ships with Windows, WKWebView with macOS.
+      - name: Linux dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libudev-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Design tokens are in step with their source
+        shell: bash
+        run: |
+          python3 tools/build-tokens.py
+          git diff --exit-code src/css/tokens.css \
+            || { echo "::error::tokens.css is stale. Run: pnpm tokens"; exit 1; }
+
+      - run: pnpm exec tsc --noEmit
+
+      - run: pnpm exec vite build
+
+      # Warnings are errors here but not locally: a warning that blocks the
+      # inner loop gets silenced, and a warning nothing checks accumulates.
+      - name: Rust
+        working-directory: src-tauri
+        env:
+          RUSTFLAGS: -D warnings
+        run: |
+          cargo fmt --check
+          cargo clippy --all-targets -- -D warnings
+          cargo test

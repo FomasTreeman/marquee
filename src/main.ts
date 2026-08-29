@@ -17,7 +17,7 @@ import { hostInfo, pingMs, inApp } from './host'
 import { createInput, padStatus, type Action } from './input'
 import {
   scanLibrary, requestMeta, onMeta, launchGame, toggleFavourite,
-  steamArtwork, tintFor,
+  initArtwork, steamArtwork, tintFor,
   type Artwork, type Game, type Meta, type ScanResult,
 } from './library'
 import { installErrorHandlers, logInfo, logWarn, logError, renderFatal, logPath } from './log'
@@ -91,6 +91,11 @@ function emptyMessage(scan: ScanResult): [string, string] {
 async function main(): Promise<void> {
   const started = performance.now()
   installGrainTile()
+
+  // Before anything asks for an artwork URL: the answer differs between the
+  // app and a browser tab, and getting it late would mean two kinds of URL in
+  // one library.
+  await initArtwork()
 
   const shell = createShell(document.getElementById('app')!)
   const backdrop = createBackdrop(shell.backdropA, shell.backdropB)

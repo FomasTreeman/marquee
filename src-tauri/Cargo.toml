@@ -37,6 +37,10 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # platforms. docs/PLAN.md §8: user data must survive, so it gets a real
 # database with real migrations rather than a JSON file.
 
+# Artwork resizing on ingest. Only the codecs we actually fetch, so the build
+# does not carry decoders for formats Steam never serves.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 
 [target.'cfg(windows)'.dependencies]

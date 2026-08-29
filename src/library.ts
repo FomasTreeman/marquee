@@ -132,14 +132,15 @@ export async function scanLibrary(): Promise<ScanResult> {
 }
 
 /**
- * Steam's public artwork CDN.
+ * Artwork.
  *
- * No key, no auth — see docs/PLAN.md §6. `logo.png` is the transparent
- * wordmark the whole design is built around.
+ * In the app these are `art://` URLs served from our own cache: fetched once,
+ * resized on ingest, and thereafter available with no network at all. See
+ * src-tauri/src/art.rs.
  *
- * These point straight at the CDN for now. The on-disk cache with ingest
- * resizing that §4 requires comes next; going direct first gets real art on
- * screen and proves the URLs, which is the part that could have been wrong.
+ * In a browser tab there is no protocol handler, so they fall back to Steam's
+ * CDN directly. Same three assets either way — cover, wide key art, and the
+ * transparent wordmark the whole design is built around.
  */
 const CDN = 'https://cdn.cloudflare.steamstatic.com/steam/apps'
 
@@ -149,7 +150,28 @@ export interface Artwork {
   logo?: string
 }
 
+/** Set once at startup; empty means "no backend, go straight to the CDN". */
+let artBase = ''
+
+export async function initArtwork(): Promise<void> {
+  if (!inApp) return
+  try {
+    artBase = await call<string>('art_url_base')
+  } catch {
+    // A missing protocol handler is survivable: the CDN still works, it just
+    // costs the network every launch.
+    artBase = ''
+  }
+}
+
 export function steamArtwork(appid: string): Artwork {
+  if (artBase) {
+    return {
+      cover: `${artBase}${appid}/cover`,
+      hero: `${artBase}${appid}/hero`,
+      logo: `${artBase}${appid}/logo`,
+    }
+  }
   return {
     cover: `${CDN}/${appid}/library_600x900.jpg`,
     hero: `${CDN}/${appid}/library_hero.jpg`,

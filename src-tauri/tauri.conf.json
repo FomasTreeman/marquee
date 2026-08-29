@@ -24,7 +24,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' asset: http://asset.localhost data: https://*.steamstatic.com; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost https://store.steampowered.com https://steamcommunity.com https://*.steamstatic.com"
+      "csp": "default-src 'self'; img-src 'self' art: http://art.localhost data: https://*.steamstatic.com; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost https://store.steampowered.com https://steamcommunity.com https://*.steamstatic.com"
     }
   },
   "bundle": {

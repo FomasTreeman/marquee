@@ -4,6 +4,7 @@
 //! metadata, the artwork cache, gamepad input, and launching games. The
 //! webview owns the interface and nothing else.
 
+mod art;
 mod diag;
 mod input;
 mod library;
@@ -27,6 +28,20 @@ static START: OnceLock<Instant> = OnceLock::new();
 
 fn start() -> Instant {
     *START.get_or_init(Instant::now)
+}
+
+/// Where the interface should point an `<img>` for cached artwork.
+///
+/// Tauri exposes custom schemes differently per platform -- `art://` on macOS
+/// and Linux, `http://art.localhost/` on Windows -- and the frontend should
+/// not have to know that. It asks once.
+#[tauri::command]
+fn art_url_base() -> String {
+    if cfg!(target_os = "windows") {
+        "http://art.localhost/".into()
+    } else {
+        "art://localhost/".into()
+    }
 }
 
 /// The last scan, kept so a launch can resolve a game by id without the
@@ -188,6 +203,43 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Artwork is served from our own cache rather than the network, so the
+        // library renders offline and each asset is fetched exactly once ever.
+        // Asynchronous because the first request for an asset goes out to the
+        // CDN, and a blocking handler would stall the webview.
+        .register_asynchronous_uri_scheme_protocol("art", |_app, request, responder| {
+            // `art://localhost/<appid>/<kind>` or, on Windows,
+            // `http://art.localhost/<appid>/<kind>`.
+            let path = request.uri().path().trim_matches('/').to_string();
+            std::thread::spawn(move || {
+                let mut parts = path.split('/');
+                let app_id = parts.next().unwrap_or_default().to_string();
+                let kind = parts.next().and_then(art::Kind::parse);
+
+                // An appid reaches this from a file on disk, so it is validated
+                // rather than trusted -- digits only, which cannot traverse a
+                // directory whatever else it tries.
+                let valid = !app_id.is_empty()
+                    && app_id.len() <= 12
+                    && app_id.chars().all(|c| c.is_ascii_digit());
+
+                let response = match (valid, kind) {
+                    (true, Some(kind)) => match art::fetch(&app_id, kind) {
+                        Some(bytes) => tauri::http::Response::builder()
+                            .header("Content-Type", kind.mime())
+                            // Immutable: the cache is on disk and keyed by
+                            // appid, so the webview need never revalidate.
+                            .header("Cache-Control", "public, max-age=31536000, immutable")
+                            .body(bytes),
+                        None => tauri::http::Response::builder().status(404).body(Vec::new()),
+                    },
+                    _ => tauri::http::Response::builder().status(400).body(Vec::new()),
+                };
+                if let Ok(response) = response {
+                    responder.respond(response);
+                }
+            });
+        })
         .setup(move |app| {
             // Opened before anything else needs it. A database that cannot be
             // opened is fatal and should say so immediately rather than
@@ -217,6 +269,7 @@ pub fn run() {
             meta::request_meta,
             launch_game,
             search::search_games,
+            art_url_base,
             add_manual_game,
             set_manual_executable,
             remove_manual_game,
