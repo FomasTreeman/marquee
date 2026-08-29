@@ -172,6 +172,7 @@ impl Steam {
                     playtime_minutes: playtime,
                     favourite: false,
                     hidden: false,
+                    art_app_id: None,
                 });
             }
         }
@@ -209,6 +210,7 @@ impl Steam {
             playtime_minutes: 0,
             favourite: false,
             hidden: false,
+            art_app_id: None,
         })
     }
 }

@@ -64,6 +64,7 @@ export function SAMPLE_LIBRARY(n: number): Game[] {
       playtimeMinutes: (i * 137) % 4000,
       favourite: i % 11 === 0,
       hidden: false,
+      artAppId: null,
     })
   }
   return out

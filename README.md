@@ -60,6 +60,10 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
 - **Adding any other game by typing its name**, with an on-screen keyboard
   when a pad is connected — the whole premise is a launcher used from a sofa,
   and until that existed the headline feature needed a desk
+- **Fixing wrong or missing artwork** on any game by searching the name it is
+  actually listed under
+- **Finding a game's executable for you**, so adding one rarely means hunting
+  through `bin/x64` for the real entry point
 
 **Not yet**
 

@@ -98,6 +98,35 @@ So `src/selfcheck.ts` asserts the invariants that would have failed, and it
   most load-bearing rule, and the one a report like "the card is halfway down
   on the right" is describing.
 - The hero identifies the selected game and shows its facts. Bug 4, asserted.
+- No more cards are visible than there are items. Bug 5, asserted.
+- Exactly one filter preset is active — zero means the pills are decoration,
+  two means the bar is claiming a different filter than the grid is showing.
+- The **focused** card is on screen, not merely some card.
+- While an overlay is open: it covers the screen, its buttons are reachable by
+  hit test, and its text field is not behind anything. A button behind a scrim
+  looks completely normal in the DOM *and in a screenshot*, and does nothing.
+- While the on-screen keyboard is up: exactly one key is highlighted, and it
+  does not overlap the field it is driving.
+- Toasts do not intercept pointer events.
+
+### It runs when overlays open, not only at boot
+
+Checking once at startup means every overlay is verified in the one state it is
+never in: closed. Opening the picker or the detail view re-runs the checks and
+logs under a context tag, so `selfcheck 10 checks passed (artwork)` tells you
+which surface was verified.
+
+### A check that fires when the interface is working is worse than no check
+
+Adding the overlay assertions immediately produced two false positives: with an
+overlay open, the grid's cover art is legitimately behind it, and the check
+dutifully reported that as a failure. Both were correct observations and useless
+findings.
+
+Grid assertions are now gated on no overlay being open. The rule generalises —
+**a check must know the states in which its question is meaningful**, because
+output that cries wolf teaches everyone to ignore it, including the output that
+is real.
 - The focused card has a visible ring, and no ancestor has paint containment
   that would clip it.
 - The shell's four bands are laid out with non-zero height.

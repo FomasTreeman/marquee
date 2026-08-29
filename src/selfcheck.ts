@@ -60,8 +60,41 @@ function check(name: string, ok: boolean, detail?: string): Check {
   return { name, ok, detail }
 }
 
+/**
+ * Is this element actually reachable, or is something painted over it?
+ *
+ * The question every overlay has to answer. A button behind a scrim looks
+ * completely normal in the DOM and in a screenshot, and does nothing.
+ */
+function reachable(el: Element): { ok: boolean; blocker?: string } {
+  const r = el.getBoundingClientRect()
+  if (r.width < 2 || r.height < 2) return { ok: false, blocker: 'zero-sized' }
+  if (r.bottom < 0 || r.top > window.innerHeight) return { ok: false, blocker: 'off-screen' }
+  const hit = document.elementFromPoint(
+    Math.min(window.innerWidth - 1, Math.max(0, r.left + r.width / 2)),
+    Math.min(window.innerHeight - 1, Math.max(0, r.top + r.height / 2)),
+  )
+  if (!hit) return { ok: false, blocker: 'nothing hit' }
+  return el.contains(hit) || hit === el ? { ok: true } : { ok: false, blocker: describe(hit) }
+}
+
+/** Overlays that legitimately cover the grid while they are open. */
+function openOverlay(): string | undefined {
+  for (const sel of ['.detail', '.add']) {
+    const el = document.querySelector<HTMLElement>(sel)
+    if (el && !el.hidden) return sel
+  }
+  return undefined
+}
+
 export function runSelfCheck(): Check[] {
   const out: Check[] = []
+
+  // Assertions about the grid only mean anything while the grid is the top
+  // surface. With an overlay open, "the cover art is painted on top" is false
+  // and correct -- and a check that fires when the interface is working is
+  // worse than no check, because it teaches everyone to ignore the output.
+  const covering = openOverlay()
 
   // --- artwork is actually visible ------------------------------------
   // The exact bug from the header. A loaded image behind an opaque sibling
@@ -70,7 +103,7 @@ export function runSelfCheck(): Check[] {
   // centre outside the viewport, where elementFromPoint returns null -- which
   // the hit test would report as "covered by nothing". A check that cries wolf
   // is a check that gets ignored, so it only asserts what it can actually see.
-  const cards = [...document.querySelectorAll<HTMLElement>('.card')].filter((c) => {
+  const cards = covering ? [] : [...document.querySelectorAll<HTMLElement>('.card')].filter((c) => {
     const r = c.getBoundingClientRect()
     return (
       c.style.visibility !== 'hidden' &&
@@ -98,8 +131,15 @@ export function runSelfCheck(): Check[] {
   }
 
   // --- the focus ring exists and is not clipped -----------------------
-  const focused = document.querySelector<HTMLElement>('.card[data-focus="1"]')
+  const focused = covering ? null : document.querySelector<HTMLElement>('.card[data-focus="1"]')
   if (focused) {
+    // Not just any card -- the focused one is where the cursor is, and a
+    // cursor off the bottom of the viewport is how a grid loses its user.
+    const fr = focused.getBoundingClientRect()
+    out.push(check('the focused card is on screen',
+      fr.top >= -1 && fr.bottom <= window.innerHeight + 1,
+      `top ${Math.round(fr.top)} bottom ${Math.round(fr.bottom)} of ${window.innerHeight}`))
+
     const ring = focused.querySelector<HTMLElement>('.card-ring')
     const ringOk = !!ring && parseFloat(getComputedStyle(ring).opacity) > 0.5
     out.push(check('focus ring is visible', ringOk, ring ? `opacity ${getComputedStyle(ring).opacity}` : 'no ring element'))
@@ -131,22 +171,26 @@ export function runSelfCheck(): Check[] {
   )
 
   // --- overlays must not swallow input --------------------------------
-  const centre = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2)
-  out.push(
-    check(
-      'no overlay intercepts the centre of the screen',
-      !centre?.classList.contains('hud') && !centre?.classList.contains('backdrop-scrim'),
-      centre ? describe(centre) : 'nothing',
-    ),
-  )
+  if (!covering) {
+    const centre = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2)
+    out.push(
+      check(
+        'no overlay intercepts the centre of the screen',
+        !centre?.classList.contains('hud') && !centre?.classList.contains('backdrop-scrim'),
+        centre ? describe(centre) : 'nothing',
+      ),
+    )
+  }
 
   // --- the design's alignment invariants ------------------------------
   // The hero, the top bar and the first card share a left edge. That is the
   // single most load-bearing rule in the design -- it took many iterations to
   // get right in the Playnite theme -- and it is exactly the kind of thing a
   // description like "the card is halfway down on the right" is reporting.
-  const firstCard = document.querySelector<HTMLElement>('.card[data-focus="1"]')
-    ?? document.querySelector<HTMLElement>('.card')
+  const firstCard = covering
+    ? null
+    : document.querySelector<HTMLElement>('.card[data-focus="1"]')
+      ?? document.querySelector<HTMLElement>('.card')
   const heroInner = document.querySelector<HTMLElement>('.hero-inner')
   const brand = document.querySelector<HTMLElement>('.brand')
   if (firstCard && heroInner && brand && firstCard.style.visibility !== 'hidden') {
@@ -168,7 +212,7 @@ export function runSelfCheck(): Check[] {
   const logo = document.querySelector<HTMLImageElement>('.hero-logo')
   const heroTitle = document.querySelector<HTMLElement>('.hero-title')
   const heroMeta = document.querySelector<HTMLElement>('.hero-meta')
-  if (document.querySelector('.card')) {
+  if (!covering && document.querySelector('.card')) {
     const hasLogo = !!logo && !logo.hidden && logo.naturalWidth > 0
     const hasTitle = !!heroTitle && !heroTitle.hidden && (heroTitle.textContent ?? '').trim().length > 0
     out.push(check('hero identifies the selected game', hasLogo || hasTitle,
@@ -200,6 +244,65 @@ export function runSelfCheck(): Check[] {
       `${active.length} of ${pills.length}`))
   }
 
+  // --- overlays, when one is open --------------------------------------
+  // Only asserted while open. An overlay is exactly the kind of surface that
+  // is hard to reach and easy to break, and its buttons are the only things in
+  // the interface that can be silently unclickable.
+  const overlays: Array<[string, string]> = [
+    ['.detail', 'detail view'],
+    ['.add', 'game picker'],
+  ]
+  for (const [sel, name] of overlays) {
+    const overlay = document.querySelector<HTMLElement>(sel)
+    if (!overlay || overlay.hidden) continue
+    const r = overlay.getBoundingClientRect()
+    out.push(check(`${name} covers the screen`,
+      r.width >= window.innerWidth - 1 && r.height >= window.innerHeight - 1,
+      `${Math.round(r.width)}x${Math.round(r.height)} of ${window.innerWidth}x${window.innerHeight}`))
+
+    const buttons = [...overlay.querySelectorAll<HTMLElement>('.action, .add-result')]
+    const blocked = buttons.map((b) => ({ b, hit: reachable(b) })).filter((x) => !x.hit.ok)
+    if (buttons.length) {
+      out.push(check(`${name} buttons are reachable`, blocked.length === 0,
+        blocked.length
+          ? `${blocked.length}/${buttons.length} behind ${blocked[0]!.hit.blocker}`
+          : `${buttons.length} reachable`))
+    }
+
+    // A picker with a field the keyboard cannot reach is unusable, and the
+    // on-screen keyboard is bottom-anchored while the panel is centred.
+    const input = overlay.querySelector<HTMLInputElement>('input')
+    if (input) out.push(check(`${name} field is reachable`, reachable(input).ok,
+      reachable(input).blocker ?? 'ok'))
+  }
+
+  // --- the on-screen keyboard ------------------------------------------
+  const osk = document.querySelector<HTMLElement>('.osk')
+  if (osk && !osk.hidden) {
+    const on = osk.querySelectorAll('.osk-key[data-on="1"]')
+    out.push(check('exactly one key is highlighted', on.length === 1, `${on.length} keys`))
+
+    // It must not cover the field it is driving, or you type blind.
+    const oskRect = osk.getBoundingClientRect()
+    const fields = [...document.querySelectorAll<HTMLElement>('.add-field, .query')]
+      .filter((f) => !f.hidden && f.getBoundingClientRect().width > 0)
+    const covered = fields.filter((f) => {
+      const r = f.getBoundingClientRect()
+      return r.bottom > oskRect.top && r.top < oskRect.bottom
+        && r.right > oskRect.left && r.left < oskRect.right
+    })
+    out.push(check('keyboard does not cover the field it drives', covered.length === 0,
+      `${covered.length} field(s) overlapped`))
+  }
+
+  // --- toasts must never swallow input ---------------------------------
+  const toastHost = document.querySelector<HTMLElement>('.toasts')
+  if (toastHost) {
+    out.push(check('toasts do not intercept input',
+      getComputedStyle(toastHost).pointerEvents === 'none',
+      getComputedStyle(toastHost).pointerEvents))
+  }
+
   // --- the shell is present -------------------------------------------
   for (const sel of ['.topbar', '.hero', '.grid-viewport', '.hints']) {
     const el = document.querySelector(sel)
@@ -226,12 +329,13 @@ function ancestorsOf(el: HTMLElement): HTMLElement[] {
  * Deferred by a beat because several of these checks hit-test real pixels, and
  * hit-testing before the first paint answers a question nobody asked.
  */
-export function scheduleSelfCheck(delayMs = 900): void {
+export function scheduleSelfCheck(delayMs = 900, context = ''): void {
   window.setTimeout(() => {
     const results = runSelfCheck()
     const failed = results.filter((r) => !r.ok)
+    const where = context ? ` (${context})` : ''
     if (!failed.length) {
-      logInfo('selfcheck', `${results.length} checks passed`)
+      logInfo('selfcheck', `${results.length} checks passed${where}`)
       return
     }
     // Below the fold in a hidden tab everything is unreliable; say so rather
@@ -239,7 +343,7 @@ export function scheduleSelfCheck(delayMs = 900): void {
     const level = document.visibilityState === 'hidden' ? logWarn : logError
     level(
       'selfcheck',
-      `${failed.length}/${results.length} checks FAILED` +
+      `${failed.length}/${results.length} checks FAILED${where}` +
         (document.visibilityState === 'hidden' ? ' (window hidden — results unreliable)' : ''),
       failed.map((f) => `${f.name}: ${f.detail ?? ''}`).join('\n    '),
     )

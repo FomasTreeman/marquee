@@ -10,7 +10,7 @@
  * cursor somewhere the user did not leave it.
  */
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
-import { setManualExecutable, removeManualGame, type Game, type Meta, type Artwork } from './library'
+import { setManualExecutable, removeManualGame, findExecutable, type Game, type Meta, type Artwork } from './library'
 import { toast } from './toast'
 import { logInfo } from './log'
 import { inApp } from './host'
@@ -64,7 +64,42 @@ async function pickExecutable(game: Game, onChanged: () => void): Promise<void> 
   onChanged()
 }
 
-export function createDetail(onPlay: () => void, onChanged: () => void = () => {}): DetailView {
+export interface DetailHooks {
+  onPlay(): void
+  onChanged(): void
+  /** Re-match this game's artwork against the store search. */
+  onFindArtwork(game: Game): void
+}
+
+/**
+ * Look for the executable in the usual places, and offer what it finds.
+ *
+ * A suggestion the user confirms, never a silent decision: guessing wrong and
+ * launching the wrong program is worse than asking. The scan can take a couple
+ * of seconds, so the button says what it is doing.
+ */
+async function autoLocate(game: Game, button: HTMLElement, onChanged: () => void): Promise<void> {
+  const id = Number(game.id.split(':')[1])
+  if (!Number.isFinite(id)) return
+  const original = button.textContent
+  button.textContent = 'Looking…'
+  try {
+    const found = await findExecutable(game.title)
+    if (!found) {
+      toast(`Could not find ${game.title} automatically. Choose the file instead.`, 'error', 6000)
+      return
+    }
+    await setManualExecutable(id, found)
+    logInfo('detail', `${game.title} located at ${found}`)
+    toast(`Found it: ${found.split(/[/\\]/).pop()}`, 'info', 5000)
+    onChanged()
+  } finally {
+    button.textContent = original
+  }
+}
+
+export function createDetail(hooks: DetailHooks): DetailView {
+  const { onPlay, onChanged, onFindArtwork } = hooks
   const root = el('div', 'detail', document.body)
   root.hidden = true
 
@@ -125,8 +160,16 @@ export function createDetail(onPlay: () => void, onChanged: () => void = () => {
       if (manual && !game.installed) {
         // A hand-added game with nowhere to launch from says exactly that,
         // rather than offering a Play button that cannot work.
-        const set = el('button', 'action action-primary', actions)
-        set.textContent = 'Set executable'
+        //
+        // "Find it" comes first because it is the one that usually works, and
+        // because hunting through bin/x64 for the real entry point is the
+        // tedious half of adding a game.
+        const find = el('button', 'action action-primary', actions)
+        find.textContent = 'Find it for me'
+        find.onclick = () => void autoLocate(game, find, onChanged)
+
+        const set = el('button', 'action', actions)
+        set.textContent = 'Choose file'
         set.onclick = () => {
           void pickExecutable(game, onChanged).catch((e) =>
             toast(`Could not set that. ${String(e)}`, 'error'))
@@ -136,6 +179,13 @@ export function createDetail(onPlay: () => void, onChanged: () => void = () => {
         play.textContent = game.installed ? 'Play' : 'Install and play'
         play.onclick = onPlay
       }
+
+      // Artwork can be re-matched for any game, not just hand-added ones: a
+      // Steam release can have no cover on the CDN, or be listed there under a
+      // different name, and until now there was no way back from that.
+      const artwork = el('button', 'action', actions)
+      artwork.textContent = 'Find artwork'
+      artwork.onclick = () => onFindArtwork(game)
 
       if (manual) {
         const change = el('button', 'action', actions)

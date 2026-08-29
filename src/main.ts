@@ -10,7 +10,7 @@ import { createFrameMeter, installGrainTile } from './perf'
 import { createShell, setHints } from './shell'
 import { createBackdrop } from './backdrop'
 import { createDetail } from './detail'
-import { createAdd } from './add'
+import { createPicker } from './picker'
 import { createHud } from './hud'
 import { createOsk } from './osk'
 import { toast } from './toast'
@@ -18,7 +18,7 @@ import { hostInfo, pingMs, inApp } from './host'
 import { createInput, padStatus, type Action } from './input'
 import {
   scanLibrary, requestMeta, onMeta, launchGame, toggleFavourite,
-  initArtwork, steamArtwork, tintFor,
+  addManualGame, setArtSource, initArtwork, steamArtwork, artIdFor, tintFor,
   type Artwork, type Game, type Meta, type ScanResult,
 } from './library'
 import { installErrorHandlers, logInfo, logWarn, logError, renderFatal, logPath } from './log'
@@ -236,7 +236,9 @@ async function main(): Promise<void> {
     }
 
     games = MOCK ? SAMPLE_LIBRARY(MOCK) : scan.games
-    art = games.map((g) => (g.providerId.match(/^\d+$/) ? steamArtwork(g.providerId) : {}))
+    // Artwork follows the user's override where there is one, so a game whose
+    // own appid has no cover can borrow another's.
+    art = games.map((g) => { const id = artIdFor(g); return id ? steamArtwork(id) : {} })
     // A title already known beats waiting for the worker to re-announce it.
     games.forEach((g) => { const m = meta.get(g.providerId); if (m && !g.title) g.title = m.name })
 
@@ -351,8 +353,74 @@ async function main(): Promise<void> {
     if (e.key === 'Enter') shell.query.blur()
   })
 
-  const detail = createDetail(() => void play(grid.focused), () => void reloadLibrary())
-  const add = createAdd(() => void reloadLibrary())
+  const picker = createPicker()
+
+  /**
+   * Re-run the invariants after a surface appears.
+   *
+   * Checking only at boot means every overlay is checked in the one state it
+   * is never in: closed. These are exactly the surfaces where something can be
+   * silently unreachable, so they are checked when they open.
+   */
+  const checkNow = (context: string) => {
+    if (import.meta.env.DEV || params.get('check') === '1') scheduleSelfCheck(600, context)
+  }
+
+  function openAdd(): void {
+    picker.open({
+      heading: 'Add a game',
+      sub: 'Type its name. Everything else comes from that.',
+      async onPick(hit) {
+        try {
+          await addManualGame(hit.name, hit.appId)
+          logInfo('add', `added ${hit.name} (steam appid ${hit.appId})`)
+          toast(`Added ${hit.name}.`, 'info', 5000)
+          await reloadLibrary()
+          return true
+        } catch (e) {
+          toast(`Could not add ${hit.name}. ${String(e)}`, 'error', 6000)
+          return false
+        }
+      },
+    })
+    if (padConnected) osk.attach(picker.field)
+    checkNow('add')
+  }
+
+  /**
+   * Re-match a game's artwork.
+   *
+   * Reachable for any game, not just hand-added ones: a Steam release can have
+   * no cover on the CDN, or be listed there under a different name, and until
+   * now there was no way back from that.
+   */
+  function openArtwork(game: Game): void {
+    picker.open({
+      heading: 'Find artwork',
+      sub: `Search for the name ${game.title || 'this game'} is listed under. Its artwork will be used.`,
+      initial: game.title,
+      async onPick(hit) {
+        try {
+          await setArtSource(game.id, hit.appId)
+          logInfo('art', `${game.id} artwork -> ${hit.name} (${hit.appId})`)
+          toast(`Using artwork from ${hit.name}.`)
+          await reloadLibrary()
+          return true
+        } catch (e) {
+          toast(`Could not set that. ${String(e)}`, 'error')
+          return false
+        }
+      },
+    })
+    if (padConnected) osk.attach(picker.field)
+    checkNow('artwork')
+  }
+
+  const detail = createDetail({
+    onPlay: () => void play(grid.focused),
+    onChanged: () => void reloadLibrary(),
+    onFindArtwork: openArtwork,
+  })
 
   // Steam writes playtime into localconfig itself, so returning to the window
   // after playing is exactly when a rescan is worth doing -- it picks up the
@@ -384,21 +452,20 @@ async function main(): Promise<void> {
     //
     // The keyboard is innermost of all: while it is up, the pad is typing.
     if (osk.handle(e.action)) return
-    if (add.handle(e.action)) return
+    if (picker.handle(e.action)) return
     if (detail.handle(e.action)) return
 
     if (!e.repeat) {
       if (e.action === 'perf') { hud.toggle(); return }
       if (e.action === 'a') { void play(grid.focused); return }
       if (e.action === 'x') { void favourite(grid.focused); return }
-      if (e.action === 'menu' || e.action === 'mainmenu') {
-        add.open()
-        if (padConnected) osk.attach(add.field)
-        return
-      }
+      if (e.action === 'menu' || e.action === 'mainmenu') { openAdd(); return }
       if (e.action === 'y') {
         const game = gameAt(grid.focused)
-        if (game) detail.open(game, meta.get(game.providerId), artAt(grid.focused))
+        if (game) {
+          detail.open(game, meta.get(game.providerId), artAt(grid.focused))
+          checkNow('detail')
+        }
         return
       }
       if (e.action === 'search') { openSearch(); return }
@@ -435,8 +502,10 @@ async function main(): Promise<void> {
         get scan() { return scan },
         meta,
         grid,
-        add,
+        picker,
         detail,
+        openAdd,
+        openArtwork,
         play,
         favourite,
         reloadLibrary,

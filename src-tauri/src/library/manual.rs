@@ -48,6 +48,7 @@ impl LibraryProvider for Manual<'_> {
                 playtime_minutes: 0,
                 favourite: false,
                 hidden: false,
+                art_app_id: None,
             })
             .collect())
     }

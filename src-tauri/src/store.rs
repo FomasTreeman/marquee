@@ -39,6 +39,15 @@ const MIGRATIONS: &[&str] = &[
         hidden       INTEGER NOT NULL DEFAULT 0,
         custom_title TEXT
      );",
+    // v2. Artwork is keyed by Steam appid, and the appid a game *is* is not
+    // always the appid whose artwork it should borrow. A Steam release with no
+    // cover on the CDN, a game listed under a different name, a hand-added
+    // GOG copy matched to the wrong entry -- all are fixed by pointing the art
+    // somewhere else, and none of them are fixed by editing a title.
+    //
+    // In user_game deliberately: it is a correction the user made, and no
+    // scanner may ever clear it.
+    "ALTER TABLE user_game ADD COLUMN art_app_id TEXT;",
 ];
 
 pub struct Store(Mutex<Connection>);
@@ -168,13 +177,17 @@ pub struct UserFlags {
     pub favourite: bool,
     pub hidden: bool,
     pub custom_title: Option<String>,
+    /// Where this game's artwork should come from, when it should not come
+    /// from its own appid.
+    pub art_app_id: Option<String>,
 }
 
 impl Store {
     pub fn user_flags(&self) -> Result<Vec<(String, UserFlags)>, String> {
         self.with(|c| {
-            let mut stmt =
-                c.prepare("SELECT game_id, favourite, hidden, custom_title FROM user_game")?;
+            let mut stmt = c.prepare(
+                "SELECT game_id, favourite, hidden, custom_title, art_app_id FROM user_game",
+            )?;
             let rows = stmt.query_map([], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
@@ -182,6 +195,7 @@ impl Store {
                         favourite: r.get::<_, i64>(1)? != 0,
                         hidden: r.get::<_, i64>(2)? != 0,
                         custom_title: r.get(3)?,
+                        art_app_id: r.get(4)?,
                     },
                 ))
             })?;
@@ -206,6 +220,41 @@ impl Store {
                 params![game_id],
                 |r| Ok(r.get::<_, i64>(0)? != 0),
             )
+        })
+    }
+}
+
+impl Store {
+    /// Point a game's artwork at a different Steam appid.
+    ///
+    /// Passing None clears the override and returns the game to its own
+    /// artwork, which is the escape hatch when a correction was itself wrong.
+    pub fn set_art_source(&self, game_id: &str, app_id: Option<&str>) -> Result<(), String> {
+        if let Some(id) = app_id {
+            if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
+                return Err(format!("not a valid Steam appid: {id:?}"));
+            }
+        }
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO user_game (game_id, art_app_id) VALUES (?1, ?2)
+                 ON CONFLICT(game_id) DO UPDATE SET art_app_id = ?2",
+                params![game_id, app_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Rename a game, or clear the rename with None.
+    pub fn set_custom_title(&self, game_id: &str, title: Option<&str>) -> Result<(), String> {
+        let title = title.map(str::trim).filter(|t| !t.is_empty());
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO user_game (game_id, custom_title) VALUES (?1, ?2)
+                 ON CONFLICT(game_id) DO UPDATE SET custom_title = ?2",
+                params![game_id, title],
+            )?;
+            Ok(())
         })
     }
 }
@@ -260,6 +309,52 @@ mod tests {
         let flags = s.user_flags().unwrap();
         assert_eq!(flags.len(), 1);
         assert!(flags[0].1.favourite);
+    }
+
+    #[test]
+    fn artwork_can_be_pointed_at_another_appid_and_back() {
+        let s = memory();
+        s.set_art_source("steam:4254230", Some("1091500")).unwrap();
+        let flags = s.user_flags().unwrap();
+        assert_eq!(flags[0].1.art_app_id.as_deref(), Some("1091500"));
+
+        // A correction can itself be wrong, so it must be reversible.
+        s.set_art_source("steam:4254230", None).unwrap();
+        assert_eq!(s.user_flags().unwrap()[0].1.art_app_id, None);
+    }
+
+    /// An appid ends up in a URL. Anything that is not digits must not.
+    #[test]
+    fn an_art_source_must_be_digits() {
+        let s = memory();
+        for bad in ["", "abc", "../../etc", "12 34", "1091500; DROP TABLE"] {
+            assert!(s.set_art_source("steam:1", Some(bad)).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_rename_survives_and_can_be_cleared() {
+        let s = memory();
+        s.set_custom_title("steam:1", Some("  My Name  ")).unwrap();
+        assert_eq!(
+            s.user_flags().unwrap()[0].1.custom_title.as_deref(),
+            Some("My Name")
+        );
+        s.set_custom_title("steam:1", Some("   ")).unwrap();
+        assert_eq!(s.user_flags().unwrap()[0].1.custom_title, None);
+    }
+
+    /// Corrections and favourites share a row and must not clobber each other.
+    #[test]
+    fn user_edits_compose_rather_than_overwrite() {
+        let s = memory();
+        s.toggle_favourite("steam:7").unwrap();
+        s.set_art_source("steam:7", Some("440")).unwrap();
+        s.set_custom_title("steam:7", Some("Renamed")).unwrap();
+        let (_, f) = s.user_flags().unwrap().into_iter().next().unwrap();
+        assert!(f.favourite, "favourite lost when artwork was set");
+        assert_eq!(f.art_app_id.as_deref(), Some("440"));
+        assert_eq!(f.custom_title.as_deref(), Some("Renamed"));
     }
 
     /// The property the whole schema exists for.

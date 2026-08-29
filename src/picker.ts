@@ -1,26 +1,34 @@
 /**
- * Add a game by name.
+ * Pick a game by name.
  *
- * The headline flow from docs/PLAN.md §5. One field. You type "Hollow Knight",
- * pick it from results showing real cover art, and it lands in the library
- * complete with artwork and metadata.
+ * One overlay serving two jobs, because they are the same question asked twice:
  *
- * There is deliberately **no file picker here**. Identifying a game and
- * locating it on disk are different questions, and the interesting one is the
- * one we can answer for you. The executable is set later from the detail page,
- * so a game looks finished before you have said anything about where it lives.
+ *   * **Adding a game.** Type a name, get a game.
+ *   * **Fixing artwork.** A Steam release with no cover on the CDN, or a
+ *     hand-added copy matched to the wrong entry. Same search, and the answer
+ *     is an appid to borrow art from rather than a game to create.
+ *
+ * Sharing it is not just economy. The second job only exists because the first
+ * one can be wrong, so they must show the same candidates in the same order --
+ * otherwise the fix cannot reach what the mistake reached.
  */
-import { searchGames, addManualGame, type SearchHit } from './library'
-import { logInfo, logWarn } from './log'
-import { toast } from './toast'
+import { searchGames, type SearchHit } from './library'
+import { logWarn } from './log'
 
 const DEBOUNCE_MS = 280
 
-export interface AddView {
+export interface PickRequest {
+  heading: string
+  sub: string
+  initial?: string
+  /** Return true to close. Rejecting leaves the overlay up with its results. */
+  onPick(hit: SearchHit): Promise<boolean>
+}
+
+export interface Picker {
   readonly isOpen: boolean
-  /** The real input, so the on-screen keyboard can drive it. */
   readonly field: HTMLInputElement
-  open(): void
+  open(request: PickRequest): void
   close(): void
   handle(action: string): boolean
 }
@@ -34,22 +42,17 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node
 }
 
-export function createAdd(onAdded: () => void): AddView {
+export function createPicker(): Picker {
   const root = el('div', 'add', document.body)
   root.hidden = true
 
   const panel = el('div', 'add-panel', root)
   const heading = el('h2', 'add-heading', panel)
-  heading.textContent = 'Add a game'
   const sub = el('p', 'add-sub', panel)
-  sub.textContent = 'Type its name. Everything else comes from that.'
-
   const field = el('input', 'add-field', panel)
   field.type = 'text'
-  field.placeholder = 'Hollow Knight'
   field.autocomplete = 'off'
   field.spellcheck = false
-
   const status = el('div', 'add-status', panel)
   const results = el('div', 'add-results', panel)
 
@@ -59,6 +62,7 @@ export function createAdd(onAdded: () => void): AddView {
   let timer: number | undefined
   /** Guards against a slow response for an old term overwriting a newer one. */
   let generation = 0
+  let request: PickRequest | undefined
 
   function paint(): void {
     results.textContent = ''
@@ -74,8 +78,8 @@ export function createAdd(onAdded: () => void): AddView {
       name.textContent = hit.name
       card.onclick = () => { selected = i; void choose() }
     })
-    const chosen = results.children[selected] as HTMLElement | undefined
-    chosen?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+    ;(results.children[selected] as HTMLElement | undefined)
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }
 
   async function run(term: string): Promise<void> {
@@ -101,28 +105,21 @@ export function createAdd(onAdded: () => void): AddView {
       hits = []
       paint()
       status.textContent = String(e)
-      logWarn('add', 'search failed', e)
+      logWarn('picker', 'search failed', e)
     }
   }
 
   async function choose(): Promise<void> {
     const hit = hits[selected]
-    if (!hit) return
-    try {
-      await addManualGame(hit.name, hit.appId)
-      logInfo('add', `added ${hit.name} (steam appid ${hit.appId})`)
-      toast(`Added ${hit.name}. Set its executable from its details page.`, 'info', 6000)
-      close()
-      onAdded()
-    } catch (e) {
-      toast(`Could not add ${hit.name}. ${String(e)}`, 'error', 6000)
-    }
+    if (!hit || !request) return
+    if (await request.onPick(hit)) close()
   }
 
   function close(): void {
     open = false
     root.hidden = true
     field.blur()
+    request = undefined
     generation++
   }
 
@@ -138,17 +135,22 @@ export function createAdd(onAdded: () => void): AddView {
     get isOpen() { return open },
     get field() { return field },
 
-    open() {
+    open(next) {
+      request = next
       open = true
       root.hidden = false
-      field.value = ''
+      heading.textContent = next.heading
+      sub.textContent = next.sub
+      field.value = next.initial ?? ''
+      field.placeholder = 'Hollow Knight'
       hits = []
       selected = 0
       status.textContent = ''
       results.textContent = ''
-      // Focus after the frame so the field is actually visible when it takes
-      // focus; focusing a hidden element does nothing in WebKit.
+      // Focus after the frame: focusing a hidden element does nothing in
+      // WebKit, and the element is still hidden this tick.
       requestAnimationFrame(() => field.focus())
+      if (field.value) void run(field.value)
     },
 
     close,

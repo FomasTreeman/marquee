@@ -8,6 +8,7 @@ mod art;
 mod diag;
 mod input;
 mod library;
+mod locate;
 pub mod log;
 mod meta;
 mod paths;
@@ -105,6 +106,30 @@ fn remove_manual_game(
 ) -> Result<(), String> {
     log_info!("store", "removed manual:{id}");
     store.remove_manual_game(id)
+}
+
+/// Point a game's artwork at a different Steam appid, or None to undo.
+///
+/// The appid a game *is* is not always the appid whose artwork it should
+/// borrow: a Steam release with no cover on the CDN, a game listed under a
+/// different name, a hand-added copy matched to the wrong entry.
+#[tauri::command]
+fn set_art_source(
+    game_id: String,
+    app_id: Option<String>,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<(), String> {
+    log_info!("store", "artwork for {game_id} -> {app_id:?}");
+    store.set_art_source(&game_id, app_id.as_deref())
+}
+
+#[tauri::command]
+fn set_custom_title(
+    game_id: String,
+    title: Option<String>,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<(), String> {
+    store.set_custom_title(&game_id, title.as_deref())
 }
 
 #[tauri::command]
@@ -279,7 +304,10 @@ pub fn run() {
             add_manual_game,
             set_manual_executable,
             remove_manual_game,
-            toggle_favourite
+            toggle_favourite,
+            set_art_source,
+            set_custom_title,
+            locate::find_executable
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Marquee");

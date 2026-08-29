@@ -42,6 +42,10 @@ pub struct Game {
     pub favourite: bool,
     #[serde(default)]
     pub hidden: bool,
+    /// Where artwork should come from, when not from `provider_id`. User-set,
+    /// and the only thing that decides which appid the art URLs are built on.
+    #[serde(default)]
+    pub art_app_id: Option<String>,
 }
 
 /// What a provider reports after a scan.
@@ -130,6 +134,7 @@ pub fn scan(store: &Store) -> ScanResult {
                 if let Some(f) = by_id.get(&g.id) {
                     g.favourite = f.favourite;
                     g.hidden = f.hidden;
+                    g.art_app_id = f.art_app_id.clone();
                     if let Some(t) = &f.custom_title {
                         g.title = t.clone();
                     }

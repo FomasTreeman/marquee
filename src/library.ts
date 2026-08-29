@@ -22,6 +22,8 @@ export interface Game {
   playtimeMinutes: number
   favourite: boolean
   hidden: boolean
+  /** Where artwork comes from, when not from providerId. User-set. */
+  artAppId: string | null
 }
 
 export interface Meta {
@@ -111,6 +113,27 @@ export async function removeManualGame(id: number): Promise<void> {
   return call<void>('remove_manual_game', { id })
 }
 
+/**
+ * Point a game's artwork at a different Steam appid, or null to undo.
+ *
+ * The appid a game *is* is not always the appid whose artwork it should
+ * borrow, and no amount of renaming fixes that.
+ */
+export async function setArtSource(gameId: string, appId: string | null): Promise<void> {
+  return call<void>('set_art_source', { gameId, appId })
+}
+
+export async function setCustomTitle(gameId: string, title: string | null): Promise<void> {
+  return call<void>('set_custom_title', { gameId, title })
+}
+
+/** Look for a game's executable in the usual places. A suggestion, not a
+ *  decision -- the user confirms whatever comes back. */
+export async function findExecutable(title: string): Promise<string | null> {
+  if (!inApp) return null
+  return call<string | null>('find_executable', { title })
+}
+
 /** Toggle, returning the new value. User data, and no scanner can clear it. */
 export async function toggleFavourite(gameId: string): Promise<boolean> {
   return call<boolean>('toggle_favourite', { gameId })
@@ -162,6 +185,13 @@ export async function initArtwork(): Promise<void> {
     // costs the network every launch.
     artBase = ''
   }
+}
+
+/** The appid a game's artwork should be built on: the user's correction if
+ *  there is one, otherwise its own. */
+export function artIdFor(game: Pick<Game, 'providerId' | 'artAppId'>): string | undefined {
+  const id = game.artAppId ?? game.providerId
+  return /^\d+$/.test(id) ? id : undefined
 }
 
 export function steamArtwork(appid: string): Artwork {
