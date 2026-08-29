@@ -12,11 +12,19 @@ export interface FrameStats {
    *  60fps with a 40ms spike every second still feels broken on a pad. */
   p99: number
   worst: number
-  /** Detected display refresh, from the median frame interval. Without it a
-   *  p99 is uninterpretable -- 18 ms is a comfortable pass at 60 Hz and two
-   *  dropped frames at 120 Hz, and this project is developed on a ProMotion
-   *  display and used on a television. */
+  /** Refresh rate the frames are actually arriving at, from the median
+   *  interval. Without it a p99 is uninterpretable -- 18 ms is a comfortable
+   *  pass at 60 Hz and two dropped frames at 120 Hz. */
   hz: number
+  /** The fastest interval seen in the window, as a rate.
+   *
+   *  Distinguishes "this display cannot go faster" from "the compositor chose
+   *  not to". macOS ProMotion is adaptive: it settles at a lower rate when
+   *  content is static and ramps up under sustained animation, so a still grid
+   *  reporting 60 Hz on a 120 Hz panel is the display working correctly, not a
+   *  cap. If `peakHz` reaches 120 while `hz` sits at 60, that is what is
+   *  happening. */
+  peakHz: number
   /** Frames that overran the display's own interval by half or more. This is
    *  the honest metric: refresh-independent, and it counts the judder a hand
    *  on a stick actually feels. */
@@ -45,18 +53,23 @@ export function createFrameMeter(windowSize = 180) {
 
   return {
     read(): FrameStats {
-      if (times.length < 8) return { fps: 0, p99: 0, worst: 0, hz: 0, dropped: 0 }
+      if (times.length < 8) return { fps: 0, p99: 0, worst: 0, hz: 0, peakHz: 0, dropped: 0 }
       const sorted = [...times].sort((a, b) => a - b)
       const mean = times.reduce((a, b) => a + b, 0) / times.length
       const at = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))] ?? 0
       const median = at(0.5)
       const hz = nearestHz(median)
+      // The 5th percentile rather than the outright minimum: one freakishly
+      // short interval after a stall would otherwise claim a rate the display
+      // never sustained.
+      const peakHz = nearestHz(at(0.05))
       const interval = 1000 / hz
       return {
         fps: 1000 / mean,
         p99: at(0.99),
         worst: sorted[sorted.length - 1] ?? 0,
         hz,
+        peakHz,
         dropped: times.filter((t) => t > interval * 1.5).length,
       }
     },

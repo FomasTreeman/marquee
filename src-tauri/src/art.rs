@@ -71,6 +71,14 @@ impl Kind {
         self.files()[0]
     }
 
+    fn want(self) -> crate::sgdb::Want {
+        match self {
+            Kind::Cover => crate::sgdb::Want::Grid,
+            Kind::Hero => crate::sgdb::Want::Hero,
+            Kind::Logo => crate::sgdb::Want::Logo,
+        }
+    }
+
     fn max_edge(self) -> u32 {
         match self {
             Kind::Cover => COVER_MAX,
@@ -196,7 +204,7 @@ fn trim_transparent(img: &image::DynamicImage) -> image::DynamicImage {
 /// card, and no amount of new logic reaches it -- the cache answers first. The
 /// metadata cache learned this lesson one release earlier; this is the same
 /// lesson applied before it bites rather than after.
-const ART_VERSION: u32 = 4;
+const ART_VERSION: u32 = 5;
 
 /// Throw the artwork cache away if it was written by an older pipeline.
 pub fn migrate_cache() {
@@ -217,9 +225,9 @@ pub fn migrate_cache() {
     let _ = std::fs::write(&stamp, ART_VERSION.to_string());
 }
 
-fn path_for(app_id: &str, kind: Kind) -> PathBuf {
+fn path_for(slug: &str, kind: Kind) -> PathBuf {
     paths::cache_dir().join("art").join(format!(
-        "{app_id}-{}.{}",
+        "{slug}-{}.{}",
         match kind {
             Kind::Cover => "cover",
             Kind::Hero => "hero",
@@ -331,14 +339,14 @@ pub struct Manifest {
     pub version: u32,
 }
 
-fn manifest_path(app_id: &str) -> PathBuf {
+fn manifest_path(slug: &str) -> PathBuf {
     paths::cache_dir()
         .join("art")
-        .join(format!("{app_id}-manifest.json"))
+        .join(format!("{slug}-manifest.json"))
 }
 
-pub fn manifest(app_id: &str) -> Option<Manifest> {
-    let text = std::fs::read_to_string(manifest_path(app_id)).ok()?;
+pub fn manifest(slug: &str) -> Option<Manifest> {
+    let text = std::fs::read_to_string(manifest_path(slug)).ok()?;
     let m: Manifest = serde_json::from_str(&text).ok()?;
     if m.version < ART_VERSION {
         return None;
@@ -385,6 +393,46 @@ fn steam_urls(app_id: &str, kind: Kind) -> Vec<String> {
         .collect()
 }
 
+/// Which catalogue a game's artwork is being looked up in.
+///
+/// Previously everything was keyed by Steam appid, which meant the artwork
+/// picker could only ever re-point a game at a *different Steam game* -- no
+/// help at all when the missing artwork is Steam's. A SteamGridDB entry is now
+/// addressable directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceKey {
+    Steam(String),
+    SteamGridDb(u64),
+}
+
+impl SourceKey {
+    /// Parses `steam-1091500` or `sgdb-8452`, the form used in art:// URLs.
+    ///
+    /// Ids reach this from files on disk and from a database, so they are
+    /// validated as digits rather than trusted -- a path segment that cannot
+    /// contain a slash or a dot cannot traverse anywhere.
+    pub fn parse(s: &str) -> Option<Self> {
+        let (prefix, id) = s.split_once('-')?;
+        if id.is_empty() || id.len() > 12 || !id.chars().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        match prefix {
+            "steam" => Some(SourceKey::Steam(id.to_string())),
+            "sgdb" => Some(SourceKey::SteamGridDb(id.parse().ok()?)),
+            _ => None,
+        }
+    }
+
+    /// Cache filename stem. Distinct per source, so re-pointing a game's
+    /// artwork cannot collide with the original.
+    fn slug(&self) -> String {
+        match self {
+            SourceKey::Steam(id) => format!("steam-{id}"),
+            SourceKey::SteamGridDb(id) => format!("sgdb-{id}"),
+        }
+    }
+}
+
 const KINDS: [Kind; 3] = [Kind::Cover, Kind::Hero, Kind::Logo];
 
 /// Resolve all three assets for a game, and record where each came from.
@@ -394,9 +442,10 @@ const KINDS: [Kind; 3] = [Kind::Cover, Kind::Hero, Kind::Logo];
 /// asked, and then it is asked for **every** field rather than just the missing
 /// ones -- a Steam cover beside a SteamGridDB wordmark is two artists' work in
 /// one card, and it shows.
-fn resolve(app_id: &str, sgdb_key: Option<&str>) -> Manifest {
+fn resolve(key: &SourceKey, sgdb_key: Option<&str>) -> Manifest {
+    let slug = key.slug();
     let mut m = Manifest {
-        app_id: app_id.to_string(),
+        app_id: slug.clone(),
         cover: Source::None,
         hero: Source::None,
         logo: Source::None,
@@ -406,80 +455,94 @@ fn resolve(app_id: &str, sgdb_key: Option<&str>) -> Manifest {
     let Some(client) = crate::meta::http_client() else {
         return m;
     };
+    let sgdb_key = sgdb_key.filter(|k| !k.is_empty());
 
-    // --- Steam, for the whole set -------------------------------------
     let mut found: Vec<(Kind, bytes::Bytes, image::DynamicImage, Source)> = Vec::new();
-    for kind in KINDS {
-        for url in steam_urls(app_id, kind) {
-            if let Some((b, i)) = usable(&client, &url, kind) {
-                found.push((kind, b, i, Source::Steam));
-                break;
+
+    match key {
+        // A SteamGridDB entry has no Steam assets by definition: it was chosen
+        // precisely because Steam's were missing or wrong.
+        SourceKey::SteamGridDb(game_id) => {
+            if let Some(k) = sgdb_key {
+                for kind in KINDS {
+                    for url in crate::sgdb::candidates_for_game(&client, k, *game_id, kind.want()) {
+                        if let Some((b, i)) = usable(&client, &url, kind) {
+                            found.push((kind, b, i, Source::SteamGridDb));
+                            break;
+                        }
+                    }
+                }
             }
         }
-    }
-    m.steam_complete = found.len() == KINDS.len();
 
-    // --- SteamGridDB, for anything Steam could not complete ------------
-    if !m.steam_complete {
-        if let Some(key) = sgdb_key.filter(|k| !k.is_empty()) {
-            let mut replacements = Vec::new();
+        SourceKey::Steam(app_id) => {
+            // Steam first, for the whole set.
             for kind in KINDS {
-                let want = match kind {
-                    Kind::Cover => crate::sgdb::Want::Grid,
-                    Kind::Hero => crate::sgdb::Want::Hero,
-                    Kind::Logo => crate::sgdb::Want::Logo,
-                };
-                // Every submission, not just the top-ranked one: community
-                // art includes dead links and mislabelled images, and the
-                // first acceptable *download* is what matters, not the first
-                // acceptable listing.
-                for url in crate::sgdb::candidates_for_steam_app(&client, key, app_id, want) {
+                for url in steam_urls(app_id, kind) {
                     if let Some((b, i)) = usable(&client, &url, kind) {
-                        replacements.push((kind, b, i, Source::SteamGridDb));
+                        found.push((kind, b, i, Source::Steam));
                         break;
                     }
                 }
             }
-            // Wholesale when it can cover the set, otherwise fill the gaps.
-            if replacements.len() == KINDS.len() {
-                found = replacements;
-            } else {
-                for (kind, b, i, s) in replacements {
-                    if !found.iter().any(|(k, ..)| *k == kind) {
-                        found.push((kind, b, i, s));
+            m.steam_complete = found.len() == KINDS.len();
+
+            // Only if Steam cannot complete the set does SteamGridDB get
+            // asked, and then for every field -- a Steam cover beside a
+            // SteamGridDB wordmark is two artists' work in one card.
+            if !m.steam_complete {
+                if let Some(k) = sgdb_key {
+                    let mut replacements = Vec::new();
+                    for kind in KINDS {
+                        for url in
+                            crate::sgdb::candidates_for_steam_app(&client, k, app_id, kind.want())
+                        {
+                            if let Some((b, i)) = usable(&client, &url, kind) {
+                                replacements.push((kind, b, i, Source::SteamGridDb));
+                                break;
+                            }
+                        }
+                    }
+                    if replacements.len() == KINDS.len() {
+                        found = replacements;
+                    } else {
+                        for (kind, b, i, s) in replacements {
+                            if !found.iter().any(|(k, ..)| *k == kind) {
+                                found.push((kind, b, i, s));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // A hero may fall back to the wide store capsule: same shape, so a
+            // legitimate substitute even at lower quality. A cover never falls
+            // back this way -- that is what composing is for.
+            if !found.iter().any(|(k, ..)| *k == Kind::Hero) {
+                let mut capsules = Vec::new();
+                if let crate::meta::Fetched::Found(meta) = crate::meta::fetch_one(&client, app_id) {
+                    if !meta.header_image.is_empty() {
+                        capsules.push(meta.header_image);
+                    }
+                }
+                capsules.push(format!(
+                    "https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg"
+                ));
+                for url in capsules {
+                    if let Some((b, i)) = usable(&client, &url, Kind::Hero) {
+                        found.push((Kind::Hero, b, i, Source::Steam));
+                        break;
                     }
                 }
             }
         }
     }
 
-    // --- Hero may fall back to the wide store capsule -------------------
-    // Same shape as a hero, so it is a legitimate substitute even at lower
-    // quality. A cover never falls back this way -- that is what composing is.
-    if !found.iter().any(|(k, ..)| *k == Kind::Hero) {
-        let mut capsules = Vec::new();
-        if let crate::meta::Fetched::Found(meta) = crate::meta::fetch_one(&client, app_id) {
-            if !meta.header_image.is_empty() {
-                capsules.push(meta.header_image);
-            }
-        }
-        capsules.push(format!(
-            "https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/header.jpg"
-        ));
-        for url in capsules {
-            if let Some((b, i)) = usable(&client, &url, Kind::Hero) {
-                found.push((Kind::Hero, b, i, Source::Steam));
-                break;
-            }
-        }
-    }
-
-    // --- Write what was found ------------------------------------------
     let mut have: std::collections::HashMap<Kind, image::DynamicImage> = Default::default();
     for (kind, raw, img, source) in found {
         let encoded = if kind == Kind::Logo {
-            // Steam's wordmarks are frequently a small image inside a large
-            // transparent canvas; trimmed, they fill the space they are given.
+            // Wordmarks are frequently a small image inside a large transparent
+            // canvas; trimmed, they fill the space they are given.
             let trimmed = trim_transparent(&img);
             let capped = downscale(&trimmed, kind).unwrap_or(trimmed);
             let mut out = std::io::Cursor::new(Vec::new());
@@ -490,7 +553,7 @@ fn resolve(app_id: &str, sgdb_key: Option<&str>) -> Manifest {
         } else {
             resize(&raw, kind).unwrap_or_else(|| raw.to_vec())
         };
-        write_cached(&path_for(app_id, kind), &encoded);
+        write_cached(&path_for(&slug, kind), &encoded);
         have.insert(kind, img);
         match kind {
             Kind::Cover => m.cover = source,
@@ -499,7 +562,8 @@ fn resolve(app_id: &str, sgdb_key: Option<&str>) -> Manifest {
         }
     }
 
-    // --- Compose a cover, if there is anything to compose from ----------
+    // No box art anywhere: build one, but only if there is a wordmark to put
+    // on it. Key art alone is a handsome blur that identifies nothing.
     if m.cover == Source::None {
         if let (Some(hero), Some(logo)) = (have.get(&Kind::Hero), have.get(&Kind::Logo)) {
             let composed = compose_cover(hero, logo);
@@ -508,32 +572,29 @@ fn resolve(app_id: &str, sgdb_key: Option<&str>) -> Manifest {
                 .encode_image(&composed.to_rgb8())
                 .is_ok()
             {
-                write_cached(&path_for(app_id, Kind::Cover), &out.into_inner());
+                write_cached(&path_for(&slug, Kind::Cover), &out.into_inner());
                 m.cover = Source::Composed;
             }
         }
     }
 
-    // Record misses so a game with genuinely no artwork is not re-asked about
-    // on every launch.
     for (kind, source) in [
         (Kind::Cover, m.cover),
         (Kind::Hero, m.hero),
         (Kind::Logo, m.logo),
     ] {
         if source == Source::None {
-            log_debug!("art", "{app_id}: no source has a usable {}", kind.file());
-            write_cached(&path_for(app_id, kind), b"");
+            log_debug!("art", "{slug}: no source has a usable {}", kind.file());
+            write_cached(&path_for(&slug, kind), b"");
         }
     }
 
-    let path = manifest_path(app_id);
     if let Ok(text) = serde_json::to_string(&m) {
-        write_cached(&path, text.as_bytes());
+        write_cached(&manifest_path(&slug), text.as_bytes());
     }
     log_info!(
         "art",
-        "{app_id}: cover={:?} hero={:?} logo={:?}{}",
+        "{slug}: cover={:?} hero={:?} logo={:?}{}",
         m.cover,
         m.hero,
         m.logo,
@@ -546,20 +607,40 @@ fn resolve(app_id: &str, sgdb_key: Option<&str>) -> Manifest {
     m
 }
 
-pub fn fetch(app_id: &str, kind: Kind, sgdb_key: Option<&str>) -> Option<Vec<u8>> {
-    let path = path_for(app_id, kind);
+/// One resolution per game at a time.
+///
+/// A card asks for its cover and the hero asks for its key art at the same
+/// moment, and both used to find no manifest and both used to do the whole job
+/// -- every download twice. The lock is per game rather than global so
+/// unrelated games still resolve in parallel.
+static IN_FLIGHT: std::sync::Mutex<
+    Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<()>>>>,
+> = std::sync::Mutex::new(None);
 
-    // The manifest is the authority on whether this game has been resolved.
-    // A file alone is not: a zero-byte miss and a not-yet-fetched asset look
-    // identical on disk.
-    if manifest(app_id).is_some() {
-        return match std::fs::read(&path) {
-            Ok(bytes) if !bytes.is_empty() => Some(bytes),
-            _ => None,
-        };
+fn lock_for(slug: &str) -> std::sync::Arc<std::sync::Mutex<()>> {
+    let mut map = IN_FLIGHT.lock().unwrap_or_else(|e| e.into_inner());
+    map.get_or_insert_with(Default::default)
+        .entry(slug.to_string())
+        .or_default()
+        .clone()
+}
+
+pub fn fetch(key: &SourceKey, kind: Kind, sgdb_key: Option<&str>) -> Option<Vec<u8>> {
+    let slug = key.slug();
+    let path = path_for(&slug, kind);
+
+    // The manifest is the authority on whether this has been resolved. A file
+    // alone is not: a zero-byte miss and a not-yet-fetched asset look identical
+    // on disk.
+    if manifest(&slug).is_none() {
+        let gate = lock_for(&slug);
+        let _held = gate.lock().unwrap_or_else(|e| e.into_inner());
+        // Checked again inside the lock: whoever held it may have just done
+        // the work, and doing it twice is the thing this exists to prevent.
+        if manifest(&slug).is_none() {
+            resolve(key, sgdb_key);
+        }
     }
-
-    resolve(app_id, sgdb_key);
     match std::fs::read(&path) {
         Ok(bytes) if !bytes.is_empty() => Some(bytes),
         _ => None,
@@ -867,6 +948,49 @@ mod tests {
         assert!(Kind::Cover.files().contains(&"portrait.png"));
     }
 
+    /// Ids reach this from files on disk and from a database, so anything that
+    /// is not a plain number must not become a path segment.
+    #[test]
+    fn a_source_key_round_trips_and_rejects_rubbish() {
+        assert_eq!(
+            SourceKey::parse("steam-1091500"),
+            Some(SourceKey::Steam("1091500".into()))
+        );
+        assert_eq!(
+            SourceKey::parse("sgdb-8452"),
+            Some(SourceKey::SteamGridDb(8452))
+        );
+        assert_eq!(
+            SourceKey::parse("steam-1091500").unwrap().slug(),
+            "steam-1091500"
+        );
+
+        for bad in [
+            "",
+            "1091500",
+            "steam-",
+            "steam-abc",
+            "steam-../etc",
+            "gog-123",
+            "steam-12.34",
+            "steam-1234567890123",
+            "sgdb-x",
+        ] {
+            assert!(
+                SourceKey::parse(bad).is_none(),
+                "{bad:?} should be rejected"
+            );
+        }
+    }
+
+    /// Re-pointing a game's artwork must not overwrite the original's cache.
+    #[test]
+    fn each_source_gets_its_own_cache_slot() {
+        let a = SourceKey::Steam("440".into()).slug();
+        let b = SourceKey::SteamGridDb(440).slug();
+        assert_ne!(a, b);
+    }
+
     #[test]
     fn kinds_round_trip_through_their_url_names() {
         for (name, kind) in [
@@ -909,7 +1033,7 @@ mod live {
             ("377560", "Rainbow Six Siege"),
             ("1091500", "Cyberpunk 2077"),
         ] {
-            let m = super::resolve(app_id, None);
+            let m = super::resolve(&SourceKey::Steam(app_id.to_string()), None);
             println!(
                 "  {:<22} cover={:<12?} hero={:<12?} logo={:<12?} steam_complete={}",
                 name, m.cover, m.hero, m.logo, m.steam_complete
@@ -924,7 +1048,7 @@ mod live {
         let _ = std::fs::remove_dir_all(&dir);
 
         for (kind, must_have) in [(Kind::Cover, true), (Kind::Hero, true), (Kind::Logo, false)] {
-            let got = fetch("2807960", kind, None);
+            let got = fetch(&SourceKey::Steam("2807960".into()), kind, None);
             match &got {
                 Some(bytes) => {
                     let img = image::load_from_memory(bytes).expect("decodable");

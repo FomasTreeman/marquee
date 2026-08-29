@@ -106,7 +106,11 @@ export function createHud(grid: Grid, meter: Meter) {
         const f = meter.read()
         const interval = f.hz ? 1000 / f.hz : 0
         const droppedPct = (f.dropped / 180) * 100
-        set('display', f.hz ? `${f.hz} Hz · ${interval.toFixed(1)} ms` : '—')
+        // Both, because they answer different questions: what the frames are
+        // arriving at, and what the display is capable of when pushed.
+        set('display', f.hz
+          ? `${f.hz} Hz${f.peakHz > f.hz ? ` (peak ${f.peakHz})` : ''} · ${interval.toFixed(1)} ms`
+          : '—')
         set('cards', `${ctx.total.toLocaleString()} · ${grid.columns} cols`)
         set('fps', f.fps.toFixed(0), f.hz > 0 && f.fps < f.hz * 0.95)
         set('p99', `${f.p99.toFixed(1)} ms`, interval > 0 && f.p99 > interval * BUDGET.p99Frames)

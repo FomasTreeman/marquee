@@ -58,7 +58,9 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
 - **A second artwork source.** Steam's own art has real gaps: recent releases
   publish a grey placeholder where a cover should be, and plenty of games have
   no transparent wordmark at all. Paste a free SteamGridDB key in Settings and
-  those fill in. Entirely optional — nothing is gated on it
+  those fill in — on a real library, 23 of 28 games resolve entirely from Steam
+  and the remaining 5 entirely from SteamGridDB. Optional, and the app says so
+  when artwork is missing and the key that would fix it is not set
 - Launching, by `steam://` for Steam and directly for anything else
 - A detail view, favourites that survive a rescan, filter presets, search
 - **Adding any other game by typing its name**, with an on-screen keyboard

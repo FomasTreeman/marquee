@@ -197,6 +197,15 @@ prints that table for a spread of real games — one Steam has everything for,
 one it has nothing for, and cases in between. Run it after touching the
 pipeline.
 
+### The two searches are different questions
+
+`search_games` searches the **Steam store** and answers *"which game is this"*.
+`search_artwork` searches **SteamGridDB** and answers *"whose artwork should
+this use"*. Using the first for the second was a real bug and a subtle one: the
+picker offered Steam results, the obvious match was the game itself, and
+choosing it re-pointed the game at its own appid — a no-op that looked exactly
+like a fix. Three of those accumulated in the database before anyone noticed.
+
 ### What "working" means here
 
 An asset is accepted only if it **downloads, decodes, is not a placeholder, and

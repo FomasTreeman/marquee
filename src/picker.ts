@@ -12,7 +12,7 @@
  * one can be wrong, so they must show the same candidates in the same order --
  * otherwise the fix cannot reach what the mistake reached.
  */
-import { searchGames, coverFor, type SearchHit } from './library'
+import { searchGames, searchArtwork, coverFor, type SearchHit } from './library'
 import { logWarn } from './log'
 
 const DEBOUNCE_MS = 280
@@ -21,6 +21,13 @@ export interface PickRequest {
   heading: string
   sub: string
   initial?: string
+  /** Which catalogue to search.
+   *
+   *  `games` is the Steam store — "which game is this". `artwork` is
+   *  SteamGridDB — "whose artwork should this use". Using the first for the
+   *  second was the bug: it could only ever offer another Steam appid, which
+   *  is no help when the missing artwork is Steam's. */
+  source?: 'games' | 'artwork'
   /** Offer a file picker alongside the search field. */
   browse?: {
     label: string
@@ -125,7 +132,11 @@ export function createPicker(): Picker {
       img.addEventListener('load', () => {
         if (img.naturalWidth > img.naturalHeight) img.style.objectFit = 'contain'
       })
-      img.src = coverFor(hit) ?? hit.thumbnail
+      // A SteamGridDB result has no Steam appid to build a cover from, so its
+      // own thumbnail is the picture.
+      img.src = hit.appId.startsWith('sgdb:')
+        ? (hit.thumbnail || '')
+        : (coverFor(hit) ?? hit.thumbnail)
       const name = el('span', undefined, card)
       name.textContent = hit.name
       card.onclick = () => { selected = i; void choose() }
@@ -144,7 +155,13 @@ export function createPicker(): Picker {
     }
     status.textContent = 'Searching…'
     try {
-      const found = await searchGames(term)
+      const found = request?.source === 'artwork'
+        ? (await searchArtwork(term)).map((e) => ({
+            appId: `sgdb:${e.id}`,
+            name: e.name,
+            thumbnail: e.cover,
+          }))
+        : await searchGames(term)
       if (gen !== generation) return
       hits = found
       selected = 0

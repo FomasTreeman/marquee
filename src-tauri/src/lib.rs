@@ -133,6 +133,29 @@ fn set_art_source(
     store.set_art_source(&game_id, app_id.as_deref())
 }
 
+/// Search SteamGridDB by name, for the artwork picker.
+///
+/// Distinct from `search_games`, which searches the Steam store. That one
+/// answers "which game is this"; this one answers "whose artwork should this
+/// use", and they are different questions -- searching Steam could only ever
+/// re-point a game at another Steam appid, which is no help when the missing
+/// artwork is Steam's.
+#[tauri::command]
+async fn search_artwork(
+    term: String,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<Vec<sgdb::Entry>, String> {
+    let Some(key) = store.setting(sgdb::SETTING_KEY)?.filter(|k| !k.is_empty()) else {
+        return Err("no SteamGridDB key — add one in Settings".into());
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        let client = crate::meta::http_client().ok_or("no HTTP client")?;
+        Ok(sgdb::search(&client, &key, &term))
+    })
+    .await
+    .map_err(|e| format!("search task failed: {e}"))?
+}
+
 #[tauri::command]
 fn set_custom_title(
     game_id: String,
@@ -273,42 +296,39 @@ pub fn run() {
         // Asynchronous because the first request for an asset goes out to the
         // CDN, and a blocking handler would stall the webview.
         .register_asynchronous_uri_scheme_protocol("art", |app, request, responder| {
-            // Read once per request rather than captured: the key can be set
-            // while the app is running, and artwork should start using it
-            // immediately rather than after a restart.
+            // Read per request rather than captured: the key can be set while
+            // the app is running, and artwork should start using it at once.
             let sgdb_key = app
                 .app_handle()
                 .try_state::<std::sync::Arc<store::Store>>()
                 .and_then(|s: tauri::State<'_, std::sync::Arc<store::Store>>| {
                     s.setting(sgdb::SETTING_KEY).ok().flatten()
                 });
-            // `art://localhost/<appid>/<kind>` or, on Windows,
-            // `http://art.localhost/<appid>/<kind>`.
+
+            // `art://localhost/<source>-<id>/<kind>`, where source is `steam`
+            // or `sgdb`. Source-qualified because a game can borrow artwork
+            // from a SteamGridDB entry that has no Steam appid at all.
             let path = request.uri().path().trim_matches('/').to_string();
             std::thread::spawn(move || {
                 let mut parts = path.split('/');
-                let app_id = parts.next().unwrap_or_default().to_string();
+                let key = parts.next().and_then(art::SourceKey::parse);
                 let kind = parts.next().and_then(art::Kind::parse);
 
-                // An appid reaches this from a file on disk, so it is validated
-                // rather than trusted -- digits only, which cannot traverse a
-                // directory whatever else it tries.
-                let valid = !app_id.is_empty()
-                    && app_id.len() <= 12
-                    && app_id.chars().all(|c| c.is_ascii_digit());
-
-                let response = match (valid, kind) {
-                    (true, Some(kind)) => match art::fetch(&app_id, kind, sgdb_key.as_deref()) {
-                        Some(bytes) => tauri::http::Response::builder()
-                            .header("Content-Type", kind.mime())
-                            // Immutable: the cache is on disk and keyed by
-                            // appid, so the webview need never revalidate.
-                            .header("Cache-Control", "public, max-age=31536000, immutable")
-                            .body(bytes),
-                        None => tauri::http::Response::builder()
-                            .status(404)
-                            .body(Vec::new()),
-                    },
+                let response = match (key, kind) {
+                    (Some(key), Some(kind)) => {
+                        match art::fetch(&key, kind, sgdb_key.as_deref()) {
+                            Some(bytes) => tauri::http::Response::builder()
+                                .header("Content-Type", kind.mime())
+                                // Immutable: the cache is on disk and keyed by
+                                // source and id, so the webview need never
+                                // revalidate.
+                                .header("Cache-Control", "public, max-age=31536000, immutable")
+                                .body(bytes),
+                            None => tauri::http::Response::builder()
+                                .status(404)
+                                .body(Vec::new()),
+                        }
+                    }
                     _ => tauri::http::Response::builder()
                         .status(400)
                         .body(Vec::new()),
@@ -360,7 +380,8 @@ pub fn run() {
             locate::find_executable,
             get_settings,
             set_steamgriddb_key,
-            art::artwork_report
+            art::artwork_report,
+            search_artwork
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Marquee");

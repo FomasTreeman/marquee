@@ -86,7 +86,29 @@ export interface SearchHit {
  *  placeholder detection and the fallback chain rather than pointing at a raw
  *  CDN path that is a grey box for a lot of recent games. */
 export function coverFor(hit: SearchHit): string | undefined {
-  return steamArtwork(hit.appId).cover
+  return steamArtwork(`steam-${hit.appId}`).cover
+}
+
+/** A SteamGridDB entry, as offered by the artwork picker. */
+export interface ArtworkEntry {
+  id: string
+  name: string
+  cover: string
+}
+
+/**
+ * Search SteamGridDB by name.
+ *
+ * Distinct from `searchGames`, which searches the Steam store. That answers
+ * "which game is this"; this answers "whose artwork should this use", and they
+ * are different questions — searching Steam could only ever re-point a game at
+ * another Steam appid, which is no help when the missing artwork is Steam's.
+ *
+ * Rejects with a readable reason when no key is configured.
+ */
+export async function searchArtwork(term: string): Promise<ArtworkEntry[]> {
+  if (!inApp) return []
+  return call<ArtworkEntry[]>('search_artwork', { term })
 }
 
 /**
@@ -230,21 +252,36 @@ export async function initArtwork(): Promise<void> {
   }
 }
 
-/** The appid a game's artwork should be built on: the user's correction if
- *  there is one, otherwise its own. */
+/**
+ * The source-qualified key a game's artwork is looked up under.
+ *
+ * `steam-1091500` or `sgdb-8452`. Qualified because a game can borrow artwork
+ * from a SteamGridDB entry that has no Steam appid at all — which is the whole
+ * point when the missing artwork is Steam's.
+ */
 export function artIdFor(game: Pick<Game, 'providerId' | 'artAppId'>): string | undefined {
-  const id = game.artAppId ?? game.providerId
-  return /^\d+$/.test(id) ? id : undefined
+  const override = game.artAppId
+  if (override?.startsWith('sgdb:')) {
+    const id = override.slice(5)
+    return /^\d+$/.test(id) ? `sgdb-${id}` : undefined
+  }
+  const id = override ?? game.providerId
+  return /^\d+$/.test(id) ? `steam-${id}` : undefined
 }
 
-export function steamArtwork(appid: string): Artwork {
+export function steamArtwork(key: string): Artwork {
   if (artBase) {
     return {
-      cover: `${artBase}${appid}/cover`,
-      hero: `${artBase}${appid}/hero`,
-      logo: `${artBase}${appid}/logo`,
+      cover: `${artBase}${key}/cover`,
+      hero: `${artBase}${key}/hero`,
+      logo: `${artBase}${key}/logo`,
     }
   }
+  // No protocol handler in a plain browser tab, so straight to the CDN. Only
+  // Steam keys can be served that way; a SteamGridDB one has no public URL we
+  // can construct.
+  const appid = key.startsWith('steam-') ? key.slice(6) : ''
+  if (!appid) return {}
   return {
     cover: `${CDN}/${appid}/library_600x900.jpg`,
     hero: `${CDN}/${appid}/library_hero.jpg`,

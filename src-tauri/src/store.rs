@@ -249,9 +249,13 @@ impl Store {
     /// Passing None clears the override and returns the game to its own
     /// artwork, which is the escape hatch when a correction was itself wrong.
     pub fn set_art_source(&self, game_id: &str, app_id: Option<&str>) -> Result<(), String> {
+        // Either a bare Steam appid or a `sgdb:<id>` reference. Both end up in
+        // a URL, so both are validated as digits after the prefix rather than
+        // trusted.
         if let Some(id) = app_id {
-            if id.is_empty() || !id.chars().all(|c| c.is_ascii_digit()) {
-                return Err(format!("not a valid Steam appid: {id:?}"));
+            let digits = id.strip_prefix("sgdb:").unwrap_or(id);
+            if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
+                return Err(format!("not a valid artwork reference: {id:?}"));
             }
         }
         self.with(|c| {
@@ -427,9 +431,19 @@ mod tests {
     #[test]
     fn an_art_source_must_be_digits() {
         let s = memory();
-        for bad in ["", "abc", "../../etc", "12 34", "1091500; DROP TABLE"] {
+        for bad in [
+            "",
+            "abc",
+            "../../etc",
+            "12 34",
+            "1091500; DROP TABLE",
+            "sgdb:",
+            "sgdb:x",
+        ] {
             assert!(s.set_art_source("steam:1", Some(bad)).is_err(), "{bad:?}");
         }
+        // A SteamGridDB reference is the other legitimate form.
+        assert!(s.set_art_source("steam:1", Some("sgdb:8452")).is_ok());
     }
 
     #[test]

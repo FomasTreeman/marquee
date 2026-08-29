@@ -32,6 +32,21 @@ struct Response {
 }
 
 #[derive(Deserialize)]
+struct Game {
+    id: u64,
+    #[serde(default)]
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct SearchResponse {
+    #[serde(default)]
+    success: bool,
+    #[serde(default)]
+    data: Vec<Game>,
+}
+
+#[derive(Deserialize)]
 struct Asset {
     url: String,
     #[serde(default)]
@@ -142,13 +157,23 @@ pub fn candidates_for_steam_app(
     if key.is_empty() {
         return Vec::new();
     }
-    let url = format!("{BASE}/{}/steam/{app_id}", want.path());
-    let Ok(response) = client
-        .get(&url)
-        .query(&want.query())
-        .bearer_auth(key)
-        .send()
-    else {
+    fetch_candidates(
+        client,
+        key,
+        &format!("{BASE}/{}/steam/{app_id}", want.path()),
+        want,
+    )
+}
+
+/// One request-and-parse path, shared by the Steam-appid and SteamGridDB-id
+/// lookups so they cannot drift apart in what they accept.
+fn fetch_candidates(
+    client: &reqwest::blocking::Client,
+    key: &str,
+    url: &str,
+    want: Want,
+) -> Vec<String> {
+    let Ok(response) = client.get(url).query(&want.query()).bearer_auth(key).send() else {
         return Vec::new();
     };
 
@@ -157,12 +182,7 @@ pub fn candidates_for_steam_app(
         return Vec::new();
     }
     if !response.status().is_success() {
-        log_debug!(
-            "sgdb",
-            "{} for {app_id}: {}",
-            want.path(),
-            response.status()
-        );
+        log_debug!("sgdb", "{url}: {}", response.status());
         return Vec::new();
     }
 
@@ -170,18 +190,99 @@ pub fn candidates_for_steam_app(
         return Vec::new();
     };
     if !body.success {
-        log_debug!("sgdb", "{} for {app_id}: {:?}", want.path(), body.errors);
+        log_debug!("sgdb", "{url}: {:?}", body.errors);
         return Vec::new();
     }
     let out = candidates_from(&body, want);
     log_debug!(
         "sgdb",
-        "{} for {app_id}: {} of {} submissions usable",
-        want.path(),
+        "{url}: {} of {} submissions usable",
         out.len(),
         body.data.len()
     );
     out
+}
+
+/// A SteamGridDB entry, for the artwork picker.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Entry {
+    /// SteamGridDB's own game id, not a Steam appid.
+    pub id: String,
+    pub name: String,
+    /// First available grid, so a result looks like the card it will become.
+    pub cover: String,
+}
+
+/// Search SteamGridDB by name.
+///
+/// The artwork picker searched the *Steam store*, which cannot help a game
+/// whose Steam artwork is the thing that is missing -- picking the obvious
+/// match just re-pointed a game at its own appid and changed nothing. This
+/// searches the source that actually has the art.
+pub fn search(client: &reqwest::blocking::Client, key: &str, term: &str) -> Vec<Entry> {
+    if key.is_empty() || term.trim().len() < 2 {
+        return Vec::new();
+    }
+    let url = format!("{BASE}/search/autocomplete/{}", urlencode(term.trim()));
+    let Ok(response) = client.get(&url).bearer_auth(key).send() else {
+        return Vec::new();
+    };
+    if response.status() == 401 || response.status() == 403 {
+        log_warn!("sgdb", "key rejected — check it in Settings");
+        return Vec::new();
+    }
+    let Ok(body) = response.json::<SearchResponse>() else {
+        return Vec::new();
+    };
+    if !body.success {
+        return Vec::new();
+    }
+
+    // A thumbnail per result costs a request each, so only the first few get
+    // one. A picker with eight rows and no pictures is not a picker.
+    const WITH_ART: usize = 6;
+    body.data
+        .into_iter()
+        .take(WITH_ART)
+        .map(|g| Entry {
+            cover: candidates_for_game(client, key, g.id, Want::Grid)
+                .into_iter()
+                .next()
+                .unwrap_or_default(),
+            id: g.id.to_string(),
+            name: g.name,
+        })
+        .collect()
+}
+
+/// Assets for a SteamGridDB game id, as opposed to a Steam appid.
+pub fn candidates_for_game(
+    client: &reqwest::blocking::Client,
+    key: &str,
+    game_id: u64,
+    want: Want,
+) -> Vec<String> {
+    fetch_candidates(
+        client,
+        key,
+        &format!("{BASE}/{}/game/{game_id}", want.path()),
+        want,
+    )
+}
+
+/// Percent-encode a search term. Game names contain spaces, colons and
+/// apostrophes, all of which break a bare path segment.
+fn urlencode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            b' ' => "%20".to_string(),
+            other => format!("%{other:02X}"),
+        })
+        .collect()
 }
 
 #[cfg(test)]

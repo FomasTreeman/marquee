@@ -19,7 +19,7 @@ import { toast } from './toast'
 import { hostInfo, pingMs, inApp } from './host'
 import { createInput, padStatus, type Action } from './input'
 import {
-  scanLibrary, requestMeta, onMeta, launchGame, toggleFavourite,
+  scanLibrary, requestMeta, onMeta, launchGame, toggleFavourite, getSettings,
   addManualGame, setManualExecutable, setArtSource, artworkReport,
   initArtwork, steamArtwork, artIdFor, tintFor,
   type Artwork, type Game, type Meta, type ScanResult,
@@ -241,7 +241,7 @@ async function main(): Promise<void> {
     games = MOCK ? SAMPLE_LIBRARY(MOCK) : scan.games
     // Artwork follows the user's override where there is one, so a game whose
     // own appid has no cover can borrow another's.
-    art = games.map((g) => { const id = artIdFor(g); return id ? steamArtwork(id) : {} })
+    art = games.map((g) => { const key = artIdFor(g); return key ? steamArtwork(key) : {} })
     // A title already known beats waiting for the worker to re-announce it.
     games.forEach((g) => { const m = meta.get(g.providerId); if (m && !g.title) g.title = m.name })
 
@@ -422,9 +422,24 @@ async function main(): Promise<void> {
    * now there was no way back from that.
    */
   function openArtwork(game: Game): void {
+    if (!steamGridDbKey) {
+      // Searching Steam here is what made the previous attempts do nothing:
+      // the obvious match is the game itself, and re-pointing a game at its own
+      // appid changes exactly nothing.
+      toast(
+        'Finding artwork needs a SteamGridDB key — it is the source that has ' +
+          'the art Steam is missing. Add one in Settings (Select).',
+        'error',
+        9000,
+      )
+      settings.open()
+      if (padConnected) osk.attach(settings.field)
+      return
+    }
     picker.open({
       heading: 'Find artwork',
-      sub: `Search for the name ${game.title || 'this game'} is listed under. Its artwork will be used.`,
+      source: 'artwork',
+      sub: `Pick the SteamGridDB entry to take artwork from. ${game.title || 'This game'} will use its cover, key art and wordmark.`,
       initial: game.title,
       async onPick(hit) {
         try {
@@ -443,7 +458,20 @@ async function main(): Promise<void> {
     checkNow('artwork')
   }
 
+  // Whether the second artwork source is available at all. Read once at start
+  // and refreshed when settings change.
+  let steamGridDbKey = ''
+  async function refreshSettings(): Promise<void> {
+    try {
+      steamGridDbKey = (await getSettings()).steamgriddbKey
+    } catch {
+      steamGridDbKey = ''
+    }
+  }
+  await refreshSettings()
+
   const settings = createSettings(() => {
+    void refreshSettings()
     // Artwork was cleared, so every <img> must be asked again. Reloading the
     // library rebuilds them all with the same URLs, which the webview will now
     // re-request because the cache behind them is empty.
@@ -563,6 +591,25 @@ async function main(): Promise<void> {
         selfCheck: () => import('./selfcheck').then((m) => m.runSelfCheck()),
       },
     })
+  }
+
+  // If artwork is missing and the source that would fix it is switched off,
+  // say so. Silence here is what made a missing key look like a broken app:
+  // the second source had never been consulted, and nothing on screen said so.
+  if (!steamGridDbKey && games.length) {
+    void artworkReport(games.map((g) => g.providerId).filter((id) => /^\d+$/.test(id)))
+      .then((report) => {
+        const gaps = report.filter((r) => r.cover === 'none' || r.logo === 'none').length
+        if (!gaps) return
+        logInfo('art', `${gaps} game(s) missing artwork and no SteamGridDB key set`)
+        toast(
+          `${gaps} game${gaps === 1 ? ' is' : 's are'} missing artwork Steam does not have. ` +
+            'A free SteamGridDB key fills them in — Settings, on Select.',
+          'info',
+          10_000,
+        )
+      })
+      .catch(() => { /* a report we cannot read is not worth a message */ })
   }
 
   // Asserts the invariants error handling cannot see -- artwork actually
