@@ -107,8 +107,13 @@ pnpm app        # the real thing: Tauri window, real numbers
 pnpm dev        # plain browser tab, fast loop for CSS work only
 pnpm tokens     # regenerate src/css/tokens.css from design/tokens.json
 pnpm logs       # tail the log (both runtimes, one file)
-pnpm test       # cargo test + tsc
+pnpm test       # frontend tests + tsc + cargo test
+pnpm build:windows   # cross-compile a Windows .exe from here
 ```
+
+`pnpm build:windows` needs a one-time setup and produces a bare executable, not
+an installer — see [docs/WINDOWS.md](docs/WINDOWS.md). It proves the code
+compiles for Windows; it does not prove it works there.
 
 `?mock=40` populates the library with real Steam titles — useful on a machine
 with two games installed. `?hud=0` hides the HUD, and **P** toggles it.

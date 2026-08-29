@@ -94,12 +94,18 @@ fn windows_keep_awake(on: bool) {
     const ES_CONTINUOUS: u32 = 0x8000_0000;
     const ES_DISPLAY_REQUIRED: u32 = 0x0000_0002;
     const ES_SYSTEM_REQUIRED: u32 = 0x0000_0001;
-    unsafe {
+    // Returns the previous state, or zero on failure. Worth reporting: a
+    // machine where this silently does nothing is one where the screen blanks
+    // mid-session and nobody knows why.
+    let previous = unsafe {
         windows_sys::Win32::System::Power::SetThreadExecutionState(if on {
             ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED
         } else {
             ES_CONTINUOUS
-        });
+        })
+    };
+    if previous == 0 {
+        log_warn!("screen", "the system refused the display-awake request");
     }
 }
 
