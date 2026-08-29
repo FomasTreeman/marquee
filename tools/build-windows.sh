@@ -19,7 +19,10 @@ if [ -d /opt/homebrew/opt/llvm/bin ]; then
   export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
 fi
 
-for tool in clang-cl lld-link llvm-rc; do
+# clang-cl compiles and llvm-rc builds the Windows resource. The *linker* is
+# rust-lld, which ships with the Rust toolchain -- Homebrew's llvm formula does
+# not include lld-link, and requiring it blocks a build that works perfectly.
+for tool in clang-cl llvm-rc; do
   command -v "$tool" >/dev/null || {
     echo "error: $tool not found. Install LLVM:  brew install llvm" >&2
     exit 1

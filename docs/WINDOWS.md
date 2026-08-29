@@ -20,6 +20,11 @@ cargo install cargo-xwin
 `cargo-xwin` downloads Microsoft's CRT and SDK headers on first use and caches
 them, so the first build is slower than the ~2 minutes it takes afterwards.
 
+Note that Homebrew's `llvm` does **not** include `lld-link`, and it is not
+needed: the linker is `rust-lld`, which ships with the Rust toolchain. The
+script's first version checked for `lld-link` and refused to run — a
+precondition stricter than reality, blocking a build that worked.
+
 Homebrew keeps LLVM out of the default `PATH` because it shadows Apple's clang.
 The script adds it; if you run `cargo xwin` by hand, do the same.
 
