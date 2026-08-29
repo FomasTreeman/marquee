@@ -281,8 +281,10 @@ export function runSelfCheck(): Check[] {
   // unreachable. Asserting on it reported a failure while the interface was
   // working exactly as designed, which is the second time that mistake has
   // been made here and the reason the rule below is written down.
+  // Innermost first. `.add` is shared by the picker and the settings panel,
+  // and only one of them is ever open.
   const overlays: Array<[string, string]> = [
-    ['.add', 'game picker'],
+    ['.add:not([hidden])', 'panel'],
     ['.detail', 'detail view'],
   ]
   const topmost = overlays.find(([sel]) => {

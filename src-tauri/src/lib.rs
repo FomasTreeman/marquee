@@ -14,6 +14,7 @@ mod meta;
 mod paths;
 mod run;
 mod search;
+mod sgdb;
 mod store;
 mod vdf;
 
@@ -141,6 +142,34 @@ fn set_custom_title(
     store.set_custom_title(&game_id, title.as_deref())
 }
 
+/// Settings the interface can read. Only one so far.
+#[tauri::command]
+fn get_settings(
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "steamgriddbKey": store.setting(sgdb::SETTING_KEY)?.unwrap_or_default(),
+    }))
+}
+
+/// Set the SteamGridDB key, and re-resolve artwork.
+///
+/// Clearing the artwork cache is the point rather than housekeeping: every game
+/// that previously found nothing has a recorded miss, and without clearing them
+/// a new key would visibly do nothing for exactly the games it was added for.
+#[tauri::command]
+fn set_steamgriddb_key(
+    key: String,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<(), String> {
+    store.set_setting(sgdb::SETTING_KEY, &key)?;
+    match art::clear_cache() {
+        Ok(()) => log_info!("art", "artwork cache cleared after a source change"),
+        Err(e) => log_warn!("art", "could not clear the artwork cache: {e}"),
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn toggle_favourite(
     game_id: String,
@@ -243,7 +272,16 @@ pub fn run() {
         // library renders offline and each asset is fetched exactly once ever.
         // Asynchronous because the first request for an asset goes out to the
         // CDN, and a blocking handler would stall the webview.
-        .register_asynchronous_uri_scheme_protocol("art", |_app, request, responder| {
+        .register_asynchronous_uri_scheme_protocol("art", |app, request, responder| {
+            // Read once per request rather than captured: the key can be set
+            // while the app is running, and artwork should start using it
+            // immediately rather than after a restart.
+            let sgdb_key = app
+                .app_handle()
+                .try_state::<std::sync::Arc<store::Store>>()
+                .and_then(|s: tauri::State<'_, std::sync::Arc<store::Store>>| {
+                    s.setting(sgdb::SETTING_KEY).ok().flatten()
+                });
             // `art://localhost/<appid>/<kind>` or, on Windows,
             // `http://art.localhost/<appid>/<kind>`.
             let path = request.uri().path().trim_matches('/').to_string();
@@ -260,7 +298,7 @@ pub fn run() {
                     && app_id.chars().all(|c| c.is_ascii_digit());
 
                 let response = match (valid, kind) {
-                    (true, Some(kind)) => match art::fetch(&app_id, kind) {
+                    (true, Some(kind)) => match art::fetch(&app_id, kind, sgdb_key.as_deref()) {
                         Some(bytes) => tauri::http::Response::builder()
                             .header("Content-Type", kind.mime())
                             // Immutable: the cache is on disk and keyed by
@@ -316,7 +354,9 @@ pub fn run() {
             toggle_favourite,
             set_art_source,
             set_custom_title,
-            locate::find_executable
+            locate::find_executable,
+            get_settings,
+            set_steamgriddb_key
         ])
         .run(tauri::generate_context!())
         .expect("failed to start Marquee");

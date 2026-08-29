@@ -127,6 +127,21 @@ export async function removeManualGame(id: number): Promise<void> {
  * The appid a game *is* is not always the appid whose artwork it should
  * borrow, and no amount of renaming fixes that.
  */
+export interface Settings {
+  steamgriddbKey: string
+}
+
+export async function getSettings(): Promise<Settings> {
+  if (!inApp) return { steamgriddbKey: '' }
+  return call<Settings>('get_settings')
+}
+
+/** Saving also clears the artwork cache, so games that previously found
+ *  nothing are re-resolved against the new source. */
+export async function setSteamGridDbKey(key: string): Promise<void> {
+  return call<void>('set_steamgriddb_key', { key })
+}
+
 export async function setArtSource(gameId: string, appId: string | null): Promise<void> {
   return call<void>('set_art_source', { gameId, appId })
 }

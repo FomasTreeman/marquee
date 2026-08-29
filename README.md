@@ -55,6 +55,10 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
 - Cover art, wide key art and transparent wordmarks, fetched once, resized on
   ingest, then served from disk. The library renders with no network at all
 - Names, descriptions, genres, dates and scores — **no API key anywhere**
+- **A second artwork source.** Steam's own art has real gaps: recent releases
+  publish a grey placeholder where a cover should be, and plenty of games have
+  no transparent wordmark at all. Paste a free SteamGridDB key in Settings and
+  those fill in. Entirely optional — nothing is gated on it
 - Launching, by `steam://` for Steam and directly for anything else
 - A detail view, favourites that survive a rescan, filter presets, search
 - **Adding any other game by typing its name**, with an on-screen keyboard

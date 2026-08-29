@@ -388,11 +388,24 @@ free and open, not as a storefront.
 Genuinely absent from Steam: Epic exclusives that never came across, Game Pass
 and Xbox-only titles, most console emulation, and some itch releases.
 
-For those, **and only those**, two optional keys can be pasted into settings:
-SteamGridDB for art and RAWG for text. Both are plain per-user keys with no
-client secret, so neither needs a proxy. Both are strictly opt-in, and the
-settings screen must present them as *"if you have games Steam has never heard
-of"* rather than as setup.
+**SteamGridDB is now implemented**, and the gap it fills turned out to be
+larger and closer to home than this section assumed. It is not only for games
+Steam has never heard of:
+
+- Steam serves a **flat grey placeholder rather than a 404** when an asset does
+  not exist, and does this for a lot of recent releases. Battlefield 6's
+  portrait cover and wordmark are both placeholders while its wide art is real.
+- Plenty of well-known games have **no transparent wordmark at all**, and the
+  wordmark is what the hero is built around.
+
+So the artwork chain is: Steam's own asset, then SteamGridDB if a key is
+configured, then the wide store capsule letterboxed. Every candidate is checked
+by looking at its pixels, because a 200 proves nothing.
+
+The key is free, per-user, and carries no client secret — no proxy, no server.
+Strictly opt-in, and the settings screen says so rather than presenting an empty
+field as though setup were incomplete. RAWG remains unimplemented and is only
+needed for text on games with no Steam page at all.
 
 IGDB is out entirely: it requires a Twitch client secret, which cannot ship in
 a distributed application, which would force us to run a server. Keep the

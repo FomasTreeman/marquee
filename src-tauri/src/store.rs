@@ -16,7 +16,7 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::{log_info, paths};
@@ -58,6 +58,14 @@ const MIGRATIONS: &[&str] = &[
     "CREATE TABLE game_root (
         path     TEXT PRIMARY KEY,
         added_at INTEGER NOT NULL
+     );",
+    // v4. Settings, of which there is currently one: a SteamGridDB key.
+    //
+    // A plain key/value table rather than typed columns, because settings
+    // arrive one at a time and a migration per setting is a poor trade.
+    "CREATE TABLE setting (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
      );",
 ];
 
@@ -271,6 +279,38 @@ impl Store {
 }
 
 impl Store {
+    pub fn setting(&self, key: &str) -> Result<Option<String>, String> {
+        self.with(|c| {
+            c.query_row(
+                "SELECT value FROM setting WHERE key = ?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .optional()
+        })
+    }
+
+    /// Store a setting, or remove it when the value is blank.
+    ///
+    /// Blank-means-remove matters for the SteamGridDB key: clearing the field
+    /// must actually turn the source off, not store an empty key that fails
+    /// every request.
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        let value = value.trim();
+        self.with(|c| {
+            if value.is_empty() {
+                c.execute("DELETE FROM setting WHERE key = ?1", params![key])?;
+            } else {
+                c.execute(
+                    "INSERT INTO setting (key, value) VALUES (?1, ?2)
+                     ON CONFLICT(key) DO UPDATE SET value = ?2",
+                    params![key, value],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
     /// Remember where a game was found, so the next one nearby is found for
     /// free.
     ///
@@ -448,6 +488,18 @@ mod tests {
         s.remember_root("/game.exe").unwrap();
         s.remember_root("/a/game.exe").unwrap();
         assert!(!s.game_roots().unwrap().contains(&"/".to_string()));
+    }
+
+    #[test]
+    fn a_setting_round_trips_and_blank_removes_it() {
+        let s = memory();
+        assert_eq!(s.setting("sgdb_key").unwrap(), None);
+        s.set_setting("sgdb_key", "  abc123  ").unwrap();
+        assert_eq!(s.setting("sgdb_key").unwrap().as_deref(), Some("abc123"));
+        // Clearing the field must turn the source off, not store an empty key
+        // that fails every request.
+        s.set_setting("sgdb_key", "   ").unwrap();
+        assert_eq!(s.setting("sgdb_key").unwrap(), None);
     }
 
     /// The property the whole schema exists for.

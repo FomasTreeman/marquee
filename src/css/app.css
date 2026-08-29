@@ -682,3 +682,12 @@ body::after {
   font-size: calc(13px * var(--s));
   color: var(--fg3);
 }
+
+
+.settings-help {
+  margin: calc(14px * var(--s)) 0 calc(20px * var(--s));
+  max-width: calc(620px * var(--s));
+  font-size: calc(14px * var(--s));
+  line-height: 1.6;
+  color: var(--fg3);
+}

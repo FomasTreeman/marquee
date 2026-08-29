@@ -13,6 +13,7 @@ import { createDetail } from './detail'
 import { createPicker } from './picker'
 import { createHud } from './hud'
 import { createOsk } from './osk'
+import { createSettings } from './settings'
 import { toast } from './toast'
 import { hostInfo, pingMs, inApp } from './host'
 import { createInput, padStatus, type Action } from './input'
@@ -102,7 +103,7 @@ async function main(): Promise<void> {
   const backdrop = createBackdrop(shell.backdropA, shell.backdropB)
   setHints(shell.hints, [
     ['A', 'Play'], ['Y', 'Details'], ['X', 'Favourite'],
-    ['LB/RB', 'Filter'], ['/', 'Search'], ['☰', 'Add a game'],
+    ['LB/RB', 'Filter'], ['/', 'Search'], ['☰', 'Add a game'], ['⧉', 'Settings'],
   ])
 
   // Library state. Rebuilt wholesale by reloadLibrary(), so adding a game
@@ -416,6 +417,13 @@ async function main(): Promise<void> {
     checkNow('artwork')
   }
 
+  const settings = createSettings(() => {
+    // Artwork was cleared, so every <img> must be asked again. Reloading the
+    // library rebuilds them all with the same URLs, which the webview will now
+    // re-request because the cache behind them is empty.
+    void reloadLibrary()
+  })
+
   const detail = createDetail({
     onPlay: () => void play(grid.focused),
     onChanged: () => void reloadLibrary(),
@@ -452,6 +460,7 @@ async function main(): Promise<void> {
     //
     // The keyboard is innermost of all: while it is up, the pad is typing.
     if (osk.handle(e.action)) return
+    if (settings.handle(e.action)) return
     if (picker.handle(e.action)) return
     if (detail.handle(e.action)) return
 
@@ -459,7 +468,13 @@ async function main(): Promise<void> {
       if (e.action === 'perf') { hud.toggle(); return }
       if (e.action === 'a') { void play(grid.focused); return }
       if (e.action === 'x') { void favourite(grid.focused); return }
-      if (e.action === 'menu' || e.action === 'mainmenu') { openAdd(); return }
+      if (e.action === 'menu') { openAdd(); return }
+      if (e.action === 'mainmenu') {
+        settings.open()
+        if (padConnected) osk.attach(settings.field)
+        checkNow('settings')
+        return
+      }
       if (e.action === 'y') {
         const game = gameAt(grid.focused)
         if (game) {
@@ -506,6 +521,7 @@ async function main(): Promise<void> {
         detail,
         openAdd,
         openArtwork,
+        settings,
         play,
         favourite,
         reloadLibrary,

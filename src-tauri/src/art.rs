@@ -132,30 +132,45 @@ fn path_for(app_id: &str, kind: Kind) -> PathBuf {
 }
 
 /// Fetch, resize and store. Returns the bytes ready to serve.
-pub fn fetch(app_id: &str, kind: Kind) -> Option<Vec<u8>> {
+pub fn fetch(app_id: &str, kind: Kind, sgdb_key: Option<&str>) -> Option<Vec<u8>> {
     let path = path_for(app_id, kind);
 
-    // A zero-byte file records "Steam has no such asset", so a game without a
-    // wordmark is not re-requested on every launch.
+    // A zero-byte file records "no source has this", so a game without a
+    // wordmark is not re-asked about on every launch.
     if let Ok(bytes) = std::fs::read(&path) {
         return if bytes.is_empty() { None } else { Some(bytes) };
     }
 
     let client = crate::meta::http_client()?;
 
-    // Candidates in preference order. Cover and hero fall back to the wide
-    // store capsule, which for some recent releases is the only real artwork
-    // published at all -- and a wide image cropped into a portrait card beats
-    // a grey box by a distance.
+    // Sources in preference order.
+    //
+    //   1. Steam's own asset. Correct when it exists, and free.
+    //   2. SteamGridDB, if a key is configured. Community art, and the only
+    //      source for the many games Steam publishes no wordmark for at all.
+    //   3. The wide store capsule, which for some recent releases is the only
+    //      real artwork published anywhere. Letterboxed rather than cropped.
     let mut candidates = vec![format!(
         "https://cdn.cloudflare.steamstatic.com/steam/apps/{app_id}/{}",
         kind.file()
     )];
+
+    if let Some(key) = sgdb_key.filter(|k| !k.is_empty()) {
+        let want = match kind {
+            Kind::Cover => crate::sgdb::Want::Grid,
+            Kind::Hero => crate::sgdb::Want::Hero,
+            Kind::Logo => crate::sgdb::Want::Logo,
+        };
+        if let Some(url) = crate::sgdb::best_for_steam_app(&client, key, app_id, want) {
+            candidates.push(url);
+        }
+    }
+
     if kind != Kind::Logo {
         // Fetched inline rather than waited for. The background worker will
         // reach this appid eventually, but a card being drawn now cannot wait
-        // several minutes for it -- and both paths share one cache, so this
-        // costs at most one request ever.
+        // several minutes -- and both paths share one cache and one rate gate,
+        // so this costs at most one request ever.
         if let crate::meta::Fetched::Found(m) = crate::meta::fetch_one(&client, app_id) {
             if !m.header_image.is_empty() {
                 candidates.push(m.header_image);
@@ -191,9 +206,10 @@ pub fn fetch(app_id: &str, kind: Kind) -> Option<Vec<u8>> {
 
     let Some(raw) = raw else {
         log_debug!("art", "no usable {} for {app_id}", kind.file());
-        // Every candidate was tried, so this miss is a real one and worth
-        // remembering: without it, a game with no artwork costs three requests
-        // on every single launch.
+        // Every source was tried, so this miss is real and worth remembering:
+        // without it, a game with no artwork costs several requests on every
+        // launch. Adding a SteamGridDB key clears these, so a miss recorded
+        // without one is not permanent.
         let _ = paths::ensure(path.parent()?);
         let _ = std::fs::write(&path, b"");
         return None;
@@ -214,6 +230,19 @@ pub fn fetch(app_id: &str, kind: Kind) -> Option<Vec<u8>> {
         let _ = std::fs::rename(&tmp, &path);
     }
     Some(encoded)
+}
+
+/// Throw away every cached image and every recorded miss.
+///
+/// Called when the artwork sources change -- adding a SteamGridDB key must
+/// re-resolve everything that previously found nothing, or the key appears to
+/// do nothing at all for the games that needed it most.
+pub fn clear_cache() -> std::io::Result<()> {
+    let dir = paths::cache_dir().join("art");
+    if dir.exists() {
+        std::fs::remove_dir_all(&dir)?;
+    }
+    Ok(())
 }
 
 /// Returns None when the original bytes should be stored unchanged -- either
@@ -395,7 +424,7 @@ mod live {
         let _ = std::fs::remove_dir_all(&dir);
 
         for (kind, must_have) in [(Kind::Cover, true), (Kind::Hero, true), (Kind::Logo, false)] {
-            let got = fetch("2807960", kind);
+            let got = fetch("2807960", kind, None);
             match &got {
                 Some(bytes) => {
                     let img = image::load_from_memory(bytes).expect("decodable");
