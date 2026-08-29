@@ -90,6 +90,15 @@ function openOverlay(): string | undefined {
 export function runSelfCheck(): Check[] {
   const out: Check[] = []
 
+  // Positions are written during a requestAnimationFrame, and a hidden window
+  // pauses those indefinitely while synchronous state carries on changing. So
+  // in a background tab the DOM can be an arbitrary number of moves behind
+  // reality, and any assertion about *where* something is measures the past.
+  //
+  // This has produced a false failure three times now, each one costing an
+  // investigation. Position is asserted only when the window can paint.
+  const painting = document.visibilityState === 'visible'
+
   // Assertions about the grid only mean anything while the grid is the top
   // surface. With an overlay open, "the cover art is painted on top" is false
   // and correct -- and a check that fires when the interface is working is
@@ -131,14 +140,25 @@ export function runSelfCheck(): Check[] {
   }
 
   // --- the focus ring exists and is not clipped -----------------------
-  const focused = covering ? null : document.querySelector<HTMLElement>('.card[data-focus="1"]')
+  // Exactly one, and it must be the one the grid thinks it is. Pooled slots
+  // are reused, so a stale attribute leaves a second ring on a card that has
+  // been recycled to a different game -- which is what happened.
+  const marked = document.querySelectorAll<HTMLElement>('.card[data-focus="1"]')
+  if (!covering && document.querySelector('.card')) {
+    out.push(check('exactly one card is marked focused', marked.length === 1,
+      `${marked.length} marked`))
+  }
+
+  const focused = covering ? null : (marked[0] ?? null)
   if (focused) {
     // Not just any card -- the focused one is where the cursor is, and a
     // cursor off the bottom of the viewport is how a grid loses its user.
     const fr = focused.getBoundingClientRect()
-    out.push(check('the focused card is on screen',
-      fr.top >= -1 && fr.bottom <= window.innerHeight + 1,
-      `top ${Math.round(fr.top)} bottom ${Math.round(fr.bottom)} of ${window.innerHeight}`))
+    if (painting) {
+      out.push(check('the focused card is on screen',
+        fr.top >= -1 && fr.bottom <= window.innerHeight + 1,
+        `top ${Math.round(fr.top)} bottom ${Math.round(fr.bottom)} of ${window.innerHeight}`))
+    }
 
     // The ring's opacity is transitioned, and a hidden window freezes
     // compositor animations mid-flight -- so a backgrounded tab reports 0 for a
@@ -237,8 +257,10 @@ export function runSelfCheck(): Check[] {
       `card ${Math.round(card.left)} vs hero ${Math.round(hero.left)}`))
     out.push(check('hero aligns with the top bar', Math.abs(hero.left - bar.left) <= 2,
       `hero ${Math.round(hero.left)} vs bar ${Math.round(bar.left)}`))
-    out.push(check('first card is on screen', card.top >= 0 && card.bottom <= window.innerHeight + 1,
-      `top ${Math.round(card.top)} bottom ${Math.round(card.bottom)} of ${window.innerHeight}`))
+    if (painting) {
+      out.push(check('first card is on screen', card.top >= 0 && card.bottom <= window.innerHeight + 1,
+        `top ${Math.round(card.top)} bottom ${Math.round(card.bottom)} of ${window.innerHeight}`))
+    }
   }
 
   // --- the hero actually says something --------------------------------
