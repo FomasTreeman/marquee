@@ -272,6 +272,9 @@ fn get_settings(
         "sort": store.setting("sort")?.unwrap_or_default(),
         "profileFolder": store.setting(profile::FOLDER_SETTING)?.unwrap_or_default(),
         "minimiseOnLaunch": store.setting("minimise_on_launch")?.map(|v| v != "0").unwrap_or(true),
+        // The version the user last said "not now" to, so the same prompt is
+        // not put in front of them on every launch.
+        "updateDeclined": store.setting("updateDeclined")?.unwrap_or_default(),
     }))
 }
 
@@ -537,6 +540,18 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        // Over-the-air updates.
+        //
+        // The plugin does the whole dangerous half: it fetches the manifest,
+        // verifies the bundle's signature against the public key in
+        // tauri.conf.json, and only then hands anything to the installer. A
+        // compromised host therefore serves a bundle that will not install
+        // rather than one that runs. Everything Marquee adds is *policy* --
+        // when to ask, and what the user is told -- and that lives in
+        // src/update.ts. See docs/UPDATES.md.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // Needed only so the app can restart itself after an update lands.
+        .plugin(tauri_plugin_process::init())
         // Artwork is served from our own cache rather than the network, so the
         // library renders offline and each asset is fetched exactly once ever.
         // Asynchronous because the first request for an asset goes out to the

@@ -1,0 +1,117 @@
+# Cut a release, and with it the update everyone else receives.
+#
+# Tag a commit `v0.2.0` and push the tag. This builds an installer for every
+# platform, signs each one with the private key held in repository secrets,
+# writes the `latest.json` manifest the updater reads, and attaches the lot to
+# a GitHub release.
+#
+# The whole flow, and why each piece exists, is in docs/UPDATES.md. The short
+# version: the running app fetches latest.json, compares versions, downloads
+# the bundle for its platform, and refuses to install it unless the signature
+# matches the public key compiled into the binary it is already running.
+#
+# Two secrets are required, both set under Settings -> Secrets and variables:
+#
+#   TAURI_SIGNING_PRIVATE_KEY           the contents of ~/.tauri/marquee.key
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password, empty string if none
+#
+# Lose that key and no existing install can ever be updated again, because
+# every one of them will reject a bundle signed by anything else.
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # Buildable without tagging, to prove the pipeline works before trusting it
+  # with a real release. Produces a draft, publishes nothing.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple silicon and Intel are separate bundles; the updater picks by
+          # target triple, so shipping only one leaves half the Macs stranded.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Linux dependencies
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libudev-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+
+      - run: pnpm install --frozen-lockfile
+
+      # The tag is the source of truth for the version, and the updater
+      # compares versions -- so a tag that disagrees with tauri.conf.json ships
+      # an update that either never offers itself or offers itself forever.
+      - name: The tag and the version agree
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          [ "$tag" = "$conf" ] || {
+            echo "::error::tag $tag does not match tauri.conf.json version $conf"
+            exit 1
+          }
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          args: --target ${{ matrix.target }}
+          tagName: ${{ github.ref_name }}
+          releaseName: Marquee ${{ github.ref_name }}
+          # Written by hand before publishing. An update prompt that says
+          # "see the commit log" is not telling anyone anything.
+          releaseBody: |
+            See the notes below for what changed.
+
+            Marquee updates itself: existing installs will offer this version
+            shortly after their next launch.
+          # A draft, always. The release is what every install downloads, so a
+          # human looks at it before it becomes that.
+          releaseDraft: true
+          prerelease: false
+          # This is the manifest the updater reads. Without it the release is
+          # just files nobody's app will ever find.
+          includeUpdaterJson: true

@@ -18,6 +18,8 @@ import {
   getSettings, setSteamGridDbKey, exportProfile, importProfile, setProfileFolder, setSetting,
 } from './library'
 import { padStatus, webviewPads } from './input'
+import { hostInfo } from './host'
+import { checkForUpdate } from './update'
 import { logInfo, logWarn } from './log'
 import { toast } from './toast'
 
@@ -97,6 +99,52 @@ export function createSettings(onChanged: () => void): SettingsView {
     describeMinimise()
     void setSetting('minimise_on_launch', minimiseOnLaunch ? '1' : '0')
       .catch((e) => toast(`Could not save that. ${String(e)}`, 'error'))
+  }
+
+  // --- updates --------------------------------------------------------
+  //
+  // The automatic check is deliberately quiet and only fires once, well after
+  // startup, on an idle screen. That is right for daily use and useless for
+  // finding out whether the thing works, so there is a button that asks now
+  // and reports whatever it finds, including "nothing".
+  const updates = section(
+    body,
+    'Updates',
+    'Checked once shortly after launch, and only offered when nothing else is ' +
+      'on screen. Every update is signed, and one that fails its signature ' +
+      'check will not install.',
+  )
+  const updateButton = el('button', 'action', updates.controls)
+  updateButton.textContent = 'Check for updates'
+  const updateStatus = el('p', 'settings-status', updates.root)
+  let version = ''
+  void hostInfo()
+    .then((h) => { version = h.version; updateStatus.textContent = `Version ${version}.` })
+    .catch(() => { /* the version is a nicety; the button works without it */ })
+
+  updateButton.onclick = () => {
+    updateButton.disabled = true
+    updateStatus.textContent = 'Checking…'
+    void checkForUpdate()
+      .then(async (update) => {
+        if (!update) {
+          updateStatus.textContent = `Version ${version} is the latest.`
+          return
+        }
+        updateStatus.textContent = `Version ${update.version} is available. Downloading…`
+        await update.install((percent) => {
+          if (percent !== undefined) {
+            updateStatus.textContent = `Downloading ${update.version}… ${percent}%`
+          }
+        })
+      })
+      .catch((e) => {
+        // Asked for explicitly, so unlike the automatic check this reports its
+        // failure rather than swallowing it.
+        logWarn('update', 'manual update check failed', e)
+        updateStatus.textContent = `Could not check for updates. ${String(e)}`
+      })
+      .finally(() => { updateButton.disabled = false })
   }
 
   // --- controller -----------------------------------------------------

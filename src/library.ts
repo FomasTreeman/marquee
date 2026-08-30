@@ -158,6 +158,8 @@ export interface Settings {
   profileFolder: string
   /** Whether to get out of a launching game's way. */
   minimiseOnLaunch: boolean
+  /** The version an update prompt was last refused for. See src/update.ts. */
+  updateDeclined: string
 }
 
 /** Store any single setting. */
@@ -168,7 +170,10 @@ export async function setSetting(key: string, value: string): Promise<void> {
 
 export async function getSettings(): Promise<Settings> {
   if (!inApp) {
-    return { steamgriddbKey: '', sort: 'recent', profileFolder: '', minimiseOnLaunch: true }
+    return {
+      steamgriddbKey: '', sort: 'recent', profileFolder: '',
+      minimiseOnLaunch: true, updateDeclined: '',
+    }
   }
   return call<Settings>('get_settings')
 }

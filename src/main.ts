@@ -28,6 +28,7 @@ import {
 } from './library'
 import { installErrorHandlers, logInfo, logWarn, logError, renderFatal, logPath } from './log'
 import { scheduleSelfCheck } from './selfcheck'
+import { declineUpdate, scheduleUpdateCheck, updateMenuItems } from './update'
 import {
   apply as applyFilter, describe as describeFilter,
   PRESETS, SORTS, type Preset, type Sort,
@@ -867,6 +868,44 @@ async function main(): Promise<void> {
   // painted on top, the focus ring not clipped, the shell laid out, the hero
   // populated. Every silent bug found so far would have failed one of these.
   if (import.meta.env.DEV || params.get('check') === '1') scheduleSelfCheck()
+
+  /**
+   * Offer an update, once, on a quiet screen.
+   *
+   * "Idle" means the library is showing with nothing over it. The check fires
+   * twenty seconds in, and by then the user may well have opened a menu or
+   * started a game -- so it is asked at the moment the answer arrives, not
+   * when the timer was set. If the screen is busy the offer is dropped for
+   * this session rather than retried: a launcher that keeps trying to
+   * interrupt you is worse than one that waits until tomorrow.
+   */
+  scheduleUpdateCheck(
+    () => !menu.isOpen && !settings.isOpen && !detail.isOpen && !picker.isOpen && !osk.isOpen,
+    (update) => {
+      menu.open({
+        title: `Marquee ${update.version} is available`,
+        items: updateMenuItems(update),
+        async onChoose(id) {
+          if (id !== 'install') {
+            await declineUpdate(update.version)
+            toast('Left as it is. It will be offered again next release.')
+            return
+          }
+          toast('Downloading…', 'info', 30_000)
+          try {
+            await update.install((percent) => {
+              if (percent !== undefined) toast(`Downloading… ${percent}%`, 'info', 30_000)
+            })
+          } catch (e) {
+            // The signature check failing lands here too, which is the whole
+            // point of it -- a bad bundle is an error, not an install.
+            toast(`Update failed. ${String(e)}`, 'error', 8000)
+            logWarn('update', 'install failed', e)
+          }
+        },
+      })
+    },
+  )
 
   logInfo('boot', `ready in ${(performance.now() - started).toFixed(0)} ms · ${games.length} games · shell=${inApp ? 'tauri' : 'browser'}`)
 }

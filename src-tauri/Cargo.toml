@@ -62,6 +62,7 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+tauri-plugin-process = "2.0.0-rc.1"
 
 [target.'cfg(windows)'.dependencies]
 # Only for SetThreadExecutionState, to stop the screen blanking while someone
@@ -70,6 +71,12 @@ windows-sys = { version = "0.59", features = ["Win32_System_Power"] }
 # Steam records its own install path in the registry. Reading it beats
 # guessing Program Files, because a lot of people move Steam to another drive.
 winreg = "0.52"
+
+# Over-the-air updates. Desktop only, which is every platform we ship on --
+# the target filter is what the plugin's own documentation asks for, since it
+# has no meaning on mobile. See docs/UPDATES.md for how the whole thing works.
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+tauri-plugin-updater = "2"
 
 [profile.dev]
 # The debug build is what we dogfood, so it should not feel like a debug build.

@@ -5,9 +5,9 @@
 # month four. That only works if every commit is built everywhere, so this runs
 # on all three from the start rather than "before release".
 #
-# The repository is private and there is no release pipeline yet; this exists to
-# catch the compile-time half of that risk now. The runtime half needs the
-# screenshot diff in §3, which is not built yet.
+# This catches the compile-time half of that risk. The runtime half needs the
+# screenshot diff in §3, which is not built yet. Releases are a separate
+# workflow -- see release.yml and docs/UPDATES.md.
 
 name: CI
 
@@ -64,6 +64,12 @@ jobs:
           python3 tools/build-tokens.py
           git diff --exit-code src/css/tokens.css \
             || { echo "::error::tokens.css is stale. Run: pnpm tokens"; exit 1; }
+
+      # A discarded failure with no log call and no comment saying why. Cheap,
+      # and it runs before the slow steps so it fails fast.
+      - name: No unexplained discarded failures
+        shell: bash
+        run: tools/check-silence.sh
 
       - run: pnpm exec tsc --noEmit
 

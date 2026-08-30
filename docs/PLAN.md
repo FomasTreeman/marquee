@@ -669,52 +669,24 @@ reporting, and over-the-air updates.
 **Exit:** somebody who is not us installs it, on a machine we have never
 touched, without instructions.
 
-#### Over-the-air updates
+#### Over-the-air updates ✅ *(built)*
 
-The single feature that decides whether this is a program or a thing you
-maintain. A launcher lives on a television. Nobody walks to the lounge to
-download a new build, which means without an updater every install is frozen at
-whatever version it shipped with -- including the ones with the bug you already
-fixed.
+Done, and documented end to end in **[docs/UPDATES.md](UPDATES.md)** — the
+keypair, the manifest, the release workflow, and the two policy rules that
+matter more than the plumbing: never interrupt a session, and always say what
+changed and let it be refused.
 
-`@tauri-apps/plugin-updater` is the answer and it is not much work. What it
-needs:
+What remains is not code. The endpoint has to be publicly readable, because a
+private repository's release assets need a token and there is nowhere safe to
+put one in a desktop app. That is the constraint tying updates to the decision
+in §12.3. The private signing key must also be backed up before anything ships:
+lose it and no existing install can ever be updated again, since each one only
+trusts bundles signed by the key it was compiled against.
 
-- **A signing keypair.** `tauri signer generate`. The public half goes in
-  `tauri.conf.json`; the private half and its password are repository secrets
-  and never leave CI. Every update is verified against it before it is applied,
-  so a compromised host serves a bundle that simply will not install. Losing
-  the private key means no existing install can ever be updated again, so it
-  belongs in a password manager the day it is generated, not in CI alone.
-- **A hosted manifest.** A small JSON file per platform giving version, notes,
-  a signature and a URL. GitHub Releases serves this for free, and `tauri-action`
-  generates and uploads it as part of a tagged build.
-- **A public release feed.** This is the catch, and it is the reason this is
-  Phase 4 rather than now: a private repository's release assets need a token
-  to download. The realistic options are to make the repository public at
-  release, keep the code private and publish only the releases, or host the
-  manifest and bundles somewhere else entirely (an R2 or S3 bucket). No
-  decision needed until we actually want to ship to someone.
-- **A version that means something.** `0.0.1` in `tauri.conf.json` has not
-  moved since the first commit, because nothing has depended on it. The updater
-  compares versions, so it becomes real state the moment this lands.
-
-Two product decisions that matter more than the plumbing, both learned from
-launchers that get them wrong:
-
-- **Never interrupt a session to update.** Check on launch, and only when the
-  library is idle. An update prompt that appears over a game, or between
-  pressing A and the game starting, is the single most irritating thing a
-  launcher does.
-- **Say what changed, and let it be refused.** A silent self-replacing binary
-  is indistinguishable from malware from the user's side, and Marquee already
-  asks for a lot of trust by launching executables. Show the notes, offer
-  "later", honour it.
-
-The self-check has a role here too: an update that installs and then fails to
-start is the worst outcome, because the machine is in the lounge. The
-post-update launch should run the self-check and keep the previous version
-recoverable until it passes.
+Still open, and worth doing before the first real release: running the
+self-check on the first launch after an update and keeping the previous version
+recoverable until it passes. An update that installs and then will not start is
+the worst outcome, because the machine is in the lounge.
 
 ## 11. Risks and caveats
 For whoever picks this up later, including us in six months.

@@ -4,3 +4,8 @@ src-tauri/target/
 src-tauri/gen/
 .DS_Store
 *.log
+
+# Update signing keys, wherever someone puts them. The private half must
+# never be committed: every install only trusts bundles signed by it.
+*.key
+*.key.pub
