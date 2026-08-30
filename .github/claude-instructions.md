@@ -34,24 +34,15 @@ claude/issue-<number>-<two-or-three-words>
 `claude/issue-42-rocket-league-search`, not `fix` or `patch-1`. The person
 reading the branch list is deciding what to review next.
 
-## Keeping the board honest
+## The board looks after itself
 
-The issue is a card on a kanban board, and its labels are what move it. Keep
-them true as you go — someone is reading the board instead of the thread.
+You do not need to touch labels. The workflow adds `claude-working` before you
+start and removes it when you finish, and opening a pull request that says
+`Closes #<number>` moves the issue to In Review on its own.
 
-- **When you start**, add `claude-working` and remove `needs-decision` if it is
-  there:
-  `gh issue edit <number> --add-label claude-working --remove-label needs-decision`
-
-- **When you open the pull request**, swap the labels over:
-  `gh issue edit <number> --add-label in-review --remove-label claude-working`
-  Removing `claude-working` without adding `in-review` sends the card back to
-  Todo, which reads as "nothing has happened here" on the very issue that is
-  finished and waiting to be read.
-
-- **Put `Closes #<number>` in the pull request body.** That is what closes the
-  issue on merge, which is what moves the card to Done. Without it every card
-  has to be moved by hand.
+**So put `Closes #<number>` in the pull request body.** That one line is what
+links the two, what closes the issue on merge, and what moves the card to Done.
+Without it every card has to be moved by hand.
 
 ## When to stop instead
 
