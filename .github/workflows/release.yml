@@ -54,7 +54,7 @@ jobs:
       skip: ${{ steps.plan.outputs.skip }}
       notes: ${{ steps.plan.outputs.notes }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # Tags are needed to work out where we are. A shallow checkout has
           # none, which is how the old "does this tag already exist" guard
@@ -164,7 +164,7 @@ jobs:
     environment: release
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           # The exact commit that triggered this, so all four targets build
           # identical source however busy main is.
@@ -192,7 +192,17 @@ jobs:
               fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
             }
           ' "$next"
-          perl -0pi -e "s/^version = \"[^\"]*\"/version = \"$next\"/m" src-tauri/Cargo.toml
+          # Node rather than sed or perl: this same step runs on four runner
+          # images including Windows, and the one tool guaranteed on all of
+          # them is the one the frontend already needs.
+          node -e '
+            const fs = require("fs");
+            const f = "src-tauri/Cargo.toml";
+            const before = fs.readFileSync(f, "utf8");
+            const after = before.replace(/^version = ".*"$/m, `version = "${process.argv[1]}"`);
+            if (after === before) throw new Error("no version line in " + f);
+            fs.writeFileSync(f, after);
+          ' "$next"
           grep -m1 '^version' src-tauri/Cargo.toml
 
       - name: Linux dependencies
