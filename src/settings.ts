@@ -18,6 +18,7 @@ import {
   diagnosticReport, exportProfile, getSettings, importProfile, setProfileFolder, setSetting, setSteamGridDbKey,
 } from './library'
 import { onAnyInput, padStatus, webviewPads } from './input'
+import { applyBackgroundStyle, resolveBackgroundStyle, type BackgroundStyle } from './perf'
 import { hostInfo } from './host'
 import { checkForUpdate } from './update'
 import { logInfo, logWarn } from './log'
@@ -113,6 +114,30 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
     minimiseOnLaunch = !minimiseOnLaunch
     describeMinimise()
     void setSetting('minimise_on_launch', minimiseOnLaunch ? '1' : '0')
+      .catch((e) => toast(`Could not save that. ${String(e)}`, 'error'))
+  }
+
+  // --- background -------------------------------------------------------
+  const background = section(
+    body,
+    'Background',
+    'Grain is a fixed texture behind everything and costs nothing to redraw. ' +
+      'Blur softens the hero art behind the grid instead -- it reads well, but ' +
+      'costs more, so it is worth turning off on an older machine.',
+  )
+  const backgroundToggle = el('button', 'action', background.controls)
+  let backgroundStyle: BackgroundStyle = 'grain'
+
+  function describeBackground(): void {
+    backgroundToggle.textContent = backgroundStyle === 'blur' ? 'Background: blur' : 'Background: grain'
+    backgroundToggle.classList.toggle('action-primary', backgroundStyle === 'blur')
+  }
+
+  backgroundToggle.onclick = () => {
+    backgroundStyle = backgroundStyle === 'blur' ? 'grain' : 'blur'
+    describeBackground()
+    applyBackgroundStyle(backgroundStyle)
+    void setSetting('background_style', backgroundStyle)
       .catch((e) => toast(`Could not save that. ${String(e)}`, 'error'))
   }
 
@@ -443,13 +468,16 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
       profileFolder = ''
       describeFolder()
       describeMinimise()
+      describeBackground()
       void getSettings()
         .then((s) => {
           field.value = s.steamgriddbKey
           profileFolder = s.profileFolder
           minimiseOnLaunch = s.minimiseOnLaunch
+          backgroundStyle = resolveBackgroundStyle(s.backgroundStyle)
           describeFolder()
           describeMinimise()
+          describeBackground()
         })
         .catch(() => { /* an unreadable setting is an empty field, not an error */ })
       requestAnimationFrame(() => field.focus())

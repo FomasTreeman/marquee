@@ -256,6 +256,10 @@ carelessly. Non-negotiable rules:
   the classic way to lose a frame budget to something nobody asked for.
 - `backdrop-filter: blur(30px)` is the most expensive thing in the design.
   At most one such surface visible at a time, and never animate its radius.
+- The optional blurred background (Settings → Background) is a plain `filter:
+  blur()` on the hero backdrop image itself, not `backdrop-filter`. It costs
+  once per cross-fade rather than every frame, so it is orthogonal to the rule
+  above rather than a second surface competing with it.
 
 ---
 

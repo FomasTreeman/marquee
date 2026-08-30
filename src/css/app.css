@@ -41,6 +41,26 @@ body::after {
   background-size: 128px 128px;
 }
 
+/* --- background style ----------------------------------------------
+   Grain (above) and a blurred hero backdrop are alternatives, chosen in
+   Settings -> Background and applied by src/perf.ts as a data attribute --
+   never both, so a game with little contrast doesn't end up with grain
+   sitting on top of a blur nobody asked to combine. */
+html[data-background="blur"] body::after { opacity: 0; }
+
+html[data-background="blur"] .backdrop-img {
+  /* `filter`, not `backdrop-filter`: it blurs the image itself once per
+     cross-fade rather than recomposing everything behind a surface every
+     frame, so it doesn't count against the "one backdrop-filter surface"
+     budget in docs/PLAN.md §4. The radius is fixed, never animated -- only
+     the opacity cross-fade moves. */
+  filter: blur(var(--backdrop-ambient-blur));
+  /* Blur samples past the image's own edge, which would otherwise pull in a
+     faint pale margin from outside the frame. Scaling past the blur radius
+     keeps that margin off-screen. */
+  transform: scale(1.08);
+}
+
 /* --- grid ---------------------------------------------------------
    Virtualised. The canvas is sized to the full row count and only the
    visible window plus an overscan margin exists in the DOM; cards are

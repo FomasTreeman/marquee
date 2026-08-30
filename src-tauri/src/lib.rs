@@ -347,7 +347,7 @@ fn set_setting(
     // Allowlisted rather than open: a command that writes an arbitrary key is a
     // command the interface can use to store anything anywhere, and the key
     // space is small enough to name.
-    const ALLOWED: &[&str] = &["sort", "fullscreen", "minimise_on_launch"];
+    const ALLOWED: &[&str] = &["sort", "fullscreen", "minimise_on_launch", "background_style"];
     if !ALLOWED.contains(&key.as_str()) {
         return Err(format!("not a settable preference: {key}"));
     }
@@ -377,6 +377,8 @@ fn get_settings(
         "sort": store.setting("sort")?.unwrap_or_default(),
         "profileFolder": store.setting(profile::FOLDER_SETTING)?.unwrap_or_default(),
         "minimiseOnLaunch": store.setting("minimise_on_launch")?.map(|v| v != "0").unwrap_or(true),
+        // Blank resolves to grain -- see resolveBackgroundStyle in src/perf.ts.
+        "backgroundStyle": store.setting("background_style")?.unwrap_or_default(),
         // The version the user last said "not now" to, so the same prompt is
         // not put in front of them on every launch.
         "updateDeclined": store.setting("updateDeclined")?.unwrap_or_default(),

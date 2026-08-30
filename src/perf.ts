@@ -99,3 +99,22 @@ export function installGrainTile(size = 128): void {
   ctx.putImageData(img, 0, 0)
   document.documentElement.style.setProperty('--grain-tile', `url(${c.toDataURL('image/png')})`)
 }
+
+export type BackgroundStyle = 'grain' | 'blur'
+
+/**
+ * Which background style a saved setting names.
+ *
+ * Anything other than exactly `'blur'` -- an empty first-run value, or a
+ * value from a profile written by an older or newer build -- falls back to
+ * grain rather than resolving to neither, which would leave the window with
+ * no background treatment at all and nothing to say why.
+ */
+export function resolveBackgroundStyle(value: string): BackgroundStyle {
+  return value === 'blur' ? 'blur' : 'grain'
+}
+
+/** Flip the CSS switch in app.css between the two background styles. */
+export function applyBackgroundStyle(value: string): void {
+  document.documentElement.dataset.background = resolveBackgroundStyle(value)
+}
