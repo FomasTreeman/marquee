@@ -137,25 +137,42 @@ const STEAM_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 /// pressing Play should look like.
 ///
 /// Blocking, so it runs on the launch thread rather than the interface's.
-fn ensure_steam_ready() {
+/// Steam accepts `steam://` some seconds after its process appears.
+///
+/// The process existing is not the same as the client being ready, and firing
+/// the URI in that window gets it silently swallowed -- press Play, Steam
+/// starts, nothing happens, press Play again and the game runs. That is exactly
+/// what was reported.
+const STEAM_SETTLE: std::time::Duration = std::time::Duration::from_secs(4);
+/// A second attempt, for when the first still landed too early.
+const STEAM_RETRY: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// Make sure Steam is up, without showing its window.
+///
+/// Returns true when Steam had to be started, because that is the case where
+/// the launch needs to be more careful about timing.
+fn ensure_steam_ready() -> bool {
     use crate::library::steam::Steam;
 
     if Steam::is_running() {
-        return;
+        return false;
     }
     log_info!("run", "Steam is not running; starting it silently");
     if let Err(e) = Steam::start_silently() {
-        // Not fatal. The URI still works, it just brings the window with it,
-        // which is the behaviour this exists to improve rather than to require.
-        log_warn!("run", "{e}; falling back to letting the URI start Steam");
-        return;
+        // Not fatal. The URI still works, it just brings Steam's window with
+        // it, which is the behaviour this exists to improve rather than require.
+        log_warn!("run", "{e}; letting the URI start Steam instead");
+        return true;
     }
 
     let deadline = std::time::Instant::now() + STEAM_WAIT;
     while std::time::Instant::now() < deadline {
         if Steam::is_running() {
-            log_info!("run", "Steam is ready");
-            return;
+            // The process is up; the client is not ready yet. Waiting here is
+            // the difference between one press working and needing two.
+            log_info!("run", "Steam is up; giving it a moment to accept requests");
+            std::thread::sleep(STEAM_SETTLE);
+            return true;
         }
         std::thread::sleep(STEAM_POLL);
     }
@@ -163,6 +180,7 @@ fn ensure_steam_ready() {
         "run",
         "Steam did not come up in time; handing it the game anyway"
     );
+    true
 }
 
 pub fn start(
@@ -177,10 +195,25 @@ pub fn start(
             // Off the interface's thread: waiting for a cold Steam takes
             // seconds, and the grid must stay responsive while it happens.
             std::thread::spawn(move || {
-                ensure_steam_ready();
+                let was_cold = ensure_steam_ready();
                 log_info!("run", "launching {title} via {uri}");
                 if let Err(e) = open_uri(&uri) {
                     on_failure(e);
+                    return;
+                }
+
+                // Ask once more after a cold start. Steam swallows a request
+                // that arrives before it is ready, and there is no signal for
+                // "ready" short of asking -- so ask twice. A duplicate is
+                // harmless: Steam brings an already-running game to the front
+                // rather than starting a second copy.
+                if was_cold {
+                    std::thread::sleep(STEAM_RETRY);
+                    log_info!(
+                        "run",
+                        "asking Steam for {title} again, in case the first was early"
+                    );
+                    let _ = open_uri(&uri);
                 }
             });
         }

@@ -15,7 +15,7 @@
  */
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import {
-  getSettings, setSteamGridDbKey, exportProfile, importProfile, setProfileFolder,
+  getSettings, setSteamGridDbKey, exportProfile, importProfile, setProfileFolder, setSetting,
 } from './library'
 import { padStatus } from './input'
 import { logInfo, logWarn } from './log'
@@ -75,6 +75,30 @@ export function createSettings(onChanged: () => void): SettingsView {
   saveKey.textContent = 'Save key'
   const keyStatus = el('p', 'settings-status', artwork.root)
 
+  // --- launching ------------------------------------------------------
+  const launching = section(
+    body,
+    'Launching',
+    'Marquee is fullscreen, and a fullscreen window in front of a game that is ' +
+      'still starting is how a game ends up running but hidden behind it.',
+  )
+  const minimiseToggle = el('button', 'action', launching.controls)
+  let minimiseOnLaunch = true
+
+  function describeMinimise(): void {
+    minimiseToggle.textContent = minimiseOnLaunch
+      ? 'Minimise when a game starts: on'
+      : 'Minimise when a game starts: off'
+    minimiseToggle.classList.toggle('action-primary', minimiseOnLaunch)
+  }
+
+  minimiseToggle.onclick = () => {
+    minimiseOnLaunch = !minimiseOnLaunch
+    describeMinimise()
+    void setSetting('minimise_on_launch', minimiseOnLaunch ? '1' : '0')
+      .catch((e) => toast(`Could not save that. ${String(e)}`, 'error'))
+  }
+
   // --- controller -----------------------------------------------------
   //
   // Silence here is unhelpful: a pad that does not work looks identical to an
@@ -124,6 +148,13 @@ export function createSettings(onChanged: () => void): SettingsView {
   importButton.textContent = 'Import…'
   const folderButton = el('button', 'action action-primary', profile.controls)
   const folderStatus = el('p', 'settings-status', profile.root)
+  // The exported file contains the SteamGridDB key. Small stakes -- it is a
+  // free, per-user, rate-limited key -- but somebody sharing a profile should
+  // know what is in it rather than find out.
+  const profileWarning = el('p', 'settings-status', profile.root)
+  profileWarning.textContent =
+    'The file includes your SteamGridDB key, so it moves to a new machine with ' +
+    'everything else. Worth knowing before sharing one.'
 
   let open = false
   let saving = false
@@ -230,11 +261,14 @@ export function createSettings(onChanged: () => void): SettingsView {
       void describePad()
       profileFolder = ''
       describeFolder()
+      describeMinimise()
       void getSettings()
         .then((s) => {
           field.value = s.steamgriddbKey
           profileFolder = s.profileFolder
+          minimiseOnLaunch = s.minimiseOnLaunch
           describeFolder()
+          describeMinimise()
         })
         .catch(() => { /* an unreadable setting is an empty field, not an error */ })
       requestAnimationFrame(() => field.focus())

@@ -155,6 +155,8 @@ export interface Settings {
   sort: string
   /** Folder an up-to-date copy of the profile is kept in, if any. */
   profileFolder: string
+  /** Whether to get out of a launching game's way. */
+  minimiseOnLaunch: boolean
 }
 
 /** Store any single setting. */
@@ -164,7 +166,9 @@ export async function setSetting(key: string, value: string): Promise<void> {
 }
 
 export async function getSettings(): Promise<Settings> {
-  if (!inApp) return { steamgriddbKey: '', sort: 'recent', profileFolder: '' }
+  if (!inApp) {
+    return { steamgriddbKey: '', sort: 'recent', profileFolder: '', minimiseOnLaunch: true }
+  }
   return call<Settings>('get_settings')
 }
 

@@ -195,7 +195,14 @@ export function createGrid(
     const art = document.createElement('div')
     art.className = 'card-art'
     const img = document.createElement('img')
-    img.loading = 'lazy'
+    // NOT lazy. The grid is already virtualised -- only about fifty card
+    // elements exist and every one of them is on or beside the screen -- so
+    // lazy loading adds nothing and actively breaks it: the browser decides
+    // whether a lazy image is "near the viewport" from layout, and these are
+    // positioned by transforms inside a scroller, which it does not
+    // re-evaluate until something forces it to. The symptom was covers that
+    // stayed blank until the window was unfocused and focused again, while the
+    // hero logo -- the one image that was never lazy -- appeared at once.
     img.decoding = 'async'
     img.draggable = false
     // Not every appid has every asset on the CDN. A missing cover reveals the

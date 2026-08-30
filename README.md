@@ -74,6 +74,8 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
   a custom folder on whichever drive had room gets found, which guessing at
   `Program Files` never would
 
+- **Minimises when a game starts**, so a fullscreen launcher is never sitting
+  in front of a game that is still loading. Switchable in Settings
 - **A profile that survives the machine.** Favourites, hidden games, hand-added
   games and where they live, artwork corrections, settings — exported to any
   path, kept current in a folder of your choosing, and found on its own after a

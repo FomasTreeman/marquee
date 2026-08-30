@@ -63,8 +63,10 @@ struct Library(Mutex<Vec<library::Game>>);
 #[tauri::command]
 fn launch_game(
     app: tauri::AppHandle,
+    window: tauri::Window,
     id: String,
     library: tauri::State<'_, Library>,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
 ) -> Result<String, String> {
     let game = {
         let games = library.0.lock().map_err(|_| "library state is poisoned")?;
@@ -85,13 +87,37 @@ fn launch_game(
     // someone to wait when they will not is as bad as the reverse.
     let steam_cold = game.provider == "steam" && !library::steam::Steam::is_running();
 
+    // Get out of the game's way.
+    //
+    // Marquee is fullscreen by default, and a fullscreen window sitting in
+    // front of a game that is still starting is how a game ends up launched but
+    // behind — press Play, nothing appears, press Play again. Minimising hands
+    // the screen over cleanly. Playnite defaults to the same behaviour for the
+    // same reason.
+    let minimise = store
+        .setting("minimise_on_launch")
+        .ok()
+        .flatten()
+        .map(|v| v != "0")
+        .unwrap_or(true);
+
     match run::start(&game, notify) {
-        Ok(run::Launch::Uri(uri)) => Ok(if steam_cold {
-            format!("{uri} (starting Steam first)")
-        } else {
-            uri
-        }),
-        Ok(run::Launch::Process { program, .. }) => Ok(program.display().to_string()),
+        Ok(run::Launch::Uri(uri)) => {
+            if minimise {
+                let _ = window.minimize();
+            }
+            Ok(if steam_cold {
+                format!("{uri} (starting Steam first)")
+            } else {
+                uri
+            })
+        }
+        Ok(run::Launch::Process { program, .. }) => {
+            if minimise {
+                let _ = window.minimize();
+            }
+            Ok(program.display().to_string())
+        }
         Err(e) => {
             log_error!("run", "could not launch {}: {e}", game.title);
             Err(e)
@@ -216,7 +242,7 @@ fn set_setting(
     // Allowlisted rather than open: a command that writes an arbitrary key is a
     // command the interface can use to store anything anywhere, and the key
     // space is small enough to name.
-    const ALLOWED: &[&str] = &["sort", "fullscreen"];
+    const ALLOWED: &[&str] = &["sort", "fullscreen", "minimise_on_launch"];
     if !ALLOWED.contains(&key.as_str()) {
         return Err(format!("not a settable preference: {key}"));
     }
@@ -245,6 +271,7 @@ fn get_settings(
         "steamgriddbKey": store.setting(sgdb::SETTING_KEY)?.unwrap_or_default(),
         "sort": store.setting("sort")?.unwrap_or_default(),
         "profileFolder": store.setting(profile::FOLDER_SETTING)?.unwrap_or_default(),
+        "minimiseOnLaunch": store.setting("minimise_on_launch")?.map(|v| v != "0").unwrap_or(true),
     }))
 }
 
