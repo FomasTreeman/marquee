@@ -73,16 +73,19 @@ the four that decide whether you get a real fix or a confident wrong one:
 You do **not** have to write it up perfectly. A rough issue with a log beats a
 beautiful one without.
 
-## 2. You hand it over
+## 2. You hand it over — actually, you don't
 
-Any one of these starts a run:
+**Opening the issue is the trigger.** Claude picks up every new issue on its
+own. Nothing to remember, nothing to click.
 
-- add the **`claude`** label — easiest, one click from the board
-- write **`@claude`** in a comment
-- open the issue with **`@claude`** in the title or body
+The explicit ways still work, for an issue filed before you wanted it worked
+on, or to send one back round after a review:
 
-Nothing happens without one of those. Filing an issue does not start anything,
-which is deliberate — you might be recording something for later.
+- add the **`claude`** label
+- write **`@claude`** in a comment, or in a pull request review
+
+And to keep it off one: the **`no-ai`** label. Some issues are notes to self,
+and a note to self does not need a patch.
 
 ## 3. Claude works
 
@@ -93,6 +96,11 @@ a spinner.
 
 It labels the issue **`claude-working`** when it starts. On the board, that's
 *In progress*.
+
+Its work goes on a branch named `claude/issue-<number>-<what-it-is>`, so the
+branch list reads like a queue rather than a pile of `patch-1`s. **It cannot
+touch `main`** — a repository ruleset refuses any direct push, from anyone.
+That is enforcement, not etiquette.
 
 It runs `pnpm test` and clippy before claiming to be done, and is told to say
 so plainly if either failed rather than describing the work as finished.
@@ -228,6 +236,7 @@ running, so a release that fails its signature check will not install.
 | `enhancement` | minor release on merge | — |
 | `breaking` | major release on merge | — |
 | `no-release` | merge without releasing | — |
+| `no-ai` | keep Claude off this issue | — |
 | `wont-fix-yet` | real, deliberately parked | — |
 
 ## Things worth knowing
@@ -236,10 +245,15 @@ running, so a release that fails its signature check will not install.
 repository, checked on issues, comments and reviews. Strangers writing
 `@claude` on your public repo get nothing and spend none of your quota.
 
-**It cannot merge, and it cannot push to `main`.** It opens branches and pull
-requests. The review is the point — this app launches executables on your
-machine and updates itself, so a patch nobody read is a patch nobody read,
-whoever wrote it.
+**It cannot merge, and it cannot push to `main`.** A ruleset refuses direct
+pushes from anyone, so every change arrives as a pull request. The review is
+the point — this app launches executables on your machine and updates itself,
+so a patch nobody read is a patch nobody read, whoever wrote it.
+
+**The release does not touch `main` either.** It works out the version, injects
+it into the build, tags and publishes, without committing anything. That is why
+`main` needs no exception carved into its protection — and an exception is the
+part of a protection that eventually gets used for something else.
 
 **It won't fold two fixes into one PR.** If it notices something else wrong it
 mentions it or opens a separate issue, so nothing becomes un-revertable.
