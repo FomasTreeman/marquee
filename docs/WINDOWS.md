@@ -51,6 +51,27 @@ Windows 11 ships it. Windows 10 has it through Edge on any current install. If
 the window opens blank or the app refuses to start, that is the first thing to
 check — Microsoft distributes an Evergreen Bootstrapper for it.
 
+## The stale-build trap
+
+The first working version of this shipped a binary containing the **previous**
+interface, and reported success.
+
+`generate_context!` compiles the built frontend into the executable, but nothing
+told cargo that the frontend was an input. So `pnpm build` followed by a cargo
+build produced a binary with the old interface embedded, in 0.2 seconds, looking
+exactly like a fresh one. It was caught by checking the asset hash inside the
+executable and finding a hash from thirteen hours earlier.
+
+Two things now prevent it. `build.rs` declares every file under `frontendDist`
+as a dependency — recursively, because changing a file's contents does not touch
+the mtime of the directories above it — and the build script refuses to finish
+if anything in `dist/` is newer than the executable.
+
+That second check is by **timestamp**, not by looking for the asset name inside
+the binary. Tauri compresses the embedded files, so a hashed filename never
+appears in plaintext; the content check was written first and rejected a
+perfectly good build.
+
 ## It already caught something
 
 The first cross-build produced a warning that no amount of work on macOS would

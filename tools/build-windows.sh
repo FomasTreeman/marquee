@@ -52,7 +52,28 @@ else
 fi
 
 EXE="target/$TARGET/$PROFILE/marquee.exe"
+
+# Verify the binary is newer than the interface inside it.
+#
+# This is not paranoia. Cargo had no idea the frontend was an input, so
+# rebuilding it and then building the crate produced a binary carrying the
+# *previous* interface -- and reported success. build.rs now declares every
+# frontend file as a dependency; this confirms it worked, because a silently
+# stale build is worse than a failed one.
+#
+# By timestamp rather than by looking for the asset name inside the executable:
+# Tauri compresses the embedded files, so a hashed filename never appears in
+# plaintext and searching for one fails on a perfectly good build. That check
+# was written first and rejected this exact binary.
+NEWEST_ASSET=$(find ../dist -type f -newer "$EXE" -print -quit 2>/dev/null || true)
+if [ -n "$NEWEST_ASSET" ]; then
+  echo "error: $NEWEST_ASSET is newer than the executable -- the embedded interface is stale." >&2
+  echo "       Try: cargo clean -p marquee && $0 $PROFILE" >&2
+  exit 1
+fi
+
 echo
 echo "==> $(cd .. && pwd)/src-tauri/$EXE"
 ls -la "$EXE" | awk '{printf "    %.1f MB\n", $5/1048576}'
+echo "    interface: $(basename "$(ls ../dist/assets/*.js | head -1)")"
 echo "    Copy it to a Windows machine and run it. Nothing else is needed."

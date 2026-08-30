@@ -13,6 +13,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# build.rs reads frontendDist out of tauri.conf.json so the path cannot drift.
+serde_json = "1"
+
 
 [dependencies]
 tauri = { version = "2", features = [] }
