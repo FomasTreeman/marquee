@@ -215,6 +215,13 @@ tags, builds all four targets, signs them, writes `latest.json` and publishes.
 Two things about the shape of that workflow, both learned by getting them
 wrong:
 
+**It never writes to the repository.** The version is injected into the working
+copy at build time and the tag comes from the release itself. An earlier
+version committed the bump to `main`, which meant the automation needed write
+access to the one branch that should only change through a reviewed pull
+request -- so protecting `main` would have needed an exception carved out for
+it. There is nothing to carve now.
+
 **It is one workflow, not two.** Bumping the version and building used to be
 separate, joined by a pushed tag -- and **a tag pushed with `GITHUB_TOKEN` does
 not trigger another workflow.** GitHub blocks that so workflows cannot loop.
