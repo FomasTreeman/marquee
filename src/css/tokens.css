@@ -47,6 +47,7 @@
   --grain: 0.055;
   --ambient: 0.85;
   --backdrop-blur: 30px;
+  --backdrop-ambient-blur: 40px;
   --motion: 1;
   --scroll-ms: 190;
   --ring-w: 4px;

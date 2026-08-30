@@ -6,7 +6,7 @@
  * short enough to read in one go.
  */
 import { createGrid } from './grid'
-import { createFrameMeter, installGrainTile } from './perf'
+import { createFrameMeter, installGrainTile, applyBackgroundStyle } from './perf'
 import { createShell, legendFor, setHints } from './shell'
 import { createBackdrop } from './backdrop'
 import { createDetail } from './detail'
@@ -663,11 +663,13 @@ async function main(): Promise<void> {
       const s = await getSettings()
       steamGridDbKey = s.steamgriddbKey
       savedSort = s.sort || 'recent'
+      applyBackgroundStyle(s.backgroundStyle)
     } catch (e) {
       // Losing settings means the saved sort and the SteamGridDB key both
       // quietly revert, which reads as "it forgot" rather than as a failure.
       logWarn('settings', 'could not read settings; using defaults', e)
       steamGridDbKey = ''
+      applyBackgroundStyle('grain')
     }
   }
   await refreshSettings()

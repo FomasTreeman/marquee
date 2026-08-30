@@ -170,6 +170,9 @@ export interface Settings {
   profileFolder: string
   /** Whether to get out of a launching game's way. */
   minimiseOnLaunch: boolean
+  /** 'grain' or 'blur'. See resolveBackgroundStyle in src/perf.ts, which is
+   *  also what turns a blank or unrecognised value into 'grain'. */
+  backgroundStyle: string
   /** The version an update prompt was last refused for. See src/update.ts. */
   updateDeclined: string
 }
@@ -184,7 +187,7 @@ export async function getSettings(): Promise<Settings> {
   if (!inApp) {
     return {
       steamgriddbKey: '', sort: 'recent', profileFolder: '',
-      minimiseOnLaunch: true, updateDeclined: '',
+      minimiseOnLaunch: true, backgroundStyle: 'grain', updateDeclined: '',
     }
   }
   return call<Settings>('get_settings')
