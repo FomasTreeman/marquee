@@ -22,7 +22,7 @@ import { createInput, padStatus, type Action, type Device } from './input'
 import {
   scanLibrary, requestMeta, onMeta, onLaunchFailed, launchGame, toggleFavourite,
   getSettings, setSetting, toggleFullscreen, systemAction, findProfile, importProfile,
-  addManualGame, setManualExecutable, setArtSource, artworkReport,
+  addManualGame, setManualExecutable, setArtSource, artworkReport, artSourceFor,
   initArtwork, steamArtwork, artIdFor, tintFor,
   type Artwork, type Game, type Meta, type ScanResult,
 } from './library'
@@ -580,9 +580,17 @@ async function main(): Promise<void> {
       },
       async onPick(hit, file) {
         try {
-          const id = await addManualGame(hit.name, hit.appId)
+          // A Steam hit carries an appid, and an appid carries metadata --
+          // description, genres, release date, artwork. A SteamGridDB hit
+          // carries artwork alone, so it is added with no appid and then
+          // pointed at its artwork separately. Passing the SteamGridDB id as
+          // a Steam appid would silently attach a different game's metadata,
+          // because that number is almost certainly some other game's appid.
+          const steamAppId = hit.source === 'steam' ? hit.appId : undefined
+          const id = await addManualGame(hit.name, steamAppId)
+          if (hit.source === 'sgdb') await setArtSource(`manual:${id}`, artSourceFor(hit))
           if (file) await setManualExecutable(id, file)
-          logInfo('add', `added ${hit.name} (appid ${hit.appId})${file ? ` at ${file}` : ''}`)
+          logInfo('add', `added ${hit.name} (${hit.source}:${hit.appId})${file ? ` at ${file}` : ''}`)
           toast(
             file
               ? `Added ${hit.name}, ready to play.`
@@ -627,11 +635,11 @@ async function main(): Promise<void> {
     picker.open({
       heading: 'Find artwork',
       source: 'artwork',
-      sub: `Pick the SteamGridDB entry to take artwork from. ${game.title || 'This game'} will use its cover, key art and wordmark.`,
+      sub: `Pick the entry to take artwork from — SteamGridDB first, then Steam. ${game.title || 'This game'} will use its cover, key art and wordmark.`,
       initial: game.title,
       async onPick(hit) {
         try {
-          await setArtSource(game.id, hit.appId)
+          await setArtSource(game.id, artSourceFor(hit))
           logInfo('art', `${game.id} artwork -> ${hit.name} (${hit.appId})`)
           toast(`Using artwork from ${hit.name}.`)
           await reloadLibrary()

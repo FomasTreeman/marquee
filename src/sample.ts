@@ -6,7 +6,7 @@
  * than only proving the layout. It is also the only way to see the design
  * fully populated on a machine with two games installed.
  */
-import type { Game } from './library'
+import type { Game, SearchHit } from './library'
 
 const SAMPLE: Array<[string, string]> = [
   ['1245620', 'ELDEN RING'],
@@ -36,13 +36,14 @@ const SAMPLE: Array<[string, string]> = [
 ]
 
 /** Browser-only stand-in for Steam's store search. See searchGames(). */
-export function searchSample(term: string): Array<{ appId: string; name: string; thumbnail: string }> {
+export function searchSample(term: string): SearchHit[] {
   const q = term.trim().toLowerCase()
   return SAMPLE.filter(([, name]) => name.toLowerCase().includes(q))
     .slice(0, 12)
     .map(([appId, name]) => ({
       appId,
       name,
+      source: 'steam' as const,
       thumbnail: `https://cdn.cloudflare.steamstatic.com/steam/apps/${appId}/header.jpg`,
     }))
 }

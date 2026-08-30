@@ -190,27 +190,60 @@ fn set_art_source(
     out
 }
 
-/// Search SteamGridDB by name, for the artwork picker.
+/// Search for artwork to borrow, from both catalogues.
 ///
-/// Distinct from `search_games`, which searches the Steam store. That one
-/// answers "which game is this"; this one answers "whose artwork should this
-/// use", and they are different questions -- searching Steam could only ever
-/// re-point a game at another Steam appid, which is no help when the missing
-/// artwork is Steam's.
+/// Answers "whose artwork should this use", where `search_games` answers
+/// "which game is this". SteamGridDB leads because it is the source that has
+/// what Steam is missing -- that is the whole reason this screen exists.
+///
+/// Steam follows rather than being absent. The original argument for leaving
+/// it out was that the obvious Steam match is the game itself, and re-pointing
+/// a game at its own appid changes nothing. True, and it was the bug that made
+/// three games look fixed when nothing had happened -- but it only rules out
+/// the *obvious* match. A game listed on Steam under a name you would not
+/// guess, or a regional or bundled edition with different art, is a real
+/// answer, and refusing to show any Steam entry threw those away too.
 #[tauri::command]
 async fn search_artwork(
     term: String,
     store: tauri::State<'_, std::sync::Arc<store::Store>>,
-) -> Result<Vec<sgdb::Entry>, String> {
-    let Some(key) = store.setting(sgdb::SETTING_KEY)?.filter(|k| !k.is_empty()) else {
-        return Err("no SteamGridDB key — add one in Settings".into());
+) -> Result<Vec<search::SearchHit>, String> {
+    let key = store.setting(sgdb::SETTING_KEY)?.filter(|k| !k.is_empty());
+    let steam = search::search_steam_hits(term.clone())
+        .await
+        .unwrap_or_default();
+
+    let Some(key) = key else {
+        if steam.is_empty() {
+            return Err("no SteamGridDB key — add one in Settings".into());
+        }
+        // Steam alone is thin for this question, but it is not nothing, and
+        // failing outright would hide results we already have in hand.
+        log_warn!(
+            "art",
+            "artwork search without a SteamGridDB key; Steam only"
+        );
+        return Ok(steam);
     };
-    tauri::async_runtime::spawn_blocking(move || {
+
+    let from_sgdb = tauri::async_runtime::spawn_blocking(move || {
         let client = crate::meta::http_client().ok_or("no HTTP client")?;
-        Ok(sgdb::search(&client, &key, &term))
+        Ok::<_, String>(
+            sgdb::search(&client, &key, &term)
+                .into_iter()
+                .map(|e| search::SearchHit {
+                    source: "sgdb",
+                    app_id: e.id,
+                    name: e.name,
+                    thumbnail: e.cover,
+                })
+                .collect::<Vec<_>>(),
+        )
     })
     .await
-    .map_err(|e| format!("search task failed: {e}"))?
+    .map_err(|e| format!("search task failed: {e}"))??;
+
+    Ok(search::merge(from_sgdb, steam))
 }
 
 /// Toggle fullscreen, returning the new state.

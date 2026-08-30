@@ -133,12 +133,20 @@ export function createPicker(): Picker {
         if (img.naturalWidth > img.naturalHeight) img.style.objectFit = 'contain'
       })
       // A SteamGridDB result has no Steam appid to build a cover from, so its
-      // own thumbnail is the picture.
-      img.src = hit.appId.startsWith('sgdb:')
+      // own thumbnail is the picture. Decided by `source` rather than by
+      // sniffing the id for a prefix -- the prefix moved to the caller, and
+      // this check had quietly stopped matching anything.
+      img.src = hit.source === 'sgdb'
         ? (hit.thumbnail || '')
         : (coverFor(hit) ?? hit.thumbnail)
       const name = el('span', undefined, card)
       name.textContent = hit.name
+      // Which catalogue this came from. Worth a line of type: the two answer
+      // different questions -- a Steam entry brings metadata as well as art,
+      // a SteamGridDB one brings art alone -- and until now there was no way
+      // to tell from the screen whether both were even being searched.
+      const from = el('span', 'picker-source', card)
+      from.textContent = hit.source === 'sgdb' ? 'SteamGridDB' : 'Steam'
       card.onclick = () => { selected = i; void choose() }
     })
     ;(results.children[selected] as HTMLElement | undefined)
@@ -155,12 +163,12 @@ export function createPicker(): Picker {
     }
     status.textContent = 'Searching…'
     try {
+      // Both searches return the same shape now, tagged with the catalogue
+      // each hit came from. The prefixing that used to happen here moved to
+      // the caller, because "add a game" and "borrow artwork" want different
+      // things from a SteamGridDB hit.
       const found = request?.source === 'artwork'
-        ? (await searchArtwork(term)).map((e) => ({
-            appId: `sgdb:${e.id}`,
-            name: e.name,
-            thumbnail: e.cover,
-          }))
+        ? await searchArtwork(term)
         : await searchGames(term)
       if (gen !== generation) return
       hits = found

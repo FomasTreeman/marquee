@@ -79,37 +79,49 @@ export async function requestMeta(appIds: string[]): Promise<Meta[]> {
 export interface SearchHit {
   appId: string
   name: string
-  /** Steam's own thumbnail. A last resort — see `coverFor`. */
+  /** Which catalogue this came from. A Steam hit carries an appid that unlocks
+   *  metadata; a SteamGridDB one carries artwork and nothing else. */
+  source: 'steam' | 'sgdb'
+  /** The source's own thumbnail. A last resort — see `coverFor`. */
   thumbnail: string
+}
+
+/** The source-qualified artwork key for a search result. */
+export function artKeyFor(hit: SearchHit): string {
+  return `${hit.source}-${hit.appId}`
+}
+
+/**
+ * The value `set_art_source` wants for this hit.
+ *
+ * A SteamGridDB id has to keep its prefix or it is read as a Steam appid --
+ * which is a different game that probably exists, so the mistake shows up as
+ * the wrong artwork rather than as an error.
+ */
+export function artSourceFor(hit: SearchHit): string {
+  return hit.source === 'sgdb' ? `sgdb:${hit.appId}` : hit.appId
 }
 
 /** A search result's cover, built the same way a card's is, so it goes through
  *  placeholder detection and the fallback chain rather than pointing at a raw
  *  CDN path that is a grey box for a lot of recent games. */
 export function coverFor(hit: SearchHit): string | undefined {
-  return steamArtwork(`steam-${hit.appId}`).cover
+  return steamArtwork(artKeyFor(hit)).cover
 }
 
 /** A SteamGridDB entry, as offered by the artwork picker. */
-export interface ArtworkEntry {
-  id: string
-  name: string
-  cover: string
-}
 
 /**
- * Search SteamGridDB by name.
+ * Search for artwork to borrow, from both catalogues.
  *
- * Distinct from `searchGames`, which searches the Steam store. That answers
- * "which game is this"; this answers "whose artwork should this use", and they
- * are different questions — searching Steam could only ever re-point a game at
- * another Steam appid, which is no help when the missing artwork is Steam's.
- *
- * Rejects with a readable reason when no key is configured.
+ * Answers "whose artwork should this use", where `searchGames` answers "which
+ * game is this". SteamGridDB leads, because it has what Steam is missing;
+ * Steam follows, because a game listed there under a name you would not guess
+ * is a real answer too.
  */
-export async function searchArtwork(term: string): Promise<ArtworkEntry[]> {
+export async function searchArtwork(term: string): Promise<SearchHit[]> {
   if (!inApp) return []
-  return call<ArtworkEntry[]>('search_artwork', { term })
+  return call<SearchHit[]>('search_artwork', { term })
 }
 
 /**

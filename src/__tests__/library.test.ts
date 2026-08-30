@@ -52,7 +52,10 @@ describe('steamArtwork without a backend', () => {
   })
 
   it('routes a search hit through the same path as a card', () => {
-    expect(coverFor({ appId: '620', name: 'Portal 2' } as never))
+    // No `as never` here: the cast that used to be in this line hid a real
+    // shape change from the type checker, and the test only failed once it
+    // ran. A fixture that has to be lied about is a fixture that is wrong.
+    expect(coverFor({ appId: '620', name: 'Portal 2', source: 'steam', thumbnail: '' }))
       .toBe(steamArtwork('steam-620').cover)
   })
 })

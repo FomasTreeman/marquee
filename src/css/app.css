@@ -1028,3 +1028,11 @@ body::after {
   font-size: calc(13px * var(--s));
   color: var(--fg2);
 }
+
+/* Which catalogue a search result came from. Quiet -- it answers a question
+   you only ask when something looks wrong. */
+.picker-source {
+  font-size: calc(11px * var(--s));
+  color: var(--fg2);
+  opacity: 0.7;
+}
