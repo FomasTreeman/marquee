@@ -55,12 +55,6 @@ jobs:
       notes: ${{ steps.plan.outputs.notes }}
     steps:
       - uses: actions/checkout@v5
-        with:
-          # Tags are needed to work out where we are. A shallow checkout has
-          # none, which is how the old "does this tag already exist" guard
-          # passed on a tag that existed.
-          fetch-depth: 0
-
       - name: Work out what to release
         id: plan
         env:
@@ -150,10 +144,11 @@ jobs:
     environment: release
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
-        with: { node-version: 20 }
       - uses: pnpm/action-setup@v4
         with: { version: 9 }
+      # After pnpm: `cache: pnpm` asks pnpm where its store is.
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - name: The signing key and its password agree
         env:
@@ -215,6 +210,24 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+
+      # Defender scans every file cargo writes, and cargo writes tens of
+      # thousands of them. It is the single biggest cause of a Windows job
+      # sitting apparently idle for minutes at a time.
+      #
+      # Tolerant of failure on purpose: this is a speed-up, not a
+      # requirement, and a runner image that has moved Defender or dropped the
+      # cmdlet should not fail the build over it.
+      - name: Keep Defender out of the build directories
+        if: runner.os == 'Windows'
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.cargo" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}\src-tauri\target" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess "cargo.exe" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess "rustc.exe" -ErrorAction SilentlyContinue
+          Write-Host "Defender exclusions applied."
         with:
           # The exact commit that triggered this, so all four targets build
           # identical source however busy main is.
@@ -267,11 +280,12 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: actions/setup-node@v4
-        with: { node-version: 20 }
-
       - uses: pnpm/action-setup@v4
         with: { version: 9 }
+
+      # After pnpm: `cache: pnpm` asks pnpm where its store is.
+      - uses: actions/setup-node@v4
+        with: { node-version: 20, cache: pnpm }
 
       - uses: Swatinem/rust-cache@v2
         with:

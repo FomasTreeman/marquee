@@ -107,13 +107,16 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
       - uses: pnpm/action-setup@v4
         with:
           version: 9
+
+      # After pnpm: `cache: pnpm` asks pnpm where its store is, so the other
+      # order caches nothing and says nothing about it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
 
       - name: Linux dependencies
         run: |

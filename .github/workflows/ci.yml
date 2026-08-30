@@ -30,6 +30,24 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Defender scans every file cargo writes, and cargo writes tens of
+      # thousands of them. It is the single biggest cause of a Windows job
+      # sitting apparently idle for minutes at a time.
+      #
+      # Tolerant of failure on purpose: this is a speed-up, not a
+      # requirement, and a runner image that has moved Defender or dropped the
+      # cmdlet should not fail the build over it.
+      - name: Keep Defender out of the build directories
+        if: runner.os == 'Windows'
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Add-MpPreference -ExclusionPath "$env:USERPROFILE\.cargo" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionPath "${{ github.workspace }}\src-tauri\target" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess "cargo.exe" -ErrorAction SilentlyContinue
+          Add-MpPreference -ExclusionProcess "rustc.exe" -ErrorAction SilentlyContinue
+          Write-Host "Defender exclusions applied."
+
       # WebKitGTK and its build dependencies. Nothing else in the matrix needs
       # anything: WebView2 ships with Windows, WKWebView with macOS.
       - name: Linux dependencies
@@ -44,13 +62,17 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
       - uses: pnpm/action-setup@v4
         with:
           version: 9
+
+      # After pnpm, not before. `cache: pnpm` asks pnpm where its store is,
+      # so with the old order it found nothing and cached nothing -- silently,
+      # which is the only kind of missing cache there is.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
 
       - uses: Swatinem/rust-cache@v2
         with:
