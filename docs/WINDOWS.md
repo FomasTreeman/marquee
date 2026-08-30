@@ -45,6 +45,56 @@ which is C, and the WebView2 bindings.
   stack (see [PLAN.md](PLAN.md) §3) and a cross-compiler has no opinion about
   how WebView2 renders anything.
 
+## When it does not work, read the log
+
+The Rust half writes a log before the window has drawn anything, so a window
+that fails to load still leaves a record:
+
+```
+%LOCALAPPDATA%\Marquee\logs\marquee.log
+```
+
+Open it in Notepad. A healthy start looks like this, and the last two lines only
+appear if the interface actually loaded:
+
+```
+INFO  start  Marquee 0.0.1 · WebView2 (Chromium) · windows/x86_64 · log ...
+INFO  boot   window up
+INFO  scan   215 games in 4 ms (steam=ok manual=ok)
+INFO  boot   ready in 130 ms · 215 games · shell=tauri
+INFO  selfcheck 20 checks passed
+```
+
+If `boot window up` is there but nothing after it, the Rust side started and
+the interface did not — that is a frontend or packaging problem, and the
+"localhost refused to connect" case below is the one that has actually happened.
+
+## "localhost refused to connect"
+
+The binary was built as a **dev** build and is trying to reach a dev server that
+is not running.
+
+Tauri decides between the dev server and its embedded interface from a cargo
+feature — `dev = !custom-protocol`, in tauri's own `build.rs` — **not** from the
+build profile. A `--release` binary without that feature is still a dev binary.
+
+`Cargo.toml` needs:
+
+```toml
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+```
+
+It is on by default so any ordinary `cargo build` produces a real application,
+and `tauri dev` disables it for itself with `--no-default-features`.
+
+This shipped once, and nothing about the binary looked wrong: right size, right
+architecture, frontend embedded, newer than the frontend. Every check the build
+script had passed. `tools/build-windows.sh` now refuses to build a release
+without the feature, and that guard was verified by removing the feature and
+watching it fire.
+
 ## The target machine needs the WebView2 runtime
 
 Windows 11 ships it. Windows 10 has it through Edge on any current install. If

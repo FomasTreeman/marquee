@@ -11,6 +11,20 @@ rust-version = "1.77"
 name = "marquee_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# Tauri decides whether to load the dev server or its embedded interface from
+# this feature, not from the build profile: `dev = !custom-protocol`, in tauri's
+# own build.rs. It is on by default so any ordinary `cargo build` produces a
+# real application, and `tauri dev` turns it off for itself by running with
+# --no-default-features.
+#
+# Without this section every build was a dev build, and the resulting binary
+# opened http://localhost:1420 and showed "localhost refused to connect" on a
+# machine with no dev server. Hand-writing the manifest rather than using the
+# template is what lost it.
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 # build.rs reads frontendDist out of tauri.conf.json so the path cannot drift.

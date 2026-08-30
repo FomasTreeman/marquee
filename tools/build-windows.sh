@@ -45,6 +45,24 @@ pnpm build
 
 echo "==> cross-compiling for Windows ($PROFILE)"
 cd src-tauri
+
+# Verify this will be a production build, not a dev one.
+#
+# Tauri decides whether to load the dev server or its embedded interface from a
+# cargo feature -- `dev = !custom-protocol`, in tauri's own build.rs -- not from
+# the build profile. A release binary without it opens http://localhost:1420 and
+# shows "localhost refused to connect" on any machine with no dev server
+# running. That shipped, and nothing about the binary looked wrong: it was the
+# right size, it contained the frontend, and it was newer than the frontend.
+if [ "$PROFILE" = "release" ]; then
+  if ! cargo tree --target "$TARGET" -e features -i tauri 2>/dev/null \
+       | grep -q 'tauri feature "custom-protocol"'; then
+    echo "error: tauri's custom-protocol feature is not enabled." >&2
+    echo "       Without it this builds a dev binary that expects a dev server." >&2
+    echo "       Cargo.toml needs:  [features] default = [\"custom-protocol\"]" >&2
+    exit 1
+  fi
+fi
 if [ "$PROFILE" = "release" ]; then
   cargo xwin build --release --target "$TARGET"
 else

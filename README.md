@@ -78,7 +78,9 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
   games and where they live, artwork corrections, settings — exported to any
   path, kept current in a folder of your choosing, and found on its own after a
   reinstall if it was saved beside your games
-- Fullscreen (**F11**, remembered across launches), and the screen kept awake
+- **Fullscreen by default** — it is a launcher, not a desktop application that
+  happens to be large. **F11** switches to windowed and that choice is
+  remembered. The screen is also kept awake
   while you browse — a controller is not an input device as far as the OS is
   concerned, so ten minutes of browsing looks like ten minutes of idle
 

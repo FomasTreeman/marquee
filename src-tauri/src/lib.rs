@@ -199,7 +199,9 @@ fn toggle_fullscreen(
 ) -> Result<bool, String> {
     let next = !window.is_fullscreen().map_err(|e| e.to_string())?;
     window.set_fullscreen(next).map_err(|e| e.to_string())?;
-    store.set_setting("fullscreen", if next { "1" } else { "" })?;
+    // "0" means windowed rather than absent-means-windowed: absent is a first
+    // run, and a first run should be fullscreen.
+    store.set_setting("fullscreen", if next { "1" } else { "0" })?;
     log_info!("window", "fullscreen {}", if next { "on" } else { "off" });
     Ok(next)
 }
@@ -573,14 +575,25 @@ pub fn run() {
             // Before anything draws: cached art from an older pipeline would
             // otherwise answer first and no new logic would ever reach it.
             art::migrate_cache();
-            // Come back the way it was left. A launcher on a television is
-            // fullscreen essentially always, and asking every launch would be
-            // a poor way to treat that.
+            // Fullscreen unless told otherwise.
+            //
+            // This is a launcher, not a desktop application that happens to be
+            // large: the default is the whole screen and windowed is the
+            // exception. The window is created hidden and shown once the mode
+            // is settled, so neither preference flashes the other on the way
+            // in.
             if let Some(w) = app.get_webview_window("main") {
                 let store = app.state::<std::sync::Arc<store::Store>>();
-                if store.setting("fullscreen").ok().flatten().is_some() {
-                    let _ = w.set_fullscreen(true);
+                let windowed = store
+                    .setting("fullscreen")
+                    .ok()
+                    .flatten()
+                    .is_some_and(|v| v == "0");
+                if windowed {
+                    let _ = w.set_fullscreen(false);
                 }
+                let _ = w.show();
+                let _ = w.set_focus();
 
                 // Hold the display awake only while focused, and only when a
                 // pad is connected: with a keyboard and mouse the OS already
