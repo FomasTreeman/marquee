@@ -1,0 +1,76 @@
+# A second opinion on every pull request, before you read it.
+#
+# Not a gate -- it comments, it does not approve or block. The point is that
+# you arrive at a pull request already knowing where to look, rather than
+# reading three hundred lines cold at eleven at night.
+#
+# It reviews Claude's own pull requests too. That is not as odd as it sounds:
+# a fresh run with no memory of writing the thing, reading only the diff, is a
+# genuinely different reader from the one that wrote it.
+#
+# To ask for a review after a merge, or a second pass on anything, comment
+# `@claude review this` -- claude.yml handles that.
+
+name: Review
+
+on:
+  pull_request:
+    types: [opened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  id-token: write
+
+concurrency:
+  group: review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Drafts are work in progress by definition, and `no-ai` opts out.
+    if: |
+      !github.event.pull_request.draft &&
+      !contains(github.event.pull_request.labels.*.name, 'no-ai')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          prompt: |
+            Review the pull request this run is for, and post ONE comment on it.
+
+            Read CLAUDE.md first. Review against this project's standards, not
+            generic ones.
+
+            The four things that have actually gone wrong here, in order:
+
+            1. **Does the new test fail without the fix?** A test that passes
+               against the broken code is worse than no test, and that has
+               shipped here more than once. If the description does not say it
+               was checked, say so.
+            2. **Is the failure audible now?** Silent degradation is this
+               project's whole disease. A fix that leaves the next occurrence
+               invisible is half a fix. Look for discarded errors with no log
+               call and no comment giving a reason.
+            3. **Is it the smallest change that works?** Look for scope that
+               crept in, and for two fixes in one pull request -- that cannot
+               be half-reverted.
+            4. **Do the comments say why, not what?**
+
+            Be specific and short. Quote the line, say what breaks and when.
+
+            **If it looks good, say so in one line and stop.** A review that
+            manufactures three nitpicks to look thorough is worse than no
+            review, because it teaches the reader to skim.
+
+            Do not approve, do not request changes, do not push commits. A
+            comment is the whole job.
+          claude_args: |
+            --allowed-tools "Bash(git:*),Bash(pnpm:*),Bash(cargo:*),Bash(python3:*),Bash(tools/:*)"

@@ -93,6 +93,14 @@ jobs:
         shell: bash
         run: tools/check-silence.sh
 
+      # A schema-invalid workflow does not fail loudly -- it fails as a run
+      # named after the file path, in zero seconds, which reads like a rename
+      # rather than a break. Releases stopped for three merges before anyone
+      # noticed.
+      - name: Workflows GitHub will accept
+        shell: bash
+        run: python3 tools/check-workflows.py
+
       - run: pnpm exec tsc --noEmit
 
       - name: Frontend tests
