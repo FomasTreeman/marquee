@@ -111,6 +111,9 @@ fn sink() -> &'static Mutex<Sink> {
         let file = (|| {
             std::fs::create_dir_all(path.parent()?).ok()?;
             if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > MAX_BYTES {
+                // Nothing to report this to: we are inside the initialiser for
+                // the log sink itself. A failed rotation just means the file
+                // keeps growing, which the next launch will try again.
                 let _ = std::fs::rename(&path, path.with_extension("log.1"));
             }
             OpenOptions::new()
@@ -170,6 +173,26 @@ macro_rules! log_error {
 #[macro_export]
 macro_rules! log_debug {
     ($src:expr, $($arg:tt)*) => { $crate::log::write($crate::log::Level::Debug, $src, &format!($($arg)*)) };
+}
+
+/// Log a failure the caller has already decided to survive.
+///
+/// `let _ = write(..)` is how a cache that never persists looks correct
+/// forever: the app works, it just silently redoes the work on every launch
+/// and nothing ever says why. This keeps the tolerance and adds the sentence.
+///
+///     log_if_err!("art", std::fs::rename(&tmp, path), "caching {}", slug);
+#[macro_export]
+macro_rules! log_if_err {
+    ($src:expr, $expr:expr, $($arg:tt)*) => {
+        if let Err(e) = $expr {
+            $crate::log::write(
+                $crate::log::Level::Warn,
+                $src,
+                &format!("{}: {e}", format_args!($($arg)*)),
+            );
+        }
+    };
 }
 
 /// Announce the session. Written first so every log file is self-describing:

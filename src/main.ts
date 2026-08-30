@@ -669,7 +669,10 @@ async function main(): Promise<void> {
       const s = await getSettings()
       steamGridDbKey = s.steamgriddbKey
       savedSort = s.sort || 'recent'
-    } catch {
+    } catch (e) {
+      // Losing settings means the saved sort and the SteamGridDB key both
+      // quietly revert, which reads as "it forgot" rather than as a failure.
+      logWarn('settings', 'could not read settings; using defaults', e)
       steamGridDbKey = ''
     }
   }

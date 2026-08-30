@@ -14,6 +14,8 @@
  *      network for art nobody will see.
  */
 
+import { logWarn } from './log'
+
 const SETTLE_MS = 180
 
 export interface Backdrop {
@@ -46,7 +48,11 @@ export function createBackdrop(a: HTMLImageElement, b: HTMLImageElement): Backdr
         front = img
         back = t
       })
-      .catch(() => {})
+      .catch(() => {
+        // Superseded is routine; anything else means a backdrop we resolved
+        // and verified will not decode, which is worth a line.
+        if (gen === generation) logWarn('art', `backdrop would not decode: ${url}`)
+      })
   }
 
   return {

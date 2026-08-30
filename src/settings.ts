@@ -130,7 +130,8 @@ export function createSettings(onChanged: () => void): SettingsView {
       } else {
         padStatusLine.textContent = 'No controller detected. Plug one in and reopen this screen.'
       }
-    } catch {
+    } catch (e) {
+      logWarn('input', 'could not read controller status', e)
       padStatusLine.textContent = ''
     }
   }

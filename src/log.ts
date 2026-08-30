@@ -85,7 +85,9 @@ export function installErrorHandlers(): void {
         source: 'console',
         message: describe(first),
         detail: rest.length ? rest.map(describe).join(' ') : null,
-      }).catch(() => {})
+      }).catch(() => {
+        /* Same rule as log(): a failed forward must not cascade. */
+      })
     }
   }
 }

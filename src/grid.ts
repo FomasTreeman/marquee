@@ -299,7 +299,13 @@ export function createGrid(
           // decode() resolves once the image is ready to paint, so revealing it
           // cannot land on a half-decoded frame. It rejects on a 404 or when
           // superseded, and both mean "leave the fallback showing".
-          s.img.decode().then(reveal).catch(() => {})
+          s.img.decode().then(reveal).catch(() => {
+            // Superseded is routine — the slot was recycled mid-flight. A
+            // cover we already resolved and verified failing to decode is not,
+            // and a title card with no art is exactly the bug that gets
+            // reported as "artwork is broken" with nothing in the log.
+            if (s.generation === generation) reportArtFailure(String(item.art))
+          })
         } else {
           s.img.style.display = ''
         }

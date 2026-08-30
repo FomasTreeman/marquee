@@ -19,7 +19,7 @@ use image::imageops::FilterType;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{log_debug, log_info, paths};
+use crate::{log_debug, log_if_err, log_info, log_warn, paths};
 
 /// Longest edge, in device pixels, for each kind.
 ///
@@ -219,10 +219,21 @@ pub fn migrate_cache() {
     }
     if dir.exists() {
         log_info!("art", "artwork pipeline changed; clearing the cache");
-        let _ = std::fs::remove_dir_all(&dir);
+        log_if_err!(
+            "art",
+            std::fs::remove_dir_all(&dir),
+            "clearing {}",
+            dir.display()
+        );
     }
-    let _ = paths::ensure(&dir);
-    let _ = std::fs::write(&stamp, ART_VERSION.to_string());
+    log_if_err!("art", paths::ensure(&dir), "cache dir {}", dir.display());
+    // Without the stamp the cache reads as version 1 and is cleared again next
+    // launch, so every start re-downloads everything and nothing says why.
+    log_if_err!(
+        "art",
+        std::fs::write(&stamp, ART_VERSION.to_string()),
+        "stamping the cache version"
+    );
 }
 
 fn path_for(slug: &str, kind: Kind) -> PathBuf {
@@ -656,12 +667,16 @@ pub fn artwork_report(app_ids: Vec<String>) -> Vec<Manifest> {
 /// Temp-then-rename, so a half-written file is never mistaken for a cached one
 /// -- and never for a miss, which is the same thing at zero bytes.
 fn write_cached(path: &std::path::Path, bytes: &[u8]) {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
     if let Some(dir) = path.parent() {
-        let _ = paths::ensure(dir);
+        log_if_err!("art", paths::ensure(dir), "cache dir {}", dir.display());
     }
     let tmp = path.with_extension("tmp");
-    if std::fs::write(&tmp, bytes).is_ok() {
-        let _ = std::fs::rename(&tmp, path);
+    match std::fs::write(&tmp, bytes) {
+        // Rename is the step that publishes the file. Losing it leaves a .tmp
+        // behind and the next launch re-downloads, so it has to be audible.
+        Ok(()) => log_if_err!("art", std::fs::rename(&tmp, path), "caching {name}"),
+        Err(e) => log_warn!("art", "caching {name}: {e}"),
     }
 }
 

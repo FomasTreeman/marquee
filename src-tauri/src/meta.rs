@@ -23,7 +23,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
-use crate::{log_debug, log_info, log_warn, paths};
+use crate::{log_debug, log_if_err, log_info, log_warn, paths};
 
 /// Bump when a field is added that existing cache entries will not have.
 ///
@@ -81,15 +81,23 @@ pub fn cached(app_id: &str) -> Option<Meta> {
 fn store(meta: &Meta) {
     let path = cache_path(&meta.app_id);
     if let Some(dir) = path.parent() {
-        let _ = paths::ensure(dir);
+        log_if_err!("meta", paths::ensure(dir), "cache dir {}", dir.display());
     }
-    if let Ok(text) = serde_json::to_string(meta) {
-        // Write-then-rename: a half-written cache entry that parses as valid
-        // JSON would be worse than no entry at all.
-        let tmp = path.with_extension("tmp");
-        if std::fs::write(&tmp, text).is_ok() {
-            let _ = std::fs::rename(&tmp, &path);
-        }
+    let text = match serde_json::to_string(meta) {
+        Ok(t) => t,
+        Err(e) => return log_warn!("meta", "encoding {}: {e}", meta.app_id),
+    };
+    // Write-then-rename: a half-written cache entry that parses as valid
+    // JSON would be worse than no entry at all.
+    let tmp = path.with_extension("tmp");
+    match std::fs::write(&tmp, text) {
+        Ok(()) => log_if_err!(
+            "meta",
+            std::fs::rename(&tmp, &path),
+            "caching {}",
+            meta.app_id
+        ),
+        Err(e) => log_warn!("meta", "caching {}: {e}", meta.app_id),
     }
 }
 

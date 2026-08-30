@@ -6,6 +6,7 @@
  */
 import { listen } from '@tauri-apps/api/event'
 import { call, inApp } from './host'
+import { logWarn } from './log'
 
 export interface Game {
   id: string
@@ -337,9 +338,10 @@ export async function initArtwork(): Promise<void> {
   if (!inApp) return
   try {
     artBase = await call<string>('art_url_base')
-  } catch {
-    // A missing protocol handler is survivable: the CDN still works, it just
-    // costs the network every launch.
+  } catch (e) {
+    // Survivable: the CDN still works, it just costs the network every launch
+    // instead of reading the cache. Silent, though, it looks like slow art.
+    logWarn('art', 'no local art protocol; falling back to the CDN', e)
     artBase = ''
   }
 }

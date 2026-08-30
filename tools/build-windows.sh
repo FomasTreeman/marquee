@@ -40,6 +40,9 @@ rustup target list --installed | grep -qx "$TARGET" || {
 # The frontend is embedded into the binary at compile time, so it has to exist
 # and has to be current. Building it here rather than assuming means the exe can
 # never ship a stale interface.
+echo "==> checking for unexplained discarded failures"
+tools/check-silence.sh
+
 echo "==> building the frontend"
 pnpm build
 

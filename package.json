@@ -11,9 +11,10 @@
     "app": "tauri dev",
     "tokens": "python3 tools/build-tokens.py",
     "logs": "tail -f \"$HOME/Library/Logs/Marquee/marquee.log\"",
-    "test": "vitest run && tsc --noEmit && cd src-tauri && cargo test",
+    "test": "tools/check-silence.sh && vitest run && tsc --noEmit && cd src-tauri && cargo test",
     "test:ui": "vitest run",
-    "build:windows": "tools/build-windows.sh"
+    "build:windows": "tools/build-windows.sh",
+    "check": "tools/check-silence.sh"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",
