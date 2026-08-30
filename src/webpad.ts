@@ -23,7 +23,7 @@
  * Only one of the two ever runs. See `armAfter` below.
  */
 import type { Action, ActionEvent } from './input'
-import { logInfo } from './log'
+import { logInfo, logWarn } from './log'
 
 /** Matched to the Rust path so the pad feels identical whichever is driving. */
 const REPEAT_DELAY = 380
@@ -37,8 +37,8 @@ const DEADZONE = 0.55
  */
 const BUTTONS: Array<Action | undefined> = [
   'a', 'b', 'x', 'y',       // 0-3   face
-  'lb', 'rb',               // 4-5   shoulders
-  undefined, undefined,     // 6-7   triggers: analogue, not used here
+  'lb', 'rb',               // 4-5   bumpers
+  'lb', 'rb',               // 6-7   triggers: page as well, see input.rs
   'add', 'menu',            // 8-9   Select/Back, Start
   'sort', 'filter',         // 10-11 stick clicks
   'up', 'down', 'left', 'right', // 12-15 d-pad
@@ -80,6 +80,8 @@ export function createWebPad(
   // once per frame for as long as a button is held.
   let was = new Set<Action>()
   const repeatAt = new Map<Action, number>()
+  /** Complain once per pad, not once per frame. */
+  const warned = new Set<string>()
 
   function poll(): void {
     if (stopped) return
@@ -90,11 +92,27 @@ export function createWebPad(
     const down = new Set<Action>()
 
     for (const pad of livePads()) {
+      // The index table above is the W3C *standard* mapping. A pad Chromium
+      // cannot recognise reports `mapping: ""` and hands back buttons in
+      // whatever order the device felt like, so reading index 4 as a bumper
+      // would be a guess -- and a guess here produces a pad where some buttons
+      // do the wrong thing, which is worse than one that does nothing.
+      if (pad.mapping !== 'standard') {
+        if (!warned.has(pad.id)) {
+          warned.add(pad.id)
+          logWarn('input', `${pad.id} has no standard mapping; ignoring it in the webview path`)
+        }
+        continue
+      }
       pad.buttons.forEach((b, i) => {
         // 0.5 rather than b.pressed: analogue triggers and some third-party
         // pads report a value without ever setting the boolean.
         const action = BUTTONS[i]
         if (action && (b.pressed || b.value > 0.5)) down.add(action)
+        else if (!action && (b.pressed || b.value > 0.5) && !warned.has(pad.id + i)) {
+          warned.add(pad.id + i)
+          logWarn('input', `${pad.id}: button ${i} is not mapped to anything`)
+        }
       })
       const [x = 0, y = 0] = pad.axes
       if (x <= -DEADZONE) down.add('left')

@@ -84,8 +84,16 @@ fn button_action(b: Button) -> Option<Action> {
         Button::East => Action::B,
         Button::West => Action::X,
         Button::North => Action::Y,
-        Button::LeftTrigger => Action::Lb,
-        Button::RightTrigger => Action::Rb,
+        // Both the bumper and the trigger page the library.
+        //
+        // gilrs names these confusingly: LeftTrigger is the *bumper* (L1, LB)
+        // and LeftTrigger2 is the analogue trigger (L2, LT). Only the bumpers
+        // were mapped, so pulling a trigger did nothing at all -- and "the
+        // triggers do not work" is indistinguishable from "the controller does
+        // not work" when you are the one holding it. Accepting both costs
+        // nothing and removes a whole class of confusion.
+        Button::LeftTrigger | Button::LeftTrigger2 => Action::Lb,
+        Button::RightTrigger | Button::RightTrigger2 => Action::Rb,
         Button::LeftThumb => Action::Sort,
         Button::RightThumb => Action::Filter,
         Button::Start => Action::Menu,
@@ -295,12 +303,20 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
         loop {
             while let Some(ev) = gilrs.next_event() {
                 match ev.event {
-                    EventType::ButtonPressed(b, _) => {
+                    EventType::ButtonPressed(b, code) => {
                         if let Some(a) = button_action(b) {
                             emit(a, false);
                             if a.repeats() {
                                 held = Some((a, Instant::now() + REPEAT_DELAY));
                             }
+                        } else {
+                            // A pad that sends buttons we do not understand
+                            // looks exactly like a pad that sends nothing.
+                            // Saying which is the entire difference between a
+                            // fixable report and "the controller doesn't work".
+                            let what = format!("{b:?} ({code})");
+                            crate::log_warn!("input", "unmapped button {what}");
+                            let _ = app.emit("input-unmapped", what);
                         }
                     }
                     EventType::ButtonReleased(b, _) => {

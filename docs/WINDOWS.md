@@ -145,6 +145,42 @@ backend, every device it saw, and anything the webview can see that it could
 not. That distinction is the whole diagnosis — "nothing enumerated" and
 "enumerated but unmapped" feel identical and have nothing in common.
 
+## "Some buttons work and some do nothing"
+
+**Settings → Controller → Test a controller.** Press each button in turn and
+watch what arrives:
+
+```
+pad       lb
+pad       a
+unmapped  Unknown (12)   <- this is why that button does nothing
+keyboard  sort
+```
+
+A pad whose buttons arrive under names Marquee does not recognise behaves
+*exactly* like a pad that sends nothing, and no device list separates the two —
+but one is a two-line fix to `button_action` in `src-tauri/src/input.rs` and the
+other is a driver problem. The `unmapped` lines are the interesting ones: they
+carry the raw button name and code, which is all that is needed to add it.
+
+The keyboard shows up here too, deliberately. It is the control case: if
+pressing O prints `keyboard sort` and pressing L1 prints nothing at all, the
+pad is not reaching the app; if L1 prints an `unmapped` line, it is.
+
+Two things this already caught:
+
+- **The triggers did nothing.** gilrs names these confusingly — `LeftTrigger`
+  is the *bumper* (L1/LB) and `LeftTrigger2` is the analogue trigger (L2/LT).
+  Only the bumpers were mapped, so pulling a trigger was silently ignored.
+  Both now page the library.
+- **A pad with no standard mapping was being read as though it had one.** The
+  webview path indexes buttons by the W3C standard layout; Chromium reports
+  `mapping: ""` for a device it cannot recognise and returns buttons in
+  whatever order the device chose. Reading index 4 as a bumper there is a
+  guess, and a guess gives you a pad where some buttons do the *wrong* thing,
+  which is worse than one that does nothing. Such a pad is now ignored by that
+  path and says so in the log.
+
 The three-second delay before complaining is deliberate: gilrs enumerates
 before the platform has finished reporting devices, so a connected pad shows as
 absent for a few milliseconds. Warning immediately produced `no gamepad seen`

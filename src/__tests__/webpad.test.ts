@@ -111,11 +111,35 @@ describe('once armed', () => {
     }
   })
 
-  it('ignores the analogue triggers', () => {
-    // Indices 6 and 7 are the triggers. They rest at a non-zero value on some
-    // pads, so mapping them would produce phantom presses at idle.
-    pads = [press(fakePad(), 6, 7)]
+  it('pages on the triggers as well as the bumpers', () => {
+    // Indices 6 and 7 are the analogue triggers. Leaving them unmapped meant
+    // pulling a trigger did nothing, and "the triggers do not work" is
+    // indistinguishable from "the controller does not work" when you are the
+    // one holding it.
+    pads = [press(fakePad(), 6)]
     tick()
+    expect(events.map((e) => e.action)).toEqual(['lb'])
+    events = []
+    pads = [fakePad()]; tick()
+    pads = [press(fakePad(), 7)]; tick()
+    expect(events.map((e) => e.action)).toEqual(['rb'])
+  })
+
+  it('does not fire a trigger twice when the bumper is held too', () => {
+    // Both map to the same action, and the pressed set is a Set, so holding
+    // L1 and L2 together is one press rather than two.
+    pads = [press(fakePad(), 4, 6)]
+    tick()
+    expect(events.filter((e) => e.action === 'lb')).toHaveLength(1)
+  })
+
+  it('ignores a pad with no standard mapping rather than guessing', () => {
+    // Chromium reports `mapping: ""` for a device it cannot recognise, and
+    // hands the buttons back in whatever order the device chose. Reading
+    // index 4 as a bumper would be a guess, and a guess produces a pad where
+    // some buttons do the wrong thing -- worse than one that does nothing.
+    pads = [press(fakePad({ mapping: '' as GamepadMappingType }), 0)]
+    tick(); tick()
     expect(events).toEqual([])
   })
 
