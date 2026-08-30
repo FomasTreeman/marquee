@@ -17,7 +17,7 @@ import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialo
 import {
   getSettings, setSteamGridDbKey, exportProfile, importProfile, setProfileFolder, setSetting,
 } from './library'
-import { padStatus } from './input'
+import { padStatus, webviewPads } from './input'
 import { logInfo, logWarn } from './log'
 import { toast } from './toast'
 
@@ -111,28 +111,58 @@ export function createSettings(onChanged: () => void): SettingsView {
       'the bottom follows whichever you last used.',
   )
   const padStatusLine = el('p', 'settings-status', pad.root)
+  /** The detail behind the headline: which backend, and what it enumerated. */
+  const padDetail = el('pre', 'settings-diagnostic', pad.root)
 
+  /**
+   * Say what is actually happening, not what is probably happening.
+   *
+   * This screen used to guess -- it told Windows users that only
+   * Xbox-compatible pads are visible and to install DS4Windows, which was
+   * wrong: the backend is Windows.Gaming.Input, which enumerates any HID game
+   * controller. A confident wrong answer sends someone off installing drivers
+   * they do not need, so this now reports the backend, every device it saw,
+   * and anything the webview can see that the backend could not.
+   */
   async function describePad(): Promise<void> {
     try {
       const status = await padStatus()
-      if (!status.supported) {
-        padStatusLine.textContent =
-          'This machine reports no gamepad support at all. Keyboard and mouse only.'
-      } else if (status.connected > 0) {
+      const web = webviewPads()
+
+      if (status.connected > 0) {
         padStatusLine.textContent =
           `${status.connected} controller${status.connected === 1 ? '' : 's'} connected.`
-      } else if (navigator.userAgent.includes('Windows')) {
-        // Not a fault, and the most likely thing someone hits.
+      } else if (status.failure) {
+        padStatusLine.textContent = status.failure
+      } else if (!status.supported) {
         padStatusLine.textContent =
-          'No controller detected. On Windows only Xbox-compatible controllers ' +
-          'are visible — a PlayStation controller needs Steam Input or DS4Windows ' +
-          'to appear as one. Plug in, then reopen this screen.'
+          'This machine reports no gamepad support at all. Keyboard and mouse only.'
+      } else if (web.length) {
+        // The interesting case: the native path is running and saw nothing,
+        // but the webview can see the pad, so the fallback is driving it.
+        padStatusLine.textContent =
+          `${status.backend} found no controller, but the webview can see ` +
+          `${web.length === 1 ? 'one' : web.length}. Marquee is using that instead — ` +
+          'everything works, latency is a little higher.'
       } else {
-        padStatusLine.textContent = 'No controller detected. Plug one in and reopen this screen.'
+        padStatusLine.textContent =
+          'No controller detected. Plug one in, press a button, then reopen this screen — ' +
+          'a wireless pad is invisible until it has something to say.'
       }
+
+      const lines = [`backend: ${status.backend}`]
+      for (const d of status.devices) lines.push(`  ${d}`)
+      if (!status.devices.length) lines.push('  (nothing enumerated)')
+      if (web.length) {
+        lines.push('webview:')
+        for (const d of web) lines.push(`  ${d}`)
+      }
+      padDetail.textContent = lines.join('\n')
+      padDetail.hidden = false
     } catch (e) {
       logWarn('input', 'could not read controller status', e)
       padStatusLine.textContent = ''
+      padDetail.hidden = true
     }
   }
 

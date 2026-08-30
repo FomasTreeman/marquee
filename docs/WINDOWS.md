@@ -97,25 +97,61 @@ watching it fire.
 
 ## A controller that does not work
 
-gilrs reads **XInput** on Windows, and XInput reports Xbox-compatible devices
-only. A DualSense or DualShock plugged straight in is a plain HID device and is
-invisible to it — the app is working, it genuinely cannot see the pad.
+**This section used to be wrong, and the wrong version was worse than nothing.**
+It said gilrs reads XInput on Windows, that XInput sees Xbox-compatible devices
+only, and that a PlayStation pad needs Steam Input or DS4Windows. All three
+claims were false, and Settings repeated them, so the app confidently sent
+people off installing drivers they did not need.
 
-Steam Input or DS4Windows makes such a controller present as XInput, at which
-point it appears with no changes here. Settings says so when nothing is
-detected, rather than leaving a working app looking broken.
+gilrs enables its `wgi` backend by default, not `xinput` — check
+`gilrs-core/Cargo.toml` if you doubt it. That backend is **Windows.Gaming.Input**,
+and it enumerates through `RawGameController`, which sees *any* HID game
+controller. A DualSense plugged straight in is visible to it. So is a Steam
+Deck's built-in pad, and so is a Razer or 8BitDo dongle.
+
+Which leaves the real question: why would a pad not appear?
+
+**The likeliest answer is that the input thread died.** gilrs registers its
+WinRT event handlers with `.unwrap()`, so a refusal anywhere in that stack
+arrives as a panic rather than an `Err`. A panic in a spawned thread kills that
+thread alone, prints to a stderr nobody is reading, and leaves the app running
+perfectly — with no gamepad and nothing in the log. From the sofa that is
+identical to an unplugged controller.
+
+`input.rs` now catches that panic and records it. If it happens you will see:
+
+```
+ERROR input  the gamepad thread stopped: <message>. Windows.Gaming.Input is
+             unavailable, so the interface is keyboard and mouse only.
+```
+
+**And there is now a second route.** `src/webpad.ts` drives the pad through the
+webview's own Gamepad API — a completely independent code path, since WebView2
+is Chromium and its gamepad layer reads XInput, raw HID and DirectInput, with
+specific support for DualShock and DualSense. It arms itself only after the
+native path has visibly failed to find anything, so the two can never both fire
+(a doubled A launches a game twice). When it takes over, Settings says so.
 
 The log records the backend and every device it enumerates:
 
 ```
-INFO  input  Xbox Wireless Controller via XInput (connected: true, mapped: true)
-WARN  input  no gamepad after 3s. XInput reports Xbox-compatible pads only ...
+INFO  input  Xbox Wireless Controller — SDL mapping, connected (via Windows.Gaming.Input)
+WARN  input  no gamepad after 3s. Windows.Gaming.Input started and enumerated nothing.
+INFO  input  native gamepad path reported nothing; the webview is driving the pad instead
 ```
 
-The three-second delay is deliberate: gilrs enumerates before the platform has
-finished reporting devices, so a connected pad shows as absent for a few
-milliseconds. Warning immediately produced `no gamepad seen` followed 11 ms
-later by `gamepad connected`, which is worse than saying nothing.
+Settings → Controller shows the same thing without needing the file: the
+backend, every device it saw, and anything the webview can see that it could
+not. That distinction is the whole diagnosis — "nothing enumerated" and
+"enumerated but unmapped" feel identical and have nothing in common.
+
+The three-second delay before complaining is deliberate: gilrs enumerates
+before the platform has finished reporting devices, so a connected pad shows as
+absent for a few milliseconds. Warning immediately produced `no gamepad seen`
+followed 11 ms later by `gamepad connected`, which is worse than saying nothing.
+
+A wireless pad is also genuinely invisible until it has something to say. Press
+a button before deciding it is broken.
 
 ## The target machine needs the WebView2 runtime
 

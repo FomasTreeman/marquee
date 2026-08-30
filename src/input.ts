@@ -11,6 +11,7 @@
  */
 import { listen } from '@tauri-apps/api/event'
 import { call, inApp } from './host'
+import { createWebPad, type WebPad } from './webpad'
 
 export type Action =
   | 'up' | 'down' | 'left' | 'right'
@@ -109,10 +110,21 @@ async function syncClock(samples = 12): Promise<number> {
   return offset
 }
 
-export interface PadStatus { supported: boolean; connected: number }
+export interface PadStatus {
+  supported: boolean
+  connected: number
+  /** The platform API in play: Windows.Gaming.Input, IOKit or evdev. */
+  backend: string
+  /** One line per device the backend enumerated. Empty is an answer too. */
+  devices: string[]
+  /** Why there is no input, when there is a reason worth repeating. */
+  failure: string | null
+}
 
 export async function padStatus(): Promise<PadStatus> {
-  if (!inApp) return { supported: false, connected: 0 }
+  if (!inApp) {
+    return { supported: false, connected: 0, backend: 'browser', devices: [], failure: null }
+  }
   return call<PadStatus>('pad_status')
 }
 
@@ -161,10 +173,16 @@ export async function createInput(
   window.addEventListener('keydown', onKey)
   disposers.push(() => window.removeEventListener('keydown', onKey))
 
+  // Whether the Rust path has ever actually delivered a press. Not whether it
+  // says it is running -- a thread that enumerated a pad and then died still
+  // reports a pad. Only an event that arrived proves the route works.
+  let nativeDelivered = false
+
   if (inApp) {
     const offset = await syncClock()
     const unlisten = await listen<RustInputEvent>('input', (ev) => {
       const p = ev.payload
+      nativeDelivered = true
       dispatch({
         action: p.action,
         repeat: p.repeat,
@@ -176,5 +194,26 @@ export async function createInput(
     disposers.push(unlisten)
   }
 
+  // The fallback. It arms itself only if the native path has neither delivered
+  // an event nor found a pad, so in the normal case it costs one timer and
+  // never dispatches anything. See webpad.ts for why it exists at all.
+  const status = await padStatus()
+  webPad = createWebPad(
+    (e) => {
+      dispatch(e)
+      note('pad')
+    },
+    () => nativeDelivered || status.connected > 0,
+  )
+  disposers.push(() => webPad?.stop())
+
   return () => disposers.forEach((d) => d())
+}
+
+/** The live fallback, for the diagnostics in Settings. */
+let webPad: WebPad | undefined
+
+/** What the webview can see, whether or not it is the one driving. */
+export function webviewPads(): string[] {
+  return webPad?.seen() ?? []
 }

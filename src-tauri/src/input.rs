@@ -14,7 +14,7 @@
 //! directions behave identically no matter what the interface is doing.
 
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gilrs::{Axis, Button, EventType, Gilrs};
@@ -125,18 +125,59 @@ impl AxisState {
 /// A launcher whose whole premise is a controller has to be able to say "no
 /// controller detected" rather than simply not responding, so this is read by
 /// a command rather than kept private to the thread.
+///
+/// It carries a diagnosis as well as a count, because "no controller" has
+/// several very different causes -- the backend refused to start, it started
+/// and saw nothing, or it saw a device it could not map -- and the person on
+/// the sofa cannot tell them apart from the silence.
 #[derive(Default)]
 pub struct Status {
-    /// gilrs initialised. False means this machine has no gamepad support at
-    /// all and the interface should say so.
+    /// The backend initialised. False means this machine has no gamepad
+    /// support at all and the interface should say so.
     pub supported: AtomicBool,
     pub connected: AtomicUsize,
+    /// One line per device the backend enumerated, in its own words.
+    pub devices: Mutex<Vec<String>>,
+    /// Why there is no input, when there is a reason worth repeating.
+    pub failure: Mutex<Option<String>>,
 }
 
+impl Status {
+    fn fail(&self, why: String) {
+        crate::log_error!("input", "{why}");
+        if let Ok(mut slot) = self.failure.lock() {
+            *slot = Some(why);
+        }
+    }
+}
+
+/// The platform API actually in play.
+///
+/// Worth stating exactly, because it decides which devices can be seen at all
+/// and it is the first thing to check when a pad does not work. On Windows
+/// this is Windows.Gaming.Input -- gilrs enables its `wgi` backend by default,
+/// not `xinput`. That distinction matters: WGI enumerates through
+/// RawGameController, which sees any HID game controller, while XInput sees
+/// Xbox-compatible devices only. Marquee previously said XInput here and told
+/// people with PlayStation pads to install DS4Windows, which was wrong.
+pub const BACKEND: &str = if cfg!(target_os = "windows") {
+    "Windows.Gaming.Input"
+} else if cfg!(target_os = "macos") {
+    "IOKit"
+} else {
+    "evdev"
+};
+
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PadStatus {
     pub supported: bool,
     pub connected: usize,
+    pub backend: &'static str,
+    /// Every device the backend enumerated, named. Empty is itself an answer:
+    /// the backend is running and this machine genuinely has no pad attached.
+    pub devices: Vec<String>,
+    pub failure: Option<String>,
 }
 
 #[tauri::command]
@@ -144,6 +185,9 @@ pub fn pad_status(status: tauri::State<'_, Arc<Status>>) -> PadStatus {
     PadStatus {
         supported: status.supported.load(Ordering::Relaxed),
         connected: status.connected.load(Ordering::Relaxed),
+        backend: BACKEND,
+        devices: status.devices.lock().map(|d| d.clone()).unwrap_or_default(),
+        failure: status.failure.lock().ok().and_then(|f| f.clone()),
     }
 }
 
@@ -155,37 +199,71 @@ pub fn spawn(app: AppHandle, start: Instant) -> Arc<Status> {
     let shared = status.clone();
 
     std::thread::spawn(move || {
-        // Which backend is in play decides what will and will not be seen, and
-        // it is the first thing worth knowing when a pad does not work.
-        let backend = if cfg!(target_os = "windows") {
-            "XInput"
-        } else if cfg!(target_os = "macos") {
-            "IOKit"
-        } else {
-            "evdev"
-        };
+        // gilrs unwraps internally while registering its WinRT event handlers,
+        // so a failure on Windows arrives as a panic rather than an Err. A
+        // panic in a spawned thread kills that thread alone, prints to a stderr
+        // nobody is reading, and leaves the app running perfectly well with no
+        // gamepad and nothing in the log. That is indistinguishable from "the
+        // controller is not plugged in", which is the report we actually got.
+        let inner = shared.clone();
+        let outcome =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || run(app, start, inner)));
+        if let Err(payload) = outcome {
+            let why = payload
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "no message".into());
+            shared.fail(format!(
+                "the gamepad thread stopped: {why}. {BACKEND} is unavailable,                  so the interface is keyboard and mouse only."
+            ));
+        }
+    });
+
+    status
+}
+
+fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
+    {
+        let backend = BACKEND;
 
         let mut gilrs = match Gilrs::new() {
             Ok(g) => g,
             Err(e) => {
-                crate::log_error!(
-                    "input",
+                shared.fail(format!(
                     "no gamepad support via {backend}: {e}. Keyboard and mouse only."
-                );
+                ));
                 return;
             }
         };
         shared.supported.store(true, Ordering::Relaxed);
         let mut pads = 0usize;
+        let mut seen: Vec<String> = Vec::new();
         for (_id, pad) in gilrs.gamepads() {
-            crate::log_info!(
-                "input",
-                "{} via {backend} (connected: {}, mapped: {})",
+            // Recorded verbatim as well as logged. "No controller" has several
+            // causes that feel identical from the sofa, and the difference
+            // between "nothing enumerated" and "enumerated but unmapped" is the
+            // whole diagnosis. Settings shows this list.
+            let line = format!(
+                "{} — {} mapping, {}",
                 pad.name(),
-                pad.is_connected(),
-                pad.is_ff_supported() || pad.mapping_source() != gilrs::MappingSource::None
+                match pad.mapping_source() {
+                    gilrs::MappingSource::SdlMappings => "SDL",
+                    gilrs::MappingSource::Driver => "driver",
+                    gilrs::MappingSource::None => "no",
+                },
+                if pad.is_connected() {
+                    "connected"
+                } else {
+                    "not connected"
+                },
             );
+            crate::log_info!("input", "{line} (via {backend})");
+            seen.push(line);
             pads += 1;
+        }
+        if let Ok(mut d) = shared.devices.lock() {
+            *d = seen;
         }
         shared.connected.store(pads, Ordering::Relaxed);
 
@@ -276,21 +354,17 @@ pub fn spawn(app: AppHandle, start: Instant) -> Arc<Status> {
             if !reported && Instant::now() >= decide_at {
                 reported = true;
                 if shared.connected.load(Ordering::Relaxed) == 0 {
-                    // On Windows this is usually not a fault. gilrs reads
-                    // XInput there, and XInput reports Xbox-compatible devices
-                    // only -- a DualSense or DualShock plugged straight in is a
-                    // plain HID device and invisible to it. Steam Input or
-                    // DS4Windows makes such a pad present as XInput, at which
-                    // point it appears here.
-                    if cfg!(target_os = "windows") {
-                        crate::log_warn!(
-                            "input",
-                            "no gamepad after 3s. XInput reports Xbox-compatible pads only -- \
-                             a PlayStation controller needs Steam Input or DS4Windows to appear."
-                        );
-                    } else {
-                        crate::log_warn!("input", "no gamepad after 3s, via {backend}");
-                    }
+                    // Deliberately not advice any more. This used to claim that
+                    // XInput sees Xbox-compatible pads only and to recommend
+                    // DS4Windows, which was wrong on both counts: the backend is
+                    // Windows.Gaming.Input, and it enumerates through
+                    // RawGameController, which sees any HID game controller.
+                    // Guessing at a cause is worse than reporting the fact,
+                    // because the guess is what gets acted on.
+                    crate::log_warn!(
+                        "input",
+                        "no gamepad after 3s. {backend} started and enumerated nothing."
+                    );
                 }
             }
 
@@ -304,7 +378,5 @@ pub fn spawn(app: AppHandle, start: Instant) -> Arc<Status> {
 
             std::thread::sleep(POLL);
         }
-    });
-
-    status
+    }
 }

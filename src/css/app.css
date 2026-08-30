@@ -989,3 +989,20 @@ body::after {
   /* A path can be long and has no spaces to break at. */
   overflow-wrap: anywhere;
 }
+
+/* The controller diagnosis: which backend, and what it enumerated. Monospace
+   because it is a device list, not prose, and someone may be reading it back
+   over a message. */
+.settings-diagnostic {
+  margin: calc(8px * var(--s)) 0 0;
+  padding: calc(10px * var(--s)) calc(12px * var(--s));
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm, 8px);
+  background: rgb(0 0 0 / 0.25);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: calc(12px * var(--s));
+  line-height: 1.6;
+  color: var(--fg2);
+  white-space: pre-wrap;
+  overflow-x: auto;
+}
