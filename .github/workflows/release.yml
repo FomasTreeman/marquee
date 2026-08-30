@@ -75,9 +75,15 @@ jobs:
           # main has none, and gets a patch.
           pr=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
                  --jq '.[0] // empty' 2>/dev/null || true)
-          labels=$(echo "${pr:-{}}" | jq -r '(.labels // []) | map(.name) | join(" ")')
-          title=$(echo "${pr:-{}}" | jq -r '.title // ""')
-          number=$(echo "${pr:-{}}" | jq -r '.number // ""')
+          # Not `${pr:-{}}`. Bash reads that as ${pr:-{} followed by a literal
+          # }, so an empty pr gives a valid {} and a real one gives the whole
+          # JSON with a stray brace stuck on the end -- which parses fine until
+          # the first time a commit actually has a pull request behind it, and
+          # then fails with "Unmatched '}'" halfway through the object.
+          [ -n "$pr" ] || pr='{}'
+          labels=$(echo "$pr" | jq -r '(.labels // []) | map(.name) | join(" ")')
+          title=$(echo "$pr" | jq -r '.title // ""')
+          number=$(echo "$pr" | jq -r '.number // ""')
           echo "pull request: ${number:-none} — ${title:-n/a}"
           echo "labels: ${labels:-none}"
 
