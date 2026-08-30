@@ -69,10 +69,89 @@ impl Steam {
         out
     }
 
-    fn root() -> Option<PathBuf> {
+    pub fn root() -> Option<PathBuf> {
         Self::roots()
             .into_iter()
             .find(|p| p.join("steamapps").is_dir())
+    }
+
+    /// Is the Steam client up?
+    ///
+    /// Matters because of *how* a game gets launched. Handing `steam://` to the
+    /// system when Steam is closed makes Steam start, and a cold Steam start
+    /// opens its library window over everything -- on a television, the
+    /// launcher disappearing behind a storefront. If Steam is already running,
+    /// the same URI launches the game without raising anything.
+    pub fn is_running() -> bool {
+        #[cfg(target_os = "windows")]
+        {
+            // Steam keeps a live pid here, and we already read this hive.
+            // Cheaper and more reliable than shelling out to tasklist.
+            use winreg::enums::HKEY_CURRENT_USER;
+            use winreg::RegKey;
+            RegKey::predef(HKEY_CURRENT_USER)
+                .open_subkey("Software\\Valve\\Steam\\ActiveProcess")
+                .and_then(|k| k.get_value::<u32, _>("pid"))
+                .map(|pid| pid != 0)
+                .unwrap_or(false)
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            // The process name is not the name of the app bundle, and differs
+            // between macOS and Linux.
+            let name = if cfg!(target_os = "macos") {
+                "steam_osx"
+            } else {
+                "steam"
+            };
+            std::process::Command::new("pgrep")
+                .args(["-x", name])
+                .output()
+                .map(|o| o.status.success() && !o.stdout.is_empty())
+                .unwrap_or(false)
+        }
+    }
+
+    /// Start Steam without showing its window.
+    ///
+    /// `-silent` puts it straight in the tray. The alternative -- letting the
+    /// `steam://` URI start it -- opens the library window in front of
+    /// everything, which is the thing worth avoiding.
+    pub fn start_silently() -> Result<(), String> {
+        #[cfg(target_os = "macos")]
+        let mut command = {
+            // Steam's own binary rather than `open -a Steam`: going through
+            // `open` activates the app, which is exactly the window we are
+            // trying not to show.
+            let mut c =
+                std::process::Command::new("/Applications/Steam.app/Contents/MacOS/steam_osx");
+            c.arg("-silent");
+            c
+        };
+
+        #[cfg(target_os = "windows")]
+        let mut command = {
+            let exe = Self::root()
+                .map(|r| r.join("steam.exe"))
+                .filter(|p| p.exists())
+                .ok_or("could not find steam.exe")?;
+            let mut c = std::process::Command::new(exe);
+            c.arg("-silent");
+            c
+        };
+
+        #[cfg(target_os = "linux")]
+        let mut command = {
+            let mut c = std::process::Command::new("steam");
+            c.arg("-silent");
+            c
+        };
+
+        command
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("could not start Steam: {e}"))
     }
 
     /// Every library folder Steam knows about, including the root itself.
@@ -335,6 +414,17 @@ mod tests {
         assert!(is_tool("999999", "Proton 9.0"));
         assert!(!is_tool("1091500", "Cyberpunk 2077"));
         assert!(!is_tool("367520", "Hollow Knight"));
+    }
+
+    /// Not an assertion about *this* machine -- it depends on whether Steam
+    /// happens to be open -- but it must answer without panicking, and it must
+    /// agree with itself twice in a row.
+    #[test]
+    fn detecting_steam_is_stable_and_cheap() {
+        let first = Steam::is_running();
+        let second = Steam::is_running();
+        assert_eq!(first, second, "detection should not flap");
+        println!("  steam running on this machine: {first}");
     }
 
     #[test]

@@ -80,8 +80,17 @@ fn launch_game(
             serde_json::json!({ "title": title, "detail": detail }),
         );
     };
+    // Checked before launching so the interface can say how long this will
+    // take. A cold Steam is several seconds; a warm one is instant, and telling
+    // someone to wait when they will not is as bad as the reverse.
+    let steam_cold = game.provider == "steam" && !library::steam::Steam::is_running();
+
     match run::start(&game, notify) {
-        Ok(run::Launch::Uri(uri)) => Ok(uri),
+        Ok(run::Launch::Uri(uri)) => Ok(if steam_cold {
+            format!("{uri} (starting Steam first)")
+        } else {
+            uri
+        }),
         Ok(run::Launch::Process { program, .. }) => Ok(program.display().to_string()),
         Err(e) => {
             log_error!("run", "could not launch {}: {e}", game.title);

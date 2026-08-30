@@ -17,7 +17,8 @@ interface is CSS and the parsers are memory-safe.
 
 **Steam is automated.** It reads Steam's own library manifests, so every
 installed game appears with its cover, its wide key art and its transparent
-logo, and launches with a button.
+logo, and launches with a button. If Steam is closed it is started silently to
+the tray first, so its window never appears in front of the game.
 
 **Everything else is a name.** Epic, GOG, EA, Ubisoft, emulators, a decade-old
 installer — you type *"Hollow Knight"*, pick it from the results, and it lands

@@ -120,6 +120,51 @@ pub fn open_uri(uri: &str) -> Result<(), String> {
 /// user is about to see.
 const STARTUP_GRACE: std::time::Duration = std::time::Duration::from_millis(900);
 
+/// How long to wait for a cold Steam to become ready before handing it the URI.
+///
+/// Steam takes several seconds from launch to accepting `steam://`. Giving up
+/// early and firing anyway is not a failure -- Steam queues the request -- so
+/// this is a best effort, not a gate.
+const STEAM_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+const STEAM_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Make sure Steam is up, without showing its window.
+///
+/// Handing `steam://` to the system with Steam closed makes Steam start *and*
+/// open its library window in front of everything -- on a television, the
+/// launcher vanishing behind a storefront. Starting it silently first means the
+/// window never appears and the game comes up over Marquee, which is what
+/// pressing Play should look like.
+///
+/// Blocking, so it runs on the launch thread rather than the interface's.
+fn ensure_steam_ready() {
+    use crate::library::steam::Steam;
+
+    if Steam::is_running() {
+        return;
+    }
+    log_info!("run", "Steam is not running; starting it silently");
+    if let Err(e) = Steam::start_silently() {
+        // Not fatal. The URI still works, it just brings the window with it,
+        // which is the behaviour this exists to improve rather than to require.
+        log_warn!("run", "{e}; falling back to letting the URI start Steam");
+        return;
+    }
+
+    let deadline = std::time::Instant::now() + STEAM_WAIT;
+    while std::time::Instant::now() < deadline {
+        if Steam::is_running() {
+            log_info!("run", "Steam is ready");
+            return;
+        }
+        std::thread::sleep(STEAM_POLL);
+    }
+    log_warn!(
+        "run",
+        "Steam did not come up in time; handing it the game anyway"
+    );
+}
+
 pub fn start(
     game: &Game,
     on_failure: impl FnOnce(String) + Send + 'static,
@@ -127,10 +172,17 @@ pub fn start(
     let plan = plan(game)?;
     match &plan {
         Launch::Uri(uri) => {
-            log_info!("run", "launching {} via {}", game.title, uri);
-            open_uri(uri)?;
-            // Nothing to watch: the URI handler returns immediately and the
-            // game belongs to Steam. Whether it started is Steam's to report.
+            let uri = uri.clone();
+            let title = game.title.clone();
+            // Off the interface's thread: waiting for a cold Steam takes
+            // seconds, and the grid must stay responsive while it happens.
+            std::thread::spawn(move || {
+                ensure_steam_ready();
+                log_info!("run", "launching {title} via {uri}");
+                if let Err(e) = open_uri(&uri) {
+                    on_failure(e);
+                }
+            });
         }
         Launch::Process { program, args, cwd } => {
             log_info!("run", "spawning {}", program.display());

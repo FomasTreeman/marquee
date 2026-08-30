@@ -336,7 +336,18 @@ async function main(): Promise<void> {
     try {
       const how = await launchGame(game.id)
       logInfo('run', `launched ${label} via ${how}`)
-      toast(game.provider === 'steam' ? `Starting ${label} — handing off to Steam` : `Starting ${label}`)
+      // Steam is started silently first when it is closed, which takes a few
+      // seconds. Saying so beats a toast that implies the game is coming now.
+      const cold = how.includes('starting Steam')
+      toast(
+        cold
+          ? `Starting Steam, then ${label}. This takes a few seconds.`
+          : game.provider === 'steam'
+            ? `Starting ${label}`
+            : `Starting ${label}`,
+        'info',
+        cold ? 9000 : 4000,
+      )
     } catch (e) {
       toast(`Could not start ${label}. ${String(e)}`, 'error', 7000)
     } finally {
