@@ -41,48 +41,45 @@ pub fn keep_awake(on: bool) {
         return;
     }
 
-    #[cfg(target_os = "windows")]
-    {
-        if held.is_none() {
-            windows_keep_awake(true);
-            // Nothing to store: the Windows flag is thread state, not a child.
-            log_info!("screen", "holding the display awake");
-        }
+    // Already holding it. Calling twice must not stack a second inhibit.
+    if held.is_some() {
         return;
     }
 
-    #[cfg(not(target_os = "windows"))]
+    // Windows is a thread-state flag rather than a child process, so there is
+    // nothing to store -- which is why the two branches cannot share a body.
+    #[cfg(target_os = "windows")]
     {
-        if held.is_some() {
-            return;
+        windows_keep_awake(true);
+        log_info!("screen", "holding the display awake");
+    }
+
+    // A child process rather than a library binding. `caffeinate` and
+    // `systemd-inhibit` are the supported interfaces on their platforms, they
+    // die with us if we crash, and neither adds a dependency that has to
+    // compile on all three targets.
+    #[cfg(target_os = "macos")]
+    let spawned = std::process::Command::new("caffeinate").arg("-d").spawn();
+
+    #[cfg(target_os = "linux")]
+    let spawned = std::process::Command::new("systemd-inhibit")
+        .args([
+            "--what=idle",
+            "--who=Marquee",
+            "--why=Browsing the library with a controller",
+            "--mode=block",
+            "sleep",
+            "infinity",
+        ])
+        .spawn();
+
+    #[cfg(not(target_os = "windows"))]
+    match spawned {
+        Ok(child) => {
+            *held = Some(child);
+            log_info!("screen", "holding the display awake");
         }
-
-        // A child process rather than a library binding. `caffeinate` and
-        // `systemd-inhibit` are the supported interfaces on their platforms,
-        // they die with us if we crash, and neither adds a dependency that has
-        // to compile on all three targets.
-        #[cfg(target_os = "macos")]
-        let spawned = std::process::Command::new("caffeinate").arg("-d").spawn();
-
-        #[cfg(target_os = "linux")]
-        let spawned = std::process::Command::new("systemd-inhibit")
-            .args([
-                "--what=idle",
-                "--who=Marquee",
-                "--why=Browsing the library with a controller",
-                "--mode=block",
-                "sleep",
-                "infinity",
-            ])
-            .spawn();
-
-        match spawned {
-            Ok(child) => {
-                *held = Some(child);
-                log_info!("screen", "holding the display awake");
-            }
-            Err(e) => log_warn!("screen", "cannot keep the display awake: {e}"),
-        }
+        Err(e) => log_warn!("screen", "cannot keep the display awake: {e}"),
     }
 }
 

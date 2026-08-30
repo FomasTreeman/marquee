@@ -46,6 +46,18 @@ pnpm build
 echo "==> cross-compiling for Windows ($PROFILE)"
 cd src-tauri
 
+# Lint the Windows target, not just build it.
+#
+# Roughly a tenth of this codebase is behind #[cfg(target_os)] and macOS never
+# compiles it, so clippy on the development machine has no opinion about it. CI
+# runs clippy on a real Windows runner with -D warnings, which means a lint only
+# reachable on Windows is a red build discovered after pushing. This found one
+# the first time it ran.
+if [ "$PROFILE" = "release" ]; then
+  echo "    linting the Windows target"
+  cargo xwin clippy --release --target "$TARGET" --all-targets -- -D warnings
+fi
+
 # Verify this will be a production build, not a dev one.
 #
 # Tauri decides whether to load the dev server or its embedded interface from a
