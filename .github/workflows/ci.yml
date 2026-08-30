@@ -28,7 +28,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # WebKitGTK and its build dependencies. Nothing else in the matrix needs
       # anything: WebView2 ships with Windows, WKWebView with macOS.
