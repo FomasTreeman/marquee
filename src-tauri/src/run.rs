@@ -85,6 +85,30 @@ pub fn open_uri(uri: &str) -> Result<(), String> {
         return Err(format!("refusing to open an unexpected URI scheme: {uri}"));
     }
 
+    // And guard the characters, because of how Windows opens a URI.
+    //
+    // There is no Win32 call here that takes a URI directly without pulling in
+    // another dependency, so this goes through `cmd /C start` -- and cmd.exe
+    // re-parses its own command line after Rust has quoted it. Rust's quoting
+    // is built for CreateProcess, not for cmd, so a `&`, `|`, `^`, `<`, `>` or
+    // `"` inside an argument can escape it and be run as a command. That is
+    // the BatBadBut class of bug (CVE-2024-24576).
+    //
+    // Nothing reaches here with such a character today: the appid is checked
+    // for digits in `plan`. This is the second lock, for the caller who adds a
+    // provider later and builds a URI out of a name read off the disk. A
+    // legitimate steam:// URI is only ever letters, digits and a little
+    // punctuation, so nothing is lost by insisting.
+    // An allowlist rather than a list of dangerous characters: every steam://
+    // URI this app builds is letters, digits, slashes and dots, so anything
+    // else is a bug worth refusing rather than a case worth supporting.
+    if let Some(bad) = uri
+        .chars()
+        .find(|c| !(c.is_ascii_alphanumeric() || "/:._-".contains(*c)))
+    {
+        return Err(format!("refusing a URI containing {bad:?}: {uri}"));
+    }
+
     #[cfg(target_os = "macos")]
     let mut cmd = {
         let mut c = Command::new("open");
@@ -265,6 +289,45 @@ pub fn start(
 mod tests {
     use super::*;
 
+    /// Opening a URI on Windows goes through `cmd /C start`, and cmd.exe
+    /// re-parses the command line after Rust has quoted it for CreateProcess.
+    /// A shell metacharacter that survives that is a command, not an argument
+    /// (CVE-2024-24576). Nothing builds such a URI today; this is the lock for
+    /// the caller who adds a provider later and builds one from a name read
+    /// off the disk.
+    #[test]
+    fn a_uri_carrying_a_shell_metacharacter_is_refused() {
+        for evil in [
+            "steam://rungameid/1 & calc.exe",
+            "steam://rungameid/1|calc",
+            "steam://rungameid/1\"&calc&\"",
+            "steam://rungameid/1^&calc",
+            "steam://rungameid/1<nul",
+            "steam://rungameid/1>out",
+            "steam://rungameid/1%calc%",
+            "steam://rungameid/1;calc",
+            "steam://rungameid/1$(calc)",
+            "steam://rungameid/1`calc`",
+            "steam://rungameid/1\ncalc",
+        ] {
+            assert!(open_uri(evil).is_err(), "accepted {evil:?}");
+        }
+    }
+
+    /// The guard has to let the real thing through, or it is just a bug.
+    /// Checked against `plan` rather than a literal so the two cannot drift.
+    #[test]
+    fn the_uris_we_actually_build_pass_the_guard() {
+        let Launch::Uri(uri) = plan(&steam_game("1091500")).unwrap() else {
+            panic!("a steam game plans as a URI");
+        };
+        assert!(
+            uri.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "/:._-".contains(c)),
+            "{uri} would be refused by open_uri"
+        );
+    }
+
     fn steam_game(appid: &str) -> Game {
         Game {
             id: format!("steam:{appid}"),
@@ -352,8 +415,15 @@ mod tests {
 
     #[test]
     fn open_uri_refuses_a_foreign_scheme() {
-        assert!(open_uri("file:///etc/passwd").is_err());
-        assert!(open_uri("https://example.com").is_err());
+        for other in [
+            "file:///etc/passwd",
+            "https://example.com",
+            "javascript:alert(1)",
+            "ms-settings:",
+            "",
+        ] {
+            assert!(open_uri(other).is_err(), "accepted {other:?}");
+        }
     }
 
     #[test]

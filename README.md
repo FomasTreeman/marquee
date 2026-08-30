@@ -111,6 +111,8 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
   numbers, per platform.
 - **[docs/DEBUGGING.md](docs/DEBUGGING.md)** — the log, the self-check, and how
   to tell a real measurement from a browser-tab artifact.
+- **[docs/SECURITY.md](docs/SECURITY.md)** — what a launcher can do, and what
+  bounds it. Worth reading before running anything that starts other programs.
 
 ## Running it
 
