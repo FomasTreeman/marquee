@@ -383,7 +383,20 @@ body::after {
   font-size: calc(14px * var(--s));
   color: var(--fg2);
 }
-.hint { display: inline-flex; align-items: center; gap: calc(9px * var(--s)); }
+.hint {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(9px * var(--s));
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+}
+/* Only the ones that do something look like they do. */
+.hint.is-clickable { cursor: pointer; }
+.hint.is-clickable:hover { color: var(--fg1); }
+.hint.is-clickable:hover .hint-key { border-color: var(--focusBorder); }
 .hint-key {
   display: inline-grid;
   place-items: center;
@@ -678,6 +691,7 @@ body::after {
 .presets { display: flex; gap: calc(8px * var(--s)); }
 .preset {
   padding: calc(6px * var(--s)) calc(16px * var(--s));
+  cursor: pointer;
   border: 1px solid transparent;
   border-radius: var(--r-pill);
   font-size: calc(14px * var(--s));

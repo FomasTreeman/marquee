@@ -119,15 +119,34 @@ export function createShell(root: HTMLElement): Shell {
   return { hero, presets, query, backdropA, backdropB, heroLogo, heroTitle, heroMeta, gridViewport, count, clock, hints }
 }
 
-/** The button legend along the bottom. Labels follow the Xbox layout, with
- *  PlayStation in brackets, exactly as the prototype does. */
-export function setHints(hints: HTMLElement, entries: Array<[string, string]>): void {
+export interface Hint {
+  /** The key or button cap. */
+  key: string
+  label: string
+  /** Clicking the hint does the thing. A legend nobody can press is decoration
+   *  for anyone holding a mouse. */
+  onClick?: () => void
+}
+
+/**
+ * The legend along the bottom.
+ *
+ * Rebuilt whenever the input device changes, because telling someone to press A
+ * while they are holding a mouse is worse than telling them nothing. Each entry
+ * is clickable where there is something to click, which is what makes sort,
+ * filter and the menus reachable without learning a binding.
+ */
+export function setHints(hints: HTMLElement, entries: Hint[]): void {
   hints.textContent = ''
-  for (const [button, label] of entries) {
-    const item = el('span', 'hint', hints)
+  for (const entry of entries) {
+    const item = el(entry.onClick ? 'button' : 'span', 'hint', hints)
+    if (entry.onClick) {
+      item.classList.add('is-clickable')
+      ;(item as HTMLButtonElement).onclick = entry.onClick
+    }
     const key = el('b', 'hint-key', item)
-    key.textContent = button
+    key.textContent = entry.key
     const text = el('span', undefined, item)
-    text.textContent = label
+    text.textContent = entry.label
   }
 }

@@ -153,20 +153,49 @@ pub fn spawn(app: AppHandle, start: Instant) -> Arc<Status> {
     let shared = status.clone();
 
     std::thread::spawn(move || {
+        // Which backend is in play decides what will and will not be seen, and
+        // it is the first thing worth knowing when a pad does not work.
+        let backend = if cfg!(target_os = "windows") {
+            "XInput"
+        } else if cfg!(target_os = "macos") {
+            "IOKit"
+        } else {
+            "evdev"
+        };
+
         let mut gilrs = match Gilrs::new() {
             Ok(g) => g,
             Err(e) => {
-                eprintln!("[input] no gamepad support on this machine: {e}. Keyboard only.");
+                crate::log_error!(
+                    "input",
+                    "no gamepad support via {backend}: {e}. Keyboard and mouse only."
+                );
                 return;
             }
         };
         shared.supported.store(true, Ordering::Relaxed);
         let mut pads = 0usize;
         for (_id, pad) in gilrs.gamepads() {
-            println!("[input] {} connected", pad.name());
+            crate::log_info!(
+                "input",
+                "{} via {backend} (connected: {}, mapped: {})",
+                pad.name(),
+                pad.is_connected(),
+                pad.is_ff_supported() || pad.mapping_source() != gilrs::MappingSource::None
+            );
             pads += 1;
         }
         shared.connected.store(pads, Ordering::Relaxed);
+
+        // Whether to complain about there being no pad, and when.
+        //
+        // Not at startup: gilrs enumerates before the platform has finished
+        // reporting devices, so a connected pad shows as absent for a few
+        // milliseconds and then arrives as a Connected event. Warning
+        // immediately produced "no gamepad seen" followed 11 ms later by
+        // "gamepad connected", which is worse than saying nothing.
+        let decide_at = Instant::now() + Duration::from_secs(3);
+        let mut reported = false;
 
         let mut held: Option<(Action, Instant)> = None;
         let mut xs = AxisState { held: None };
@@ -226,7 +255,7 @@ pub fn spawn(app: AppHandle, start: Instant) -> Arc<Status> {
                     }
                     EventType::Connected => {
                         shared.connected.fetch_add(1, Ordering::Relaxed);
-                        println!("[input] gamepad connected");
+                        crate::log_info!("input", "gamepad connected");
                     }
                     EventType::Disconnected => {
                         // Saturating, because a disconnect can arrive for a pad
@@ -236,9 +265,30 @@ pub fn spawn(app: AppHandle, start: Instant) -> Arc<Status> {
                             Ordering::Relaxed,
                             |n| Some(n.saturating_sub(1)),
                         );
-                        println!("[input] gamepad disconnected");
+                        crate::log_info!("input", "gamepad disconnected");
                     }
                     _ => {}
+                }
+            }
+
+            if !reported && Instant::now() >= decide_at {
+                reported = true;
+                if shared.connected.load(Ordering::Relaxed) == 0 {
+                    // On Windows this is usually not a fault. gilrs reads
+                    // XInput there, and XInput reports Xbox-compatible devices
+                    // only -- a DualSense or DualShock plugged straight in is a
+                    // plain HID device and invisible to it. Steam Input or
+                    // DS4Windows makes such a pad present as XInput, at which
+                    // point it appears here.
+                    if cfg!(target_os = "windows") {
+                        crate::log_warn!(
+                            "input",
+                            "no gamepad after 3s. XInput reports Xbox-compatible pads only -- \
+                             a PlayStation controller needs Steam Input or DS4Windows to appear."
+                        );
+                    } else {
+                        crate::log_warn!("input", "no gamepad after 3s, via {backend}");
+                    }
                 }
             }
 

@@ -18,7 +18,7 @@ import { createMenu } from './menu'
 import { createSettings } from './settings'
 import { toast } from './toast'
 import { hostInfo, pingMs, inApp } from './host'
-import { createInput, padStatus, type Action } from './input'
+import { createInput, padStatus, type Action, type Device } from './input'
 import {
   scanLibrary, requestMeta, onMeta, onLaunchFailed, launchGame, toggleFavourite,
   getSettings, setSetting, toggleFullscreen, systemAction, findProfile, importProfile,
@@ -108,11 +108,6 @@ async function main(): Promise<void> {
 
   const shell = createShell(document.getElementById('app')!)
   const backdrop = createBackdrop(shell.backdropA, shell.backdropB)
-  setHints(shell.hints, [
-    ['A', 'Play'], ['Y', 'Details'], ['X', 'Favourite'],
-    ['L3', 'Sort'], ['R3', 'Filter'], ['LB/RB', 'Page'],
-    ['☰', 'Menu'], ['⧉', 'Add'],
-  ])
   // Long-pressing a face button is the console convention for fullscreen, but
   // it needs a hold timer and a pad to test it on. F11 is the keyboard one and
   // it works everywhere today.
@@ -185,7 +180,11 @@ async function main(): Promise<void> {
     })
   }
 
-  const grid = createGrid(shell.gridViewport, refreshHero)
+  const grid = createGrid(
+    shell.gridViewport,
+    refreshHero,
+    (index) => void play_(index),
+  )
 
   function showEmpty(): void {
     const [title, body] = emptyMessage(scan)
@@ -215,6 +214,16 @@ async function main(): Promise<void> {
       // hiding it would shift every other pill as the library changes.
       pill.dataset['empty'] = applyFilter(games, p.id, '').length ? '0' : '1'
       pill.textContent = p.label
+      // Clickable, because a mouse user has no stick to press and the pills
+      // already look like controls.
+      pill.onclick = () => {
+        preset = p.id
+        query = ''
+        shell.query.hidden = true
+        shell.query.value = ''
+        grid.focus(0)
+        applyView()
+      }
       shell.presets.appendChild(pill)
     }
   }
@@ -324,7 +333,7 @@ async function main(): Promise<void> {
   // and asking Steam to start the same game twice in 200 ms is a good way to
   // get two windows or none.
   let launching = false
-  async function play(index: number): Promise<void> {
+  async function play_(index: number): Promise<void> {
     const game = gameAt(index)
     if (!game || launching) return
     if (game.provider === 'manual' && !game.installed) {
@@ -380,6 +389,47 @@ async function main(): Promise<void> {
    * metadata event, which is intolerable on a pad.
    */
   const menu = createMenu()
+
+  /**
+   * The legend, in the vocabulary of whatever is being held.
+   *
+   * Telling someone to press A while they are holding a mouse is worse than
+   * telling them nothing, and a keyboard user has no way to guess that O sorts.
+   * Every entry is clickable, which is what makes sort, filter and the menus
+   * reachable with a mouse without learning a binding.
+   */
+  function refreshHints(device: Device): void {
+    const play = () => void play_(grid.focused)
+    const details = () => {
+      const game = gameAt(grid.focused)
+      if (game) detail.open(game, meta.get(game.providerId), artAt(grid.focused))
+    }
+    const fav = () => void favourite(grid.focused)
+
+    const byDevice: Record<Device, Array<[string, string, (() => void) | undefined]>> = {
+      pad: [
+        ['A', 'Play', play], ['Y', 'Details', details], ['X', 'Favourite', fav],
+        ['L3', 'Sort', openSort], ['R3', 'Filter', openFilter],
+        ['LB/RB', 'Page', undefined],
+        ['☰', 'Menu', openMainMenu], ['⧉', 'Add', openAdd],
+      ],
+      keyboard: [
+        ['↵', 'Play', play], ['Y', 'Details', details], ['X', 'Favourite', fav],
+        ['O', 'Sort', openSort], ['I', 'Filter', openFilter], ['/', 'Search', openSearch],
+        ['Tab', 'Menu', openMainMenu], ['Esc', 'Back', undefined],
+      ],
+      mouse: [
+        ['Click', 'Select', undefined], ['Double-click', 'Play', undefined],
+        ['—', 'Sort', openSort], ['—', 'Filter', openFilter],
+        ['—', 'Search', openSearch], ['—', 'Menu', openMainMenu], ['—', 'Add', openAdd],
+      ],
+    }
+
+    setHints(
+      shell.hints,
+      byDevice[device].map(([key, label, onClick]) => ({ key, label, onClick })),
+    )
+  }
 
   /**
    * Sort and filter are separate menus on separate sticks, because they are
@@ -635,7 +685,7 @@ async function main(): Promise<void> {
   })
 
   const detail = createDetail({
-    onPlay: () => void play(grid.focused),
+    onPlay: () => void play_(grid.focused),
     onChanged: () => void reloadLibrary(),
     onFindArtwork: openArtwork,
   })
@@ -684,7 +734,7 @@ async function main(): Promise<void> {
       if (e.action === 'a') {
         // Nothing to play on an empty library, so A does the only useful thing.
         if (!view.length) openAdd()
-        else void play(grid.focused)
+        else void play_(grid.focused)
         return
       }
       if (e.action === 'x') { void favourite(grid.focused); return }
@@ -720,7 +770,11 @@ async function main(): Promise<void> {
 
     const d = NAV[e.action]
     if (d) grid.move(d[0], d[1])
-  })
+  }, refreshHints)
+
+  // Something has to be on screen before the first key is pressed. A pad is
+  // assumed only when one is actually connected.
+  refreshHints(padConnected ? 'pad' : 'keyboard')
 
   await hud.attach({
     host: await hostInfo(),
@@ -753,7 +807,7 @@ async function main(): Promise<void> {
         openAdd,
         openArtwork,
         settings,
-        play,
+        play: play_,
         favourite,
         reloadLibrary,
         selfCheck: () => import('./selfcheck').then((m) => m.runSelfCheck()),

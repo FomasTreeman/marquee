@@ -95,6 +95,28 @@ script had passed. `tools/build-windows.sh` now refuses to build a release
 without the feature, and that guard was verified by removing the feature and
 watching it fire.
 
+## A controller that does not work
+
+gilrs reads **XInput** on Windows, and XInput reports Xbox-compatible devices
+only. A DualSense or DualShock plugged straight in is a plain HID device and is
+invisible to it — the app is working, it genuinely cannot see the pad.
+
+Steam Input or DS4Windows makes such a controller present as XInput, at which
+point it appears with no changes here. Settings says so when nothing is
+detected, rather than leaving a working app looking broken.
+
+The log records the backend and every device it enumerates:
+
+```
+INFO  input  Xbox Wireless Controller via XInput (connected: true, mapped: true)
+WARN  input  no gamepad after 3s. XInput reports Xbox-compatible pads only ...
+```
+
+The three-second delay is deliberate: gilrs enumerates before the platform has
+finished reporting devices, so a connected pad shows as absent for a few
+milliseconds. Warning immediately produced `no gamepad seen` followed 11 ms
+later by `gamepad connected`, which is worse than saying nothing.
+
 ## The target machine needs the WebView2 runtime
 
 Windows 11 ships it. Windows 10 has it through Edge on any current install. If

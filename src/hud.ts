@@ -63,9 +63,12 @@ export function createHud(grid: Grid, meter: Meter) {
   let worstInput = 0
   let timer: number | undefined
 
-  // Default on in development, off with ?hud=0. Also toggled from the pad, so
-  // it can be dismissed without a keyboard on a television.
-  let visible = new URLSearchParams(location.search).get('hud') !== '0'
+  // Off unless asked for. It is a development instrument, and it was defaulting
+  // on in the shipped application -- a panel of frame timings in the corner of
+  // someone's television. On with ?hud=1, or P at any time.
+  let visible =
+    new URLSearchParams(location.search).get('hud') === '1' ||
+    (import.meta.env.DEV && new URLSearchParams(location.search).get('hud') !== '0')
 
   function libraryLabel(scan: ScanResult): string {
     const failed = scan.providers.filter((p) => p.error !== null)

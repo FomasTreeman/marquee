@@ -100,6 +100,9 @@ export interface Grid {
 export function createGrid(
   viewport: HTMLElement,
   onFocusChange?: (index: number, item: GridItem | undefined) => void,
+  /** Double-click, or a second click on the already-selected card. Kept
+   *  separate from selection so a mouse cannot launch a game by accident. */
+  onActivate?: (index: number) => void,
 ): Grid {
   const canvas = document.createElement('div')
   canvas.className = 'grid-canvas'
@@ -213,17 +216,29 @@ export function createGrid(
     ring.className = 'card-ring'
     art.append(fallback, img)
     el.append(art, ring)
+
+    const s: Slot = {
+      el, art, fallback, img,
+      index: -1, transform: '', focus: false, visible: false, generation: 0,
+    }
     // Parked until it is given an item. A fresh slot has index -1 and no
     // transform, so without this the whole unused pool sits stacked at 0,0 on
     // top of the first card -- which looks exactly like the first card failing
     // to load its artwork. Found by the self-check, after being misread as an
     // image bug three times.
     el.style.visibility = 'hidden'
+
+    // Click selects; double-click plays. A single click launching a game is how
+    // a mouse user starts something they only meant to look at.
+    el.addEventListener('click', () => {
+      if (s.index >= 0) setFocus(s.index)
+    })
+    el.addEventListener('dblclick', () => {
+      if (s.index >= 0) onActivate?.(s.index)
+    })
+
     canvas.appendChild(el)
-    return {
-      el, art, fallback, img,
-      index: -1, transform: '', focus: false, visible: false, generation: 0,
-    }
+    return s
   }
 
   /** Size the pool to cover the viewport plus overscan, once, on resize. */

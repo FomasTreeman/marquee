@@ -17,6 +17,7 @@ import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialo
 import {
   getSettings, setSteamGridDbKey, exportProfile, importProfile, setProfileFolder,
 } from './library'
+import { padStatus } from './input'
 import { logInfo, logWarn } from './log'
 import { toast } from './toast'
 
@@ -73,6 +74,42 @@ export function createSettings(onChanged: () => void): SettingsView {
   const saveKey = el('button', 'action action-primary', artwork.controls)
   saveKey.textContent = 'Save key'
   const keyStatus = el('p', 'settings-status', artwork.root)
+
+  // --- controller -----------------------------------------------------
+  //
+  // Silence here is unhelpful: a pad that does not work looks identical to an
+  // app that does not support one. On Windows the usual cause is not a fault
+  // at all, and saying so is the whole value of this section.
+  const pad = section(
+    body,
+    'Controller',
+    'Everything here works with a pad, a keyboard or a mouse. The legend along ' +
+      'the bottom follows whichever you last used.',
+  )
+  const padStatusLine = el('p', 'settings-status', pad.root)
+
+  async function describePad(): Promise<void> {
+    try {
+      const status = await padStatus()
+      if (!status.supported) {
+        padStatusLine.textContent =
+          'This machine reports no gamepad support at all. Keyboard and mouse only.'
+      } else if (status.connected > 0) {
+        padStatusLine.textContent =
+          `${status.connected} controller${status.connected === 1 ? '' : 's'} connected.`
+      } else if (navigator.userAgent.includes('Windows')) {
+        // Not a fault, and the most likely thing someone hits.
+        padStatusLine.textContent =
+          'No controller detected. On Windows only Xbox-compatible controllers ' +
+          'are visible — a PlayStation controller needs Steam Input or DS4Windows ' +
+          'to appear as one. Plug in, then reopen this screen.'
+      } else {
+        padStatusLine.textContent = 'No controller detected. Plug one in and reopen this screen.'
+      }
+    } catch {
+      padStatusLine.textContent = ''
+    }
+  }
 
   // --- profile --------------------------------------------------------
   const profile = section(
@@ -190,6 +227,7 @@ export function createSettings(onChanged: () => void): SettingsView {
         requestAnimationFrame(() => root.classList.remove('is-entering')))
       keyStatus.textContent = ''
       field.value = ''
+      void describePad()
       profileFolder = ''
       describeFolder()
       void getSettings()

@@ -28,6 +28,9 @@ export type Action =
   /** Open the filter menu — right stick click. */
   | 'filter'
 
+/** What the person is actually holding. */
+export type Device = 'pad' | 'keyboard' | 'mouse'
+
 export interface ActionEvent {
   action: Action
   /** From auto-repeat rather than a fresh press. */
@@ -35,6 +38,9 @@ export interface ActionEvent {
   /** Delivery latency in ms, or null when it cannot be measured (keyboard,
    *  or running as a plain browser tab). */
   latency: number | null
+  /** Where it came from. The legend follows this: telling someone to press A
+   *  when they are holding a mouse is worse than telling them nothing. */
+  device: Device
 }
 
 /** Xbox layout, PlayStation in brackets — matches the prototype exactly.
@@ -91,8 +97,28 @@ export async function padStatus(): Promise<PadStatus> {
   return call<PadStatus>('pad_status')
 }
 
-export async function createInput(dispatch: (e: ActionEvent) => void): Promise<() => void> {
+export async function createInput(
+  dispatch: (e: ActionEvent) => void,
+  /** Called when the person switches between pad, keyboard and mouse. */
+  onDeviceChange?: (device: Device) => void,
+): Promise<() => void> {
   const disposers: Array<() => void> = []
+
+  // Mouse movement never produces an action, but it does answer "what are they
+  // holding", which is what the legend needs to know.
+  let device: Device | undefined
+  const note = (next: Device) => {
+    if (device === next) return
+    device = next
+    onDeviceChange?.(next)
+  }
+  const onPointer = () => note('mouse')
+  window.addEventListener('pointermove', onPointer, { passive: true })
+  window.addEventListener('pointerdown', onPointer, { passive: true })
+  disposers.push(() => {
+    window.removeEventListener('pointermove', onPointer)
+    window.removeEventListener('pointerdown', onPointer)
+  })
 
   const onKey = (e: KeyboardEvent) => {
     // While a text field has focus, the keyboard belongs to it. Otherwise the
@@ -110,7 +136,8 @@ export async function createInput(dispatch: (e: ActionEvent) => void): Promise<(
     e.preventDefault()
     // Browser key repeat is the OS's, not ours, and its cadence differs per
     // platform. The pad's repeat is tuned in Rust; this just reports honestly.
-    dispatch({ action, repeat: e.repeat, latency: null })
+    note('keyboard')
+    dispatch({ action, repeat: e.repeat, latency: null, device: 'keyboard' })
   }
   window.addEventListener('keydown', onKey)
   disposers.push(() => window.removeEventListener('keydown', onKey))
@@ -123,7 +150,9 @@ export async function createInput(dispatch: (e: ActionEvent) => void): Promise<(
         action: p.action,
         repeat: p.repeat,
         latency: performance.now() - (p.t + offset),
+        device: 'pad',
       })
+      note('pad')
     })
     disposers.push(unlisten)
   }

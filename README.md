@@ -141,8 +141,13 @@ with two games installed. `?hud=0` hides the HUD, and **P** toggles it.
 | **F11** | Fullscreen |
 | **P** | Toggle the performance HUD |
 
-Everything is reachable with a pad alone, and everything is reachable with a
-keyboard alone. Search was keyboard-only for a while; it now sits at the top of
+The legend along the bottom **follows whatever you last used** — pad buttons for
+a pad, keys for a keyboard, and for a mouse it says what clicking does. Every
+entry in it is clickable, so sort, filter, search and the menus are reachable
+without learning a binding. In the grid, click selects and double-click plays.
+
+Everything is reachable with a pad alone, with a keyboard alone, and with a
+mouse alone. Search was keyboard-only for a while; it now sits at the top of
 the filter menu, which is where a console would put it.
 
 Motion is tunable in `design/tokens.json`: `--scroll-ms` for the grid glide,
