@@ -327,6 +327,155 @@ mod tests {
         assert_eq!(s.manual_games().unwrap().len(), before + 1);
     }
 
+    /// The actual journey this feature exists for: export here, reinstall,
+    /// import there, everything back. The round-trip test above proves the
+    /// *file* is right; this proves applying it reproduces the state.
+    #[test]
+    fn restores_onto_a_fresh_machine() {
+        let old = store();
+        old.set_setting("sort", "name").unwrap();
+        old.set_setting(super::FOLDER_SETTING, "/Volumes/Games")
+            .unwrap();
+        old.toggle_favourite("steam:1091500").unwrap();
+        old.set_hidden("steam:440", true).unwrap();
+        old.set_art_source("steam:2807960", Some("sgdb:8452"))
+            .unwrap();
+        old.set_custom_title("steam:620", Some("Portal Two"))
+            .unwrap();
+        let id = old
+            .add_manual_game("Torrented Game", Some("367520"))
+            .unwrap();
+        old.set_executable(id, Some("/games/tg/game.exe")).unwrap();
+
+        let dir = std::env::temp_dir().join("marquee-profile-restore");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join(FILENAME);
+        write(&old, &path).unwrap();
+
+        // A machine that has never seen any of this.
+        let fresh = store();
+        assert!(fresh.user_flags().unwrap().is_empty());
+        apply(&fresh, &read(&path).unwrap()).unwrap();
+
+        let flags: std::collections::HashMap<_, _> =
+            fresh.user_flags().unwrap().into_iter().collect();
+        assert!(flags["steam:1091500"].favourite);
+        assert!(flags["steam:440"].hidden);
+        assert_eq!(
+            flags["steam:2807960"].art_app_id.as_deref(),
+            Some("sgdb:8452")
+        );
+        assert_eq!(
+            flags["steam:620"].custom_title.as_deref(),
+            Some("Portal Two")
+        );
+        assert_eq!(fresh.setting("sort").unwrap().as_deref(), Some("name"));
+
+        let manual = fresh.manual_games().unwrap();
+        assert_eq!(manual.len(), 1);
+        assert_eq!(manual[0].title, "Torrented Game");
+        // The path came from another machine and may not exist here. Kept
+        // anyway: a wrong path beats an empty field, and a missing executable
+        // is reported clearly when it is used.
+        assert_eq!(manual[0].executable.as_deref(), Some("/games/tg/game.exe"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The promise that makes import safe to try. Losing something on import is
+    /// the one outcome nobody would want, so nothing is ever deleted.
+    #[test]
+    fn import_never_deletes_what_is_already_here() {
+        let here = store();
+        here.toggle_favourite("steam:local-only").unwrap();
+        let local_manual = here.add_manual_game("Only On This Machine", None).unwrap();
+        assert!(local_manual > 0);
+
+        let incoming = Profile {
+            format: FORMAT,
+            exported_at: 0,
+            source: "elsewhere".into(),
+            settings: vec![],
+            games: vec![UserGame {
+                game_id: "steam:from-file".into(),
+                favourite: true,
+                hidden: false,
+                custom_title: None,
+                art_app_id: None,
+            }],
+            manual: vec![],
+            roots: vec![],
+        };
+        apply(&here, &incoming).unwrap();
+
+        let flags: std::collections::HashMap<_, _> =
+            here.user_flags().unwrap().into_iter().collect();
+        assert!(
+            flags["steam:local-only"].favourite,
+            "a local favourite must survive"
+        );
+        assert!(flags["steam:from-file"].favourite);
+        assert!(here
+            .manual_games()
+            .unwrap()
+            .iter()
+            .any(|m| m.title == "Only On This Machine"));
+    }
+
+    /// Import is something the user asked for explicitly, so where the two
+    /// disagree the file wins. Anything else would make importing unpredictable.
+    #[test]
+    fn the_imported_value_wins_on_a_conflict() {
+        let here = store();
+        here.set_setting("sort", "size").unwrap();
+        here.set_art_source("steam:1", Some("111")).unwrap();
+
+        apply(
+            &here,
+            &Profile {
+                format: FORMAT,
+                exported_at: 0,
+                source: "elsewhere".into(),
+                settings: vec![("sort".into(), "name".into())],
+                games: vec![UserGame {
+                    game_id: "steam:1".into(),
+                    favourite: false,
+                    hidden: false,
+                    custom_title: None,
+                    art_app_id: Some("222".into()),
+                }],
+                manual: vec![],
+                roots: vec![],
+            },
+        )
+        .unwrap();
+
+        assert_eq!(here.setting("sort").unwrap().as_deref(), Some("name"));
+        let flags = here.user_flags().unwrap();
+        assert_eq!(flags[0].1.art_app_id.as_deref(), Some("222"));
+    }
+
+    /// Silent when no folder is configured -- the feature is opt-in, and an app
+    /// that writes files somewhere by default is not.
+    #[test]
+    fn auto_export_only_writes_when_a_folder_is_set() {
+        let s = store();
+        auto_export(&s); // no folder: must do nothing, and must not panic
+
+        let dir = std::env::temp_dir().join("marquee-profile-auto");
+        let _ = std::fs::remove_dir_all(&dir);
+        s.set_setting(FOLDER_SETTING, dir.to_str().unwrap())
+            .unwrap();
+        s.toggle_favourite("steam:1").unwrap();
+        auto_export(&s);
+
+        let written = dir.join(FILENAME);
+        assert!(written.is_file(), "a configured folder should get a copy");
+        assert!(read(&written).unwrap().games.iter().any(|g| g.favourite));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A file from a newer version is refused rather than half-understood.
     #[test]
     fn a_newer_format_is_refused() {

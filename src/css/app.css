@@ -750,14 +750,6 @@ body::after {
 }
 
 
-.settings-help {
-  margin: calc(14px * var(--s)) 0 calc(20px * var(--s));
-  max-width: calc(620px * var(--s));
-  font-size: calc(14px * var(--s));
-  line-height: 1.6;
-  color: var(--fg3);
-}
-
 
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(calc(10px * var(--s))); }
@@ -858,3 +850,114 @@ body::after {
 }
 .action-quiet:hover { color: var(--fg1); }
 .action-quiet.is-armed { border-color: var(--warning); color: var(--warning); }
+
+
+/* ==================================================================
+   SETTINGS
+
+   Its own panel rather than the picker's. Sections with a heading, an
+   explanation and their controls, because every setting here exists
+   to fix something specific and saying which is most of the help.
+   ================================================================== */
+
+.settings {
+  position: fixed;
+  inset: 0;
+  z-index: 4700;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 0.86);
+  backdrop-filter: blur(calc(var(--backdrop-blur) / 2));
+  opacity: 1;
+  transition: opacity calc(var(--motion) * 160ms) ease-out;
+}
+.settings[hidden] { display: none; }
+.settings.is-entering { opacity: 0; }
+.settings.is-entering .settings-panel { transform: scale(0.985); }
+
+.settings-panel {
+  width: min(92vw, calc(760px * var(--s)));
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: calc(var(--r-panel) * var(--s));
+  background: var(--bg0);
+  transition: transform calc(var(--motion) * 180ms) cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+.settings-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: calc(20px * var(--s));
+  padding: calc(30px * var(--s)) calc(38px * var(--s)) calc(20px * var(--s));
+  border-bottom: 1px solid var(--line);
+}
+.settings-title {
+  margin: 0;
+  font-size: calc(28px * var(--s));
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  color: var(--fg1);
+}
+.settings-dismiss { font-size: calc(13px * var(--s)); color: var(--fg3); }
+
+.settings-body {
+  overflow-y: auto;
+  padding: calc(8px * var(--s)) calc(38px * var(--s)) calc(30px * var(--s));
+  scrollbar-width: none;
+}
+.settings-body::-webkit-scrollbar { display: none; }
+
+.settings-section { padding: calc(26px * var(--s)) 0; }
+.settings-section + .settings-section { border-top: 1px solid var(--line); }
+
+.settings-heading {
+  margin: 0 0 calc(8px * var(--s));
+  font-size: calc(18px * var(--s));
+  font-weight: 500;
+  color: var(--fg1);
+}
+.settings-note {
+  margin: 0 0 calc(20px * var(--s));
+  max-width: calc(600px * var(--s));
+  font-size: calc(14px * var(--s));
+  line-height: 1.65;
+  color: var(--fg3);
+}
+
+/* Wraps rather than scrolls: three buttons on a narrow window should stack,
+   not disappear off the edge. */
+.settings-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(12px * var(--s));
+}
+
+.settings-field {
+  flex: 1 1 calc(300px * var(--s));
+  min-width: 0;
+  padding: calc(13px * var(--s)) calc(18px * var(--s));
+  border: 1px solid var(--spec);
+  border-radius: calc(var(--r-inner) * var(--s));
+  background: #0a0b0e;
+  color: var(--fg1);
+  font-family: inherit;
+  font-size: calc(16px * var(--s));
+  font-weight: 300;
+  outline: none;
+}
+.settings-field:focus { border-color: var(--focusBorder); }
+.settings-field::placeholder { color: var(--fg3); }
+
+.settings-status {
+  margin: calc(14px * var(--s)) 0 0;
+  min-height: calc(19px * var(--s));
+  font-size: calc(13px * var(--s));
+  line-height: 1.6;
+  color: var(--fg3);
+  /* A path can be long and has no spaces to break at. */
+  overflow-wrap: anywhere;
+}

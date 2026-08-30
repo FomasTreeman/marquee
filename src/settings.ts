@@ -1,17 +1,17 @@
 /**
  * Settings.
  *
- * One setting so far, and it earns its own screen because without it a lot of
- * libraries look half-finished: **a SteamGridDB key**.
+ * Two sections, and both exist because of something that cannot be recovered
+ * any other way:
  *
- * Steam's own artwork has real gaps — recent releases publish a grey
- * placeholder where a cover should be, and plenty of games have no transparent
- * wordmark at all. SteamGridDB fills them. The key is free, generated from a
- * profile page, and carries no client secret, which is exactly why it is the
- * second source rather than something needing a server.
+ *   * **Artwork** — Steam publishes a grey placeholder where some covers should
+ *     be and no wordmark at all for plenty of games. A SteamGridDB key fills
+ *     those in. Optional, and the screen says so rather than presenting an
+ *     empty field as though setup were incomplete.
  *
- * Strictly optional: everything works without it, and this screen says so
- * rather than presenting an empty field as though setup were incomplete.
+ *   * **Your profile** — favourites, hidden games, hand-added games and where
+ *     they live, artwork corrections. A fresh install wipes the database
+ *     holding it and none of it can be rebuilt by scanning.
  */
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import {
@@ -37,65 +37,93 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node
 }
 
+/** A titled block with an explanation and its own controls. */
+function section(parent: HTMLElement, title: string, note: string) {
+  const root = el('section', 'settings-section', parent)
+  el('h3', 'settings-heading', root).textContent = title
+  el('p', 'settings-note', root).textContent = note
+  return { root, controls: el('div', 'settings-controls', root) }
+}
+
 export function createSettings(onChanged: () => void): SettingsView {
-  const root = el('div', 'add', document.body)
+  const root = el('div', 'settings', document.body)
   root.hidden = true
+  const panel = el('div', 'settings-panel', root)
 
-  const panel = el('div', 'add-panel', root)
-  const heading = el('h2', 'add-heading', panel)
-  heading.textContent = 'Settings'
+  const header = el('header', 'settings-header', panel)
+  el('h2', 'settings-title', header).textContent = 'Settings'
+  el('span', 'settings-dismiss', header).textContent = 'B to close'
 
-  const label = el('p', 'add-sub', panel)
-  label.textContent = 'SteamGridDB key — optional, and free'
+  const body = el('div', 'settings-body', panel)
 
-  const field = el('input', 'add-field', panel)
+  // --- artwork --------------------------------------------------------
+  const artwork = section(
+    body,
+    'Artwork',
+    'Steam has no cover for some recent releases and no wordmark for a lot of ' +
+      'games. SteamGridDB has both, and a key is free: sign in at ' +
+      'steamgriddb.com, open Preferences → API, generate one. Everything works ' +
+      'without it — this only fills in what Steam is missing.',
+  )
+  const field = el('input', 'settings-field', artwork.controls)
   field.type = 'text'
   field.autocomplete = 'off'
   field.spellcheck = false
-  field.placeholder = 'Paste a key to fill in missing artwork'
-
-  const help = el('p', 'settings-help', panel)
-  help.textContent =
-    'Steam has no cover for some recent releases and no wordmark for a lot of ' +
-    'games. SteamGridDB has both. Sign in at steamgriddb.com, open Preferences ' +
-    '→ API, and generate a key. Everything works without one; this only fills ' +
-    'in what Steam is missing.'
-
-  const status = el('div', 'add-status', panel)
-  const actions = el('div', 'detail-actions', panel)
-  const save = el('button', 'action action-primary', actions)
-  save.textContent = 'Save'
+  field.placeholder = 'Paste a SteamGridDB key'
+  const saveKey = el('button', 'action action-primary', artwork.controls)
+  saveKey.textContent = 'Save key'
+  const keyStatus = el('p', 'settings-status', artwork.root)
 
   // --- profile --------------------------------------------------------
-  //
-  // The small, irreplaceable half of this app's state: favourites, hidden
-  // games, hand-added games and where they live, artwork corrections. A fresh
-  // Windows install wipes the database holding it, and none of it can be
-  // rebuilt by scanning — nobody remembers which forty games they had hidden.
-  const profileLabel = el('p', 'add-sub', panel)
-  profileLabel.textContent = 'Your profile'
-  profileLabel.style.marginTop = 'calc(30px * var(--s))'
-
-  const profileHelp = el('p', 'settings-help', panel)
-  const folderRow = el('div', 'detail-actions', panel)
-
-  const exportButton = el('button', 'action', folderRow)
+  const profile = section(
+    body,
+    'Your profile',
+    'Favourites, hidden games, anything added by hand and where it lives, and ' +
+      'artwork corrections. None of it can be rebuilt by scanning.',
+  )
+  const exportButton = el('button', 'action', profile.controls)
   exportButton.textContent = 'Export…'
-  const importButton = el('button', 'action', folderRow)
+  const importButton = el('button', 'action', profile.controls)
   importButton.textContent = 'Import…'
-  const folderButton = el('button', 'action', folderRow)
+  const folderButton = el('button', 'action action-primary', profile.controls)
+  const folderStatus = el('p', 'settings-status', profile.root)
 
+  let open = false
+  let saving = false
   let profileFolder = ''
 
   function describeFolder(): void {
     folderButton.textContent = profileFolder ? 'Change folder…' : 'Keep a copy in…'
-    profileHelp.textContent = profileFolder
-      ? `A copy is kept in ${profileFolder} and rewritten whenever anything changes. ` +
-        'Put that folder on a second drive or a synced one and it survives reinstalling this machine.'
-      : 'Export writes a file you can keep anywhere. Better: choose a folder and a ' +
-        'copy is kept there automatically, rewritten on every change. A second drive ' +
-        'survives a reinstall; a synced folder reaches another machine.'
+    folderStatus.textContent = profileFolder
+      ? `Kept in ${profileFolder}, rewritten whenever anything changes.`
+      : 'Choose a folder and a copy is kept there automatically. A second drive ' +
+        'survives reinstalling this machine; a synced folder reaches another one.'
   }
+
+  async function commitKey(): Promise<void> {
+    if (saving) return
+    saving = true
+    keyStatus.textContent = 'Saving…'
+    try {
+      await setSteamGridDbKey(field.value)
+      logInfo('settings', field.value.trim() ? 'SteamGridDB key set' : 'SteamGridDB key cleared')
+      toast(
+        field.value.trim()
+          ? 'Key saved. Missing artwork will fill in as you browse.'
+          : 'Key cleared.',
+        'info',
+        6000,
+      )
+      close()
+      onChanged()
+    } catch (e) {
+      keyStatus.textContent = String(e)
+    } finally {
+      saving = false
+    }
+  }
+
+  saveKey.onclick = () => void commitKey()
 
   exportButton.onclick = async () => {
     const path = await saveDialog({ title: 'Save your profile', defaultPath: 'marquee-profile.json' })
@@ -116,10 +144,10 @@ export function createSettings(onChanged: () => void): SettingsView {
     })
     if (typeof picked !== 'string') return
     try {
-      const s = await importProfile(picked)
+      const summary = await importProfile(picked)
       logInfo('profile', `imported from ${picked}`)
       toast(
-        `Imported ${s.games} game settings and ${s.manual} hand-added games.`,
+        `Imported ${summary.games} game settings and ${summary.manual} hand-added games.`,
         'info',
         7000,
       )
@@ -144,36 +172,6 @@ export function createSettings(onChanged: () => void): SettingsView {
     }
   }
 
-  let open = false
-  let saving = false
-
-  async function commit(): Promise<void> {
-    if (saving) return
-    saving = true
-    status.textContent = 'Saving…'
-    try {
-      await setSteamGridDbKey(field.value)
-      logInfo('settings', field.value.trim() ? 'SteamGridDB key set' : 'SteamGridDB key cleared')
-      // Artwork is re-resolved from scratch, so say what will happen rather
-      // than leaving the grid to change on its own with no explanation.
-      toast(
-        field.value.trim()
-          ? 'Key saved. Missing artwork will fill in as you browse.'
-          : 'Key cleared.',
-        'info',
-        6000,
-      )
-      close()
-      onChanged()
-    } catch (e) {
-      status.textContent = String(e)
-    } finally {
-      saving = false
-    }
-  }
-
-  save.onclick = () => void commit()
-
   function close(): void {
     open = false
     root.hidden = true
@@ -188,9 +186,12 @@ export function createSettings(onChanged: () => void): SettingsView {
       open = true
       root.hidden = false
       root.classList.add('is-entering')
-      requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('is-entering')))
-      status.textContent = ''
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => root.classList.remove('is-entering')))
+      keyStatus.textContent = ''
       field.value = ''
+      profileFolder = ''
+      describeFolder()
       void getSettings()
         .then((s) => {
           field.value = s.steamgriddbKey
@@ -206,7 +207,7 @@ export function createSettings(onChanged: () => void): SettingsView {
     handle(action) {
       if (!open) return false
       if (action === 'b') close()
-      else if (action === 'a') void commit()
+      else if (action === 'a') void commitKey()
       return true
     },
   }

@@ -89,6 +89,7 @@ function reachable(el: Element): { ok: boolean; blocker?: string } {
  */
 const OVERLAYS: Array<[selector: string, name: string]> = [
   ['.menu', 'list menu'],
+  ['.settings', 'settings'],
   ['.add:not([hidden])', 'panel'],
   ['.detail', 'detail view'],
 ]
