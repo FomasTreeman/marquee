@@ -56,6 +56,23 @@ jobs:
       contains(github.event.issue.title, '@claude') ||
       github.event.label.name == 'claude'
     runs-on: ubuntu-latest
+
+    # Who can set this off, now that the repository is public.
+    #
+    # The action itself requires the triggering user to have **write access**,
+    # checked on issues, comments and reviews, so a stranger writing @claude on
+    # an issue gets nothing. That check is the protection -- the `if:` above
+    # only decides whether a run starts, not who is allowed to start one.
+    #
+    # Two inputs switch it off and neither is set here: `allowed_bots`, which
+    # skips the permission check entirely for anything matching (a `*` there
+    # lets any GitHub App on the internet trigger this), and
+    # `allowed_non_write_users`. Do not add either without reading
+    # https://github.com/anthropics/claude-code-action/blob/main/docs/security.md
+    #
+    # Issue text from anyone is still untrusted input being read by an agent
+    # with a checkout. That is the residual risk of this arrangement, and the
+    # reason it opens pull requests rather than pushing to main.
     permissions:
       contents: write
       pull-requests: write

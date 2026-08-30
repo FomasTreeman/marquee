@@ -49,6 +49,22 @@ jobs:
             target: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
+
+    # The signing key lives in an environment rather than in repository
+    # secrets, and this line is what reaches it.
+    #
+    # A repository secret is readable by every workflow in the repository,
+    # including one added by a pull request -- and pull requests here are
+    # increasingly written by a machine. An environment secret is readable only
+    # by a job that names the environment, and GitHub will not let that job run
+    # until the environment's own rules are satisfied. Restrict the `release`
+    # environment to `v*` tags and nothing on a branch can reach the key at all.
+    #
+    # It is safe if you have not set the environment up: a job with an
+    # environment still sees repository secrets, so this keeps working either
+    # way and only tightens once you create it. Instructions in docs/UPDATES.md.
+    environment: release
+
     steps:
       - uses: actions/checkout@v4
 

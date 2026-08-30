@@ -80,6 +80,47 @@ encryption protects nothing that the secret store was not already protecting.
 If you would rather have one, regenerate now — before anything ships — and set
 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
 
+## Where to put the private key: repository or environment?
+
+Both work. They differ in who can read the secret.
+
+| | Repository secret | Environment secret |
+|---|---|---|
+| Where | Settings → Secrets and variables → Actions | Settings → Environments → *name* → Secrets |
+| Who can read it | **every workflow in the repository** | only a job with `environment: <name>` |
+| Gates | none | required reviewers, wait timer, allowed branches and tags |
+| Shows up as | nothing | a deployment, with an approval step if you ask for one |
+
+**Put the signing key in an environment.** A repository secret is readable by
+any workflow in the repository — including one added by a pull request, and
+pull requests here are increasingly written by a machine. Fork PRs get no
+secrets at all, but a branch in this repository is not a fork, so a workflow
+edit that reached `main`, or a `pull_request` job that runs with secrets, could
+read a repository-level key. Masking in logs is not a defence; anything that
+can read a value can encode it.
+
+An environment secret is unreachable unless a job names the environment, and
+GitHub will not start that job until the environment's rules pass. Set it up
+once:
+
+1. **Settings → Environments → New environment**, called `release`.
+2. Add `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+   to it — **not** to repository secrets.
+3. Under **Deployment branches and tags**, choose *Selected* and add the tag
+   pattern `v*`. Now nothing running on a branch can reach the key, whatever
+   it does.
+4. Optionally add yourself as a **required reviewer**, so signing a release
+   pauses for a click.
+
+`release.yml` already declares `environment: release`. If you skip all of this
+and use a repository secret, it still works — a job with an environment sees
+repository secrets too — so this only ever tightens.
+
+**`CLAUDE_CODE_OAUTH_TOKEN` stays a repository secret.** It is needed by a
+workflow that fires on issue comments; behind a required-reviewer environment
+you would be approving every single run, which defeats the point. What protects
+it is the action's own rule that the triggering user must have write access.
+
 ## Configuration
 
 `src-tauri/tauri.conf.json`:

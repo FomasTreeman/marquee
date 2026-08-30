@@ -17,8 +17,22 @@ long-lived token. Usage counts against the Pro or Max plan you already pay for
 — there is no Anthropic API billing in this loop.
 
 Paste it into **Settings → Secrets and variables → Actions** as
-`CLAUDE_CODE_OAUTH_TOKEN`. It is a credential for your Claude account: never
-put it in an issue, a commit, or a chat window.
+`CLAUDE_CODE_OAUTH_TOKEN` — a repository secret, not an environment one. This
+workflow fires on issue comments, and an environment with a required reviewer
+would mean approving every run. It is a credential for your Claude account:
+never put it in an issue, a commit, or a chat window.
+
+The repository is public, so it is worth being clear about who can spend that
+token: **the action requires the triggering user to have write access**,
+checked on issues, comments and reviews. A stranger writing `@claude` on an
+issue gets nothing. Two action inputs disable that check — `allowed_bots` and
+`allowed_non_write_users` — and neither is set. Do not set them without reading
+[the action's security notes](https://github.com/anthropics/claude-code-action/blob/main/docs/security.md).
+
+Issue text from anyone is still untrusted input being read by an agent with a
+checkout of your repository. That is the residual risk of this arrangement, and
+the reason the loop ends in a pull request you read rather than a push to
+`main`.
 
 **2. Let Actions open pull requests.**
 
