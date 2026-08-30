@@ -12,6 +12,7 @@
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import {
   setManualExecutable, removeManualGame, findExecutable, setHidden, uninstallGame,
+  setCustomTitle,
   type ArtworkManifest, type Game, type Meta, type Artwork,
 } from './library'
 import { toast } from './toast'
@@ -84,11 +85,36 @@ async function pickExecutable(game: Game, onChanged: () => void): Promise<void> 
   onChanged()
 }
 
+/**
+ * What committing a rename should actually do.
+ *
+ * Three outcomes, and the difference matters: writing a title identical to the
+ * one already showing would store an override that pins the name against
+ * future metadata, and an empty field has to clear the override rather than
+ * store an empty string -- that is the only route back to the provider's own
+ * name, so it cannot be a separate button nobody finds.
+ *
+ * Pure so the rule can be tested; the field and the toast around it cannot be.
+ */
+export function renameIntent(
+  showing: string,
+  typed: string,
+): { kind: 'none' } | { kind: 'clear' } | { kind: 'set'; title: string } {
+  const next = typed.trim()
+  if (!next) return { kind: 'clear' }
+  if (next === (showing ?? '').trim()) return { kind: 'none' }
+  return { kind: 'set', title: next }
+}
+
 export interface DetailHooks {
   onPlay(): void
   onChanged(): void
   /** Re-match this game's artwork against the store search. */
   onFindArtwork(game: Game): void
+  /** Offer the on-screen keyboard for a field, if a pad is what is being held.
+   *  The detail view does not own the keyboard -- main.ts does, because the
+   *  input chain has to consume for it before anything else. */
+  onTextField?(field: HTMLInputElement): void
 }
 
 /**
@@ -124,7 +150,7 @@ async function autoLocate(game: Game, button: HTMLElement, onChanged: () => void
 }
 
 export function createDetail(hooks: DetailHooks): DetailView {
-  const { onPlay, onChanged, onFindArtwork } = hooks
+  const { onPlay, onChanged, onFindArtwork, onTextField } = hooks
   const root = el('div', 'detail', document.body)
   root.hidden = true
 
@@ -143,12 +169,89 @@ export function createDetail(hooks: DetailHooks): DetailView {
   const logo = el('img', 'detail-logo', body)
   logo.alt = ''
   const title = el('h1', 'detail-title', body)
+
+  /**
+   * Renaming, in place.
+   *
+   * Sits where the title is rather than in a dialog, because the thing being
+   * edited is the thing on screen and a launcher has enough overlays. Empty
+   * commits as "no custom title", which restores whatever the provider calls
+   * it -- that is the only way back, so it must not be a separate button.
+   */
+  const rename = el('div', 'detail-rename', body)
+  rename.hidden = true
+  const renameField = el('input', 'detail-rename-field', rename)
+  renameField.type = 'text'
+  renameField.spellcheck = false
+  renameField.setAttribute('aria-label', 'Game name')
+  const renameHint = el('p', 'detail-rename-hint', rename)
+
   const tags = el('div', 'detail-tags', body)
   const actions = el('div', 'detail-actions', body)
   const desc = el('p', 'detail-desc', body)
   const facts = el('dl', 'detail-facts', body)
 
   let open = false
+  /** The game on screen, so the rename knows what it is renaming. */
+  let current: Game | undefined
+  let renaming = false
+
+  function endRename(): void {
+    renaming = false
+    rename.hidden = true
+    renameField.blur()
+    // Put the heading back exactly as open() left it: a wordmark hides the
+    // typed title, and forgetting that leaves both showing at once.
+    logo.hidden = !logoAvailable
+    title.hidden = logoAvailable
+  }
+
+  function beginRename(): void {
+    if (!current) return
+    renaming = true
+    // Both are hidden while editing, whichever was showing -- the field is
+    // standing in for the heading, not sitting next to it.
+    logo.hidden = true
+    title.hidden = true
+    rename.hidden = false
+    renameField.value = current.title || ''
+    // Both vocabularies, because the legend is not on screen behind an
+    // overlay and this is the only place the bindings are stated.
+    renameHint.textContent =
+      'A or Enter saves · B or Esc cancels · leave it empty to restore the original name'
+    renameField.focus()
+    renameField.select()
+    // A pad needs somewhere to type. main.ts owns the on-screen keyboard
+    // because the input chain must consume for it before anything else.
+    onTextField?.(renameField)
+  }
+
+  async function commitRename(): Promise<void> {
+    const game = current
+    if (!game) return
+    const intent = renameIntent(game.title ?? '', renameField.value)
+    endRename()
+    if (intent.kind === 'none') return
+    const title = intent.kind === 'set' ? intent.title : null
+    try {
+      await setCustomTitle(game.id, title)
+      logInfo('detail', title ? `renamed ${game.id} to ${title}` : `cleared the name of ${game.id}`)
+      toast(title ? `Renamed to ${title}.` : 'Original name restored.')
+      onChanged()
+    } catch (e) {
+      toast(`Could not rename that. ${String(e)}`, 'error', 6000)
+    }
+  }
+
+  renameField.addEventListener('keydown', (e) => {
+    // The global key handler steps aside while a field has focus, so Enter and
+    // Escape have to be caught here or neither would do anything.
+    if (e.key === 'Enter') { e.preventDefault(); void commitRename() }
+    else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); endRename() }
+  })
+
+  /** Whether the current game has a wordmark, so endRename can restore it. */
+  let logoAvailable = false
 
   function addFact(label: string, value: string): void {
     if (!value) return
@@ -179,11 +282,18 @@ export function createDetail(hooks: DetailHooks): DetailView {
 
       // Same rule as the hero: the wordmark is the preferred title, and type
       // is the fallback rather than an addition.
+      current = game
+      endRename()
       const hasLogo = !!art.logo
+      logoAvailable = hasLogo
       logo.hidden = !hasLogo
       title.hidden = hasLogo
       if (hasLogo && logo.getAttribute('src') !== art.logo) logo.src = art.logo!
-      logo.onerror = () => { logo.hidden = true; title.hidden = false }
+      logo.onerror = () => {
+        logoAvailable = false
+        logo.hidden = true
+        if (!renaming) title.hidden = false
+      }
       title.textContent = game.title || `App ${game.providerId}`
 
       tags.textContent = ''
@@ -275,6 +385,13 @@ export function createDetail(hooks: DetailHooks): DetailView {
       artwork.textContent = 'Find artwork'
       artwork.onclick = () => onFindArtwork(game)
 
+      // Any game, not just hand-added ones: Steam's name for a game is often
+      // not the one you would look for it under, and a store name with an
+      // edition suffix reads badly under a card.
+      const renameButton = el('button', 'action', actions)
+      renameButton.textContent = 'Rename'
+      renameButton.onclick = beginRename
+
       if (manual) {
         const change = el('button', 'action', actions)
         change.textContent = game.installed ? 'Change executable' : 'Remove'
@@ -310,12 +427,23 @@ export function createDetail(hooks: DetailHooks): DetailView {
     },
 
     close() {
+      // Discard any half-finished edit rather than leaving the field primed to
+      // reappear over the next game that is opened.
+      endRename()
       open = false
       root.hidden = true
     },
 
     handle(action) {
       if (!open) return false
+      // While renaming, the field is the innermost thing on screen. B must
+      // cancel the edit rather than close the whole view, or a pad user who
+      // changes their mind loses the screen as well as the edit.
+      if (renaming) {
+        if (action === 'a') void commitRename()
+        else if (action === 'b') endRename()
+        return true
+      }
       // Everything is swallowed while open, not just the actions understood.
       // Letting `left`/`right` fall through would move the grid selection
       // behind the overlay, so closing would land somewhere unexpected.

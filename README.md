@@ -64,6 +64,9 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
   when artwork is missing and the key that would fix it is not set
 - Launching, by `steam://` for Steam and directly for anything else
 - A detail view, favourites that survive a rescan, filter presets, search
+- **Renaming any game**, edited in place where its title is shown. Steam's name
+  for a game is often not the one you would look for it under, and an edition
+  suffix reads badly under a card. An empty field restores the original
 - **Adding any other game by typing its name**, with an on-screen keyboard
   when a pad is connected — the whole premise is a launcher used from a sofa,
   and until that existed the headline feature needed a desk

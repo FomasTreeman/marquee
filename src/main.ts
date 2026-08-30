@@ -676,6 +676,11 @@ async function main(): Promise<void> {
     onPlay: () => void play_(grid.focused),
     onChanged: () => void reloadLibrary(),
     onFindArtwork: openArtwork,
+    // Only when a pad is what is being held -- putting a keyboard on screen
+    // for someone who has one in front of them is in the way, not helpful.
+    // A closure rather than a conditional hook because padConnected is read
+    // later in startup than this.
+    onTextField: (field) => { if (padConnected) osk.attach(field) },
   })
 
   // Steam writes playtime into localconfig itself, so returning to the window

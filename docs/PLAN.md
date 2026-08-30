@@ -789,12 +789,11 @@ What is left:
    the three. Nothing depends on it until we want to ship to someone who is not
    us.
 
-4. **A rename UI.** `set_custom_title` is built, tested and round-trips through
-   a profile, but nothing in the interface calls it -- a custom title can only
-   arrive today by importing a profile that already has one. What is missing is
-   a pad-drivable text prompt, which is a screen rather than a button, and the
-   on-screen keyboard already exists to back it. Small, but a feature rather
-   than a loose end.
+*Settled since: the rename UI. It is built -- Rename sits in the game details
+screen, edits the title in place where it is shown, and takes the on-screen
+keyboard when a pad is what is being held. An empty field restores the
+provider's own name, which is the only route back and so could not be a
+separate button nobody would find.*
 
 *Settled since: the tuner. Both sibling projects had one, and the plan carried
 the question over, but the design here got tuned through `design/tokens.json`
