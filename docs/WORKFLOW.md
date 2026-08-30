@@ -139,19 +139,68 @@ Want changes? `@claude` in a review comment. It picks up from there.
 
 Merge when happy. The issue closes itself, the card moves to Done.
 
-## 6. You release — two clicks
+## 6. The release happens by itself
 
-**Actions → Release → Run workflow → `patch`**
+**You do nothing.** Merging is the release.
 
-That bumps the version in `tauri.conf.json`, `package.json` and `Cargo.toml`
-together, commits, tags, and pushes. **Build release** picks the tag up, builds
-and signs installers for Apple silicon, Intel Mac, Linux and Windows, writes
-the `latest.json` manifest, and opens a **draft** release.
+The moment a pull request lands on `main`, the Release workflow reads the
+labels on the pull request that was merged and decides the version from them:
 
-**Releases → edit the draft → write real notes → Publish.**
+| Label on the PR | Bump | 1.4.2 becomes |
+|---|---|---|
+| `breaking` | major | `2.0.0` |
+| `enhancement` or `feature` | minor | `1.5.0` |
+| anything else | patch | `1.4.3` |
+| `no-release` | — | nothing happens |
 
-Those notes are what the update prompt shows people, so "see the commit log"
-tells nobody anything. Nothing reaches any install until you press publish.
+Then it writes that version into `tauri.conf.json`, `package.json` and
+`Cargo.toml`, commits, tags, builds and signs installers for Apple silicon,
+Intel Mac, Linux and Windows, writes the `latest.json` manifest, and
+**publishes** the release. The notes are the pull request's own title, which is
+a real sentence about what changed.
+
+**There is no version number for anyone to type**, which is the point. Typing
+one is how the first attempt failed: a hand-made `v0.2.0` tag against a
+`tauri.conf.json` that still said `0.0.1`, and a build that refused to run.
+
+The next version comes from **whichever is higher, the version in the file or
+the newest tag**, so it cannot collide with a tag that already exists however
+the repository got into its current state.
+
+Want to force one? **Actions → Release → Run workflow** and pick a bump. That
+is an override, not the normal path.
+
+### Why it publishes rather than drafting
+
+The human gate moved earlier. You already read the change as a pull request,
+which is a better place to catch something than a release page — and a draft
+release is invisible to the updater, because `/releases/latest` ignores drafts.
+That was the shape of the first bug: a release nothing could see.
+
+If you want a pause anyway, put one on the `release` environment: **Settings →
+Environments → release → Required reviewers**. The build then waits for your
+click before it signs anything.
+
+### What lands on the releases page
+
+Real downloads, not `source_code.zip`:
+
+```
+marquee_1.4.3_x64-setup.exe        Windows installer
+marquee_1.4.3_x64_en-US.msi        Windows, the other kind
+marquee_1.4.3_aarch64.dmg          macOS, Apple silicon
+marquee_1.4.3_x64.dmg              macOS, Intel
+marquee_1.4.3_amd64.AppImage       Linux
+marquee_1.4.3_amd64.deb            Linux, Debian and Ubuntu
+latest.json                        what the updater reads
+*.sig                              a signature per bundle
+```
+
+The `.sig` files and `latest.json` only appear because
+`bundle.createUpdaterArtifacts` is `true` in `tauri.conf.json`. Without it Tauri
+builds perfectly good installers and no updater artifacts at all — and the
+symptom is an app that never finds an update while the release page looks
+entirely fine.
 
 ## 7. Your Windows machine updates itself
 
@@ -175,7 +224,10 @@ running, so a release that fails its signature check will not install.
 | `claude-working` | picked up, running | nobody, wait |
 | `in-review` | pull request open | **yours** |
 | `needs-decision` | blocked on a question | **yours** |
-| `bug` / `enhancement` | what kind of thing it is | — |
+| `bug` | patch release on merge | — |
+| `enhancement` | minor release on merge | — |
+| `breaking` | major release on merge | — |
+| `no-release` | merge without releasing | — |
 | `wont-fix-yet` | real, deliberately parked | — |
 
 ## Things worth knowing
@@ -201,6 +253,8 @@ mentions it or opens a separate issue, so nothing becomes un-revertable.
 | Nothing happens on `@claude` | `CLAUDE_CODE_OAUTH_TOKEN` missing, or the label/mention didn't register |
 | Run works, then fails at the end | Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests" is off |
 | Release builds but won't sign | `TAURI_SIGNING_PRIVATE_KEY` not in the `release` environment — see `docs/UPDATES.md` |
-| App never offers an update | the release is still a draft, or the tag and `tauri.conf.json` disagree |
+| No release after a merge | the PR was labelled `no-release`, or the commit was the version bump itself |
+| Release has only source archives | the build job failed — open the run. The release is made by the build, not by the tag |
+| App never offers an update | no `latest.json` on the release, so either `createUpdaterArtifacts` is off or the build did not finish |
 | Cards never move | `PROJECT_TOKEN` missing, or `PROJECT_NUMBER` is not your board's number (check the URL) |
 | Automation fails naming a Status | your board has no option with that exact name — the error lists the ones it does have |

@@ -1,44 +1,182 @@
-# Cut a release, and with it the update everyone else receives.
+# Merge a pull request, get a release. Nobody types a version number.
 #
-# Triggered by the tag that the **Release** workflow pushes -- use that rather
-# than tagging by hand, so the version in tauri.conf.json and the tag cannot
-# disagree. This builds an installer for every platform, signs each one with
-# the private key held in repository secrets, writes the `latest.json` manifest
-# the updater reads, and attaches the lot to a GitHub release.
+# This used to be two workflows and a hand-typed tag, which produced exactly
+# the failure it was meant to prevent: a tag pushed by hand, a version in
+# tauri.conf.json that disagreed with it, and a build that refused. Worse, the
+# two could not be joined up, because **a tag pushed with GITHUB_TOKEN does not
+# trigger another workflow** -- GitHub blocks that to stop workflows looping.
+# So the tag landed and the build never ran, which is why the only release on
+# the repository had nothing in it but source archives.
 #
-# The whole flow, and why each piece exists, is in docs/UPDATES.md. The short
-# version: the running app fetches latest.json, compares versions, downloads
-# the bundle for its platform, and refuses to install it unless the signature
-# matches the public key compiled into the binary it is already running.
+# It is one workflow now. Deciding the version, tagging, building and
+# publishing happen in a single run, so there is nothing to trigger and nothing
+# to keep in step.
 #
-# Two secrets are required, both set under Settings -> Secrets and variables:
+# ---------------------------------------------------------------------------
+# What decides the version: the labels on the pull request that was merged.
 #
-#   TAURI_SIGNING_PRIVATE_KEY           the contents of ~/.tauri/marquee.key
-#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  its password, empty string if none
+#     breaking                -> major     1.4.2 -> 2.0.0
+#     enhancement | feature   -> minor     1.4.2 -> 1.5.0
+#     anything else           -> patch     1.4.2 -> 1.4.3
+#     no-release              -> nothing happens
 #
-# Lose that key and no existing install can ever be updated again, because
-# every one of them will reject a bundle signed by anything else.
+# There is no decision left for a person to get wrong. Override it by running
+# the workflow by hand and choosing a bump.
+# ---------------------------------------------------------------------------
 
-name: Build release
+name: Release
 
 on:
   push:
-    tags: ['v*']
-  # Runnable without a tag, to prove the pipeline works before trusting it with
-  # a real release. Produces a draft and publishes nothing either way.
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Override the version bump'
+        required: false
+        default: auto
+        type: choice
+        options: [auto, patch, minor, major]
 
 permissions:
   contents: write
+  pull-requests: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  release:
+  decide:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.plan.outputs.version }}
+      skip: ${{ steps.plan.outputs.skip }}
+      notes: ${{ steps.plan.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Tags are needed to work out where we are. A shallow checkout has
+          # none, which is how the old "does this tag already exist" guard
+          # passed on a tag that existed.
+          fetch-depth: 0
+
+      - name: Work out what to release
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OVERRIDE: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+
+          # Its own version-bump commit coming back round. A push made with
+          # GITHUB_TOKEN does not trigger workflows, so this cannot actually
+          # happen today -- but relying on that quietly means the day it
+          # changes, this loops forever cutting releases.
+          msg=$(git log -1 --pretty=%s)
+          case "$msg" in
+            "Marquee "*) echo "skip=true" >> "$GITHUB_OUTPUT"
+                         echo "Version bump commit; nothing to do."; exit 0 ;;
+          esac
+
+          # The pull request this commit came from, if any. A direct push to
+          # main has none, and gets a patch.
+          pr=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
+                 --jq '.[0] // empty' 2>/dev/null || true)
+          labels=$(echo "${pr:-{}}" | jq -r '(.labels // []) | map(.name) | join(" ")')
+          title=$(echo "${pr:-{}}" | jq -r '.title // ""')
+          number=$(echo "${pr:-{}}" | jq -r '.number // ""')
+          echo "pull request: ${number:-none} — ${title:-n/a}"
+          echo "labels: ${labels:-none}"
+
+          if [[ " $labels " == *" no-release "* ]]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Labelled no-release."; exit 0
+          fi
+
+          bump=patch
+          if [[ " $labels " == *" breaking "* ]]; then bump=major
+          elif [[ " $labels " == *" enhancement "* || " $labels " == *" feature "* ]]; then bump=minor
+          fi
+          if [ -n "${OVERRIDE:-}" ] && [ "${OVERRIDE}" != "auto" ]; then
+            bump="$OVERRIDE"
+            echo "Overridden to $bump"
+          fi
+
+          # Start from whichever is higher: the version in the file, or the
+          # newest tag. That makes it impossible to compute a tag that already
+          # exists, however the repository got into its current state -- which
+          # is the trap that produced v0.2.0 sitting above a 0.0.1 config.
+          from_file=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          from_tags=$(git tag -l 'v*' | sed 's/^v//' \
+                        | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+                        | sort -V | tail -1 || true)
+          base=$(printf '%s\n%s\n' "$from_file" "${from_tags:-0.0.0}" | sort -V | tail -1)
+          echo "config $from_file, newest tag ${from_tags:-none}, starting from $base"
+
+          IFS=. read -r major minor patch <<< "$base"
+          case "$bump" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            patch) patch=$((patch + 1)) ;;
+          esac
+          next="$major.$minor.$patch"
+          echo "Releasing $base -> $next ($bump)"
+
+          # The notes people see in the update prompt. The pull request title
+          # is a real sentence about what changed; "see the commit log" is not.
+          if [ -n "$number" ]; then
+            notes="$title (#$number)"
+          else
+            notes="$msg"
+          fi
+          {
+            echo "version=$next"
+            echo "skip=false"
+            echo "notes=$notes"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Write the version everywhere it appears
+        if: steps.plan.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          next='${{ steps.plan.outputs.version }}'
+          node -e '
+            const fs = require("fs");
+            const next = process.argv[1];
+            for (const f of ["src-tauri/tauri.conf.json", "package.json"]) {
+              const j = JSON.parse(fs.readFileSync(f, "utf8"));
+              j.version = next;
+              fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
+            }
+          ' "$next"
+          sed -i "0,/^version = \".*\"$/s//version = \"$next\"/" src-tauri/Cargo.toml
+          # Cargo.lock records the crate's own version too, and a stale one
+          # fails `cargo build --locked` in the build job below.
+          (cd src-tauri && cargo update -p marquee --offline 2>/dev/null || true)
+
+      - name: Commit and tag
+        if: steps.plan.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          next='${{ steps.plan.outputs.version }}'
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/tauri.conf.json package.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+          git commit -m "Marquee $next"
+          git tag "v$next"
+          git push origin HEAD:main
+          git push origin "v$next"
+
+  build:
+    needs: decide
+    if: needs.decide.outputs.skip != 'true'
     strategy:
       fail-fast: false
       matrix:
         include:
           # Apple silicon and Intel are separate bundles; the updater picks by
-          # target triple, so shipping only one leaves half the Macs stranded.
+          # target triple, so shipping one strands half the Macs.
           - os: macos-latest
             target: aarch64-apple-darwin
           - os: macos-latest
@@ -50,23 +188,19 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
-    # The signing key lives in an environment rather than in repository
-    # secrets, and this line is what reaches it.
-    #
-    # A repository secret is readable by every workflow in the repository,
-    # including one added by a pull request -- and pull requests here are
-    # increasingly written by a machine. An environment secret is readable only
-    # by a job that names the environment, and GitHub will not let that job run
-    # until the environment's own rules are satisfied. Restrict the `release`
-    # environment to `v*` tags and nothing on a branch can reach the key at all.
-    #
-    # It is safe if you have not set the environment up: a job with an
-    # environment still sees repository secrets, so this keeps working either
-    # way and only tightens once you create it. Instructions in docs/UPDATES.md.
+    # The signing key lives here rather than in repository secrets, so no other
+    # workflow -- including one added by a pull request -- can reach it. Safe
+    # if the environment does not exist yet: a job with an environment still
+    # sees repository secrets. See docs/UPDATES.md.
     environment: release
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The tag the job above just made, not the branch. Checking out main
+          # would race with anything merged in the meantime and build a version
+          # that does not match its own tag.
+          ref: v${{ needs.decide.outputs.version }}
 
       - name: Linux dependencies
         if: matrix.os == 'ubuntu-22.04'
@@ -81,12 +215,10 @@ jobs:
           targets: ${{ matrix.target }}
 
       - uses: actions/setup-node@v4
-        with:
-          node-version: 20
+        with: { node-version: 20 }
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
+        with: { version: 9 }
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -95,20 +227,6 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # The tag is the source of truth for the version, and the updater
-      # compares versions -- so a tag that disagrees with tauri.conf.json ships
-      # an update that either never offers itself or offers itself forever.
-      - name: The tag and the version agree
-        if: startsWith(github.ref, 'refs/tags/v')
-        shell: bash
-        run: |
-          tag="${GITHUB_REF_NAME#v}"
-          conf=$(node -p "require('./src-tauri/tauri.conf.json').version")
-          [ "$tag" = "$conf" ] || {
-            echo "::error::tag $tag does not match tauri.conf.json version $conf"
-            exit 1
-          }
-
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -116,19 +234,20 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           args: --target ${{ matrix.target }}
-          tagName: ${{ github.ref_name }}
-          releaseName: Marquee ${{ github.ref_name }}
-          # Written by hand before publishing. An update prompt that says
-          # "see the commit log" is not telling anyone anything.
+          tagName: v${{ needs.decide.outputs.version }}
+          releaseName: Marquee ${{ needs.decide.outputs.version }}
           releaseBody: |
-            See the notes below for what changed.
+            ${{ needs.decide.outputs.notes }}
 
-            Marquee updates itself: existing installs will offer this version
-            shortly after their next launch.
-          # A draft, always. The release is what every install downloads, so a
-          # human looks at it before it becomes that.
-          releaseDraft: true
+            Installed copies will offer this version shortly after their next
+            launch. Or ask now: Settings → Updates → Check for updates.
+          # Published, not a draft. The human gate moved earlier: the change
+          # was reviewed as a pull request, which is a better place to catch
+          # something than a release page. A draft here would also mean the
+          # updater never sees it, since /releases/latest ignores drafts --
+          # which is the shape of the bug this file just replaced.
+          releaseDraft: false
           prerelease: false
-          # This is the manifest the updater reads. Without it the release is
-          # just files nobody's app will ever find.
+          # Writes latest.json, which is the file the updater actually reads.
+          # Without it the release is just installers nobody's app will find.
           includeUpdaterJson: true

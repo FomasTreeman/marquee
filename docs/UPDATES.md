@@ -192,25 +192,32 @@ and therefore reports whatever happens, including "up to date".
 
 ## Cutting a release
 
-```bash
-# 1. Bump the version. The tag and this file must agree; CI checks.
-#    Edit "version" in src-tauri/tauri.conf.json.
+You do not. Merging a pull request is the release.
 
-# 2. Commit it.
-git commit -am "Marquee 0.2.0"
+The Release workflow decides the version from the merged pull request's labels
+(`breaking` major, `enhancement` minor, otherwise patch, `no-release` to skip),
+writes it into `tauri.conf.json`, `package.json` and `Cargo.toml`, commits,
+tags, builds all four targets, signs them, writes `latest.json` and publishes.
+`docs/WORKFLOW.md` walks it through.
 
-# 3. Tag and push.
-git tag v0.2.0
-git push && git push --tags
-```
+Two things about the shape of that workflow, both learned by getting them
+wrong:
 
-`release.yml` then builds four targets — Apple silicon, Intel Mac, Linux x64,
-Windows x64 — signs each bundle, writes `latest.json`, and creates a **draft**
-release. Review it, write real notes, press publish. Existing installs will
-offer it shortly after their next launch.
+**It is one workflow, not two.** Bumping the version and building used to be
+separate, joined by a pushed tag -- and **a tag pushed with `GITHUB_TOKEN` does
+not trigger another workflow.** GitHub blocks that so workflows cannot loop.
+The tag landed, the build never ran, and the only thing on the releases page
+was a source archive. If you split this up again, that is what happens.
 
-`workflow_dispatch` runs the same pipeline without a tag, so the whole thing
-can be proven before it is trusted with a real release. Do that first.
+**The version is computed, never typed.** It starts from whichever is higher,
+the version in the file or the newest tag, so it cannot produce a tag that
+already exists. The first attempt trusted a hand-typed tag and immediately
+produced `v0.2.0` against a `tauri.conf.json` saying `0.0.1`.
+
+**`bundle.createUpdaterArtifacts` must stay `true`.** Without it Tauri builds
+installers and no updater artifacts -- no `.sig` files, nothing for
+`latest.json` to point at. The release page looks perfectly healthy and no
+installed copy ever finds an update.
 
 ## Before the first real release
 

@@ -92,20 +92,15 @@ order they have actually gone wrong here:
 
 ## Releasing
 
-**Actions → Release → Run workflow**, pick `patch`, `minor` or `major`.
+Nothing to do. Merging is the release.
 
-That bumps the version in `tauri.conf.json`, `package.json` and `Cargo.toml`
-together, commits it, and pushes a tag. **Build release** picks the tag up,
-builds and signs an installer for each platform, writes the `latest.json`
-manifest, and opens a **draft** release.
+The Release workflow reads the labels on the pull request that was merged --
+`breaking` for a major, `enhancement` for a minor, anything else a patch,
+`no-release` to skip -- writes that version into all three files, tags, builds
+and signs installers for four targets, and publishes.
 
-Write real notes on the draft — they are what the update prompt shows people —
-then press publish. Nothing reaches any install until you do.
-
-The version is bumped by a workflow rather than by hand because it stops being
-decoration the moment an updater is live: every install compares its own
-version against the manifest, so a `tauri.conf.json` that disagrees with the
-tag ships an update that either never offers itself or offers itself forever.
+There is no version number for a person to type, which is deliberate: typing
+one is how this first went wrong. `docs/WORKFLOW.md` has the detail.
 
 ## Taking the update
 
