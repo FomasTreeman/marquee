@@ -1,9 +1,10 @@
 # Cut a release, and with it the update everyone else receives.
 #
-# Tag a commit `v0.2.0` and push the tag. This builds an installer for every
-# platform, signs each one with the private key held in repository secrets,
-# writes the `latest.json` manifest the updater reads, and attaches the lot to
-# a GitHub release.
+# Triggered by the tag that the **Release** workflow pushes -- use that rather
+# than tagging by hand, so the version in tauri.conf.json and the tag cannot
+# disagree. This builds an installer for every platform, signs each one with
+# the private key held in repository secrets, writes the `latest.json` manifest
+# the updater reads, and attaches the lot to a GitHub release.
 #
 # The whole flow, and why each piece exists, is in docs/UPDATES.md. The short
 # version: the running app fetches latest.json, compares versions, downloads
@@ -18,13 +19,13 @@
 # Lose that key and no existing install can ever be updated again, because
 # every one of them will reject a bundle signed by anything else.
 
-name: Release
+name: Build release
 
 on:
   push:
     tags: ['v*']
-  # Buildable without tagging, to prove the pipeline works before trusting it
-  # with a real release. Produces a draft, publishes nothing.
+  # Runnable without a tag, to prove the pipeline works before trusting it with
+  # a real release. Produces a draft and publishes nothing either way.
   workflow_dispatch:
 
 permissions:

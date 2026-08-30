@@ -1,0 +1,110 @@
+# Hand an issue to Claude Code, get a pull request back.
+#
+# Say `@claude` in an issue, an issue comment, or a review comment on a PR, and
+# this runs Claude Code against the repository with that thread as its brief.
+# It reads CLAUDE.md first, so it works to this project's conventions -- the
+# silence rule, British English, prose commits, proving a test bites -- rather
+# than generic ones.
+#
+# It opens a branch and a pull request. It does not merge, and it cannot: the
+# review is the point. See docs/CONTRIBUTING-AI.md for the whole loop.
+#
+# ---------------------------------------------------------------------------
+# Setup, once. Requires ONE secret, and no Anthropic API billing:
+#
+#   1. On your machine:            claude setup-token
+#      That opens a browser, authorises against your Claude subscription, and
+#      prints a long-lived token. Pro and Max plans can do this; usage counts
+#      against the plan you already pay for rather than API credits.
+#
+#   2. Paste it into:              Settings -> Secrets and variables -> Actions
+#      as CLAUDE_CODE_OAUTH_TOKEN
+#
+#   3. Allow Actions to open PRs:  Settings -> Actions -> General ->
+#      "Allow GitHub Actions to create and approve pull requests"
+#
+# Never paste that token into an issue, a commit, or a chat. It is a
+# credential for your Claude account.
+# ---------------------------------------------------------------------------
+
+name: Claude
+
+on:
+  issues:
+    types: [opened, assigned, labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+# Two issues worked at once would race on the same branch namespace, and more
+# to the point would burn subscription usage in parallel for no benefit.
+concurrency:
+  group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  claude:
+    # Only on an explicit ask. Without this guard every comment on every issue
+    # starts a run, which is both expensive and startling.
+    if: |
+      contains(github.event.comment.body, '@claude') ||
+      contains(github.event.review.body, '@claude') ||
+      contains(github.event.issue.body, '@claude') ||
+      contains(github.event.issue.title, '@claude') ||
+      github.event.label.name == 'claude'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The full history, so it can read why a line is the way it is.
+          # Most of the reasoning in this repository lives in commit messages.
+          fetch-depth: 0
+
+      # Claude needs to be able to run the suite before claiming a fix works,
+      # and the suite needs the toolchain. Without these it can only reason
+      # about the code, which for the bugs this project gets is not enough.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf \
+            libudev-dev
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Ticked-off progress in the issue thread, so a long run is legible
+          # rather than a spinner.
+          track_progress: true
+          claude_args: |
+            --allowed-tools "Bash(pnpm:*),Bash(cargo:*),Bash(node:*),Bash(git:*),Bash(tools/:*),Bash(python3:*)"
+            --system-prompt "Read CLAUDE.md before anything else and follow it. This project's bugs are silent, so a fix is not finished until something fails when it regresses: add the test, then prove it bites by reintroducing the bug and watching it fail. Run 'pnpm test' and 'cargo clippy --all-targets -- -D warnings' before you claim to be done, and say plainly in the PR if either did not pass. If the issue is unclear or you cannot reproduce it, say so and stop rather than guessing at a fix."

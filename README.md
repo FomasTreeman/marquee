@@ -115,6 +115,8 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
   bounds it. Worth reading before running anything that starts other programs.
 - **[docs/UPDATES.md](docs/UPDATES.md)** — how Marquee updates itself, how to
   cut a release, and the one mistake in the whole flow you cannot undo.
+- **[docs/CONTRIBUTING-AI.md](docs/CONTRIBUTING-AI.md)** — filing an issue,
+  having Claude open a pull request for it, reviewing, releasing.
 
 ## Running it
 
