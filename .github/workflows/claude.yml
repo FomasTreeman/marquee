@@ -115,6 +115,10 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Appended, not replaced. `--system-prompt-file` would discard Claude
+      # Code's own defaults along with the GitHub context this action installs,
+      # and the symptom would be an agent that works but cannot see the issue
+      # it was called about.
       - uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -123,5 +127,5 @@ jobs:
           # rather than a spinner.
           track_progress: true
           claude_args: |
-            --allowed-tools "Bash(pnpm:*),Bash(cargo:*),Bash(node:*),Bash(git:*),Bash(tools/:*),Bash(python3:*)"
-            --system-prompt "Read CLAUDE.md before anything else and follow it. This project's bugs are silent, so a fix is not finished until something fails when it regresses: add the test, then prove it bites by reintroducing the bug and watching it fail. Run 'pnpm test' and 'cargo clippy --all-targets -- -D warnings' before you claim to be done, and say plainly in the PR if either did not pass. If the issue is unclear or you cannot reproduce it, say so and stop rather than guessing at a fix."
+            --allowed-tools "Bash(pnpm:*),Bash(cargo:*),Bash(node:*),Bash(git:*),Bash(tools/:*),Bash(python3:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh pr edit:*)"
+            --append-system-prompt-file .github/claude-instructions.md
