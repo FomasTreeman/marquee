@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAX_GROWTH, easeOut, firstVisibleIndex, glide, metrics, move, poolSize,
-  positionOf, scrollToShow, topClearance, type MetricsInput,
+  positionOf, scrollToShow, topClearance, gapCoversEdges, type MetricsInput,
 } from '../grid-math'
 
 const base: MetricsInput = {
@@ -266,25 +266,22 @@ describe('clearance for the focused row', () => {
    * its centre and draws a ring outside that. Leaving only a gap clipped both,
    * which looked like the card growing into a cut-off border.
    */
-  it('accounts for the scale, the ring and the fade', () => {
-    const c = topClearance(300, 1.055, 4, 28)
-    expect(c).toBeCloseTo((300 * 1.055 - 300) / 2 + 4 + 28, 5)
-    expect(c).toBeGreaterThan(28)
+  it('accounts for the scale and the ring', () => {
+    expect(topClearance(300, 1.055, 4)).toBeCloseTo((300 * 1.055 - 300) / 2 + 4, 5)
   })
 
-  it('is just the ring and fade when nothing scales', () => {
-    expect(topClearance(300, 1, 4, 28)).toBeCloseTo(32, 5)
+  it('is just the ring when nothing scales', () => {
+    expect(topClearance(300, 1, 4)).toBeCloseTo(4, 5)
     // A scale below 1 is not a shrink instruction; it must not reduce clearance.
-    expect(topClearance(300, 0.5, 4, 28)).toBeCloseTo(32, 5)
+    expect(topClearance(300, 0.5, 4)).toBeCloseTo(4, 5)
   })
 
   it('keeps the focused row clear of the top edge', () => {
     const m = at()
-    const c = topClearance(m.cardH, 1.055, 4, 28)
+    const c = topClearance(m.cardH, 1.055, 4)
     const target = m.cols * 4
     const y = scrollToShow(target, 99999, m, base.viewportHeight, base.gapY, c)
-    const top = base.gapY + 4 * m.rowH
-    expect(top - y).toBeGreaterThanOrEqual(c - 0.001)
+    expect(base.gapY + 4 * m.rowH - y).toBeGreaterThanOrEqual(c - 0.001)
   })
 
   /** The first row cannot be scrolled off, so it keeps its plain gap rather
@@ -292,5 +289,83 @@ describe('clearance for the focused row', () => {
   it('does not apply to the first row', () => {
     const m = at()
     expect(scrollToShow(0, 99999, m, base.viewportHeight, base.gapY, 500)).toBe(0)
+  })
+
+  /**
+   * The assertion that was missing, and its absence let a regression through.
+   *
+   * Clipping the previous row's shadow wants a *small* clearance and the focus
+   * ring wants a large one, so the two pull opposite ways. A rewrite took the
+   * larger of the two, which satisfies the ring and leaves the shadow visible —
+   * and every existing test still passed, because they all only checked the
+   * ring. Both sides are asserted now.
+   */
+  it('pushes the previous row and its shadow fully out of view', () => {
+    // A gap that actually covers both, as the design's does. The fixture's
+    // default 20 does not, and asserting against it would be testing the
+    // failure mode rather than the behaviour.
+    const gapY = 36
+    const shadow = 19
+    const m = at({ gapY })
+    const clearance = topClearance(m.cardH, 1.055, 4)
+    expect(gapCoversEdges(gapY, shadow, clearance)).toBe(true)
+
+    const row = 4
+    const y = scrollToShow(m.cols * row, 99999, m, base.viewportHeight, gapY, clearance, shadow)
+
+    const previousShadowBottom = gapY + (row - 1) * m.rowH + m.cardH + shadow
+    expect(previousShadowBottom).toBeLessThanOrEqual(y + 0.001)
+
+    // And the focused row's ring must still fit above it.
+    expect(gapY + row * m.rowH - y).toBeGreaterThanOrEqual(clearance - 0.001)
+  })
+
+  /** When the gap cannot pay for both, the ring wins: a clipped ring is uglier
+   *  than a shadow, and the runtime check says the gap needs raising. */
+  it('protects the ring when the gap cannot cover both', () => {
+    const m = at()
+    const clearance = topClearance(m.cardH, 1.055, 4)
+    const y = scrollToShow(m.cols * 4, 99999, m, base.viewportHeight, base.gapY, clearance, 999)
+    expect(base.gapY + 4 * m.rowH - y).toBeGreaterThanOrEqual(clearance - 0.001)
+  })
+})
+
+describe('the gap has to pay for both edges', () => {
+  /**
+   * With a hard top edge, two things compete for the space above a row scrolled
+   * to the top: the focused card's ring needs clearance, and the previous row's
+   * shadow needs *not* to be cleared into view. The gap has to cover both, and
+   * the current values balance exactly — which is a coincidence of three tuned
+   * numbers, not something to rely on anyone remembering.
+   */
+  // The design's own values, from design/tokens.json. A card at the ideal
+  // width of 188 is 282 tall at 2:3.
+  const CARD_H = 282
+  const GAP = 36
+  const SHADOW = 19
+  const SCALE = 1.055
+  const RING = 4
+
+  it('holds for the current design values', () => {
+    expect(gapCoversEdges(GAP, SHADOW, topClearance(CARD_H, SCALE, RING))).toBe(true)
+  })
+
+  /** The gap this replaced. Kept as a test because it is the case that was
+   *  actually shipping: 30 did not cover 19 + 16, and the result was a sliver
+   *  of the previous row's shadow at the top edge. */
+  it('did not hold at the previous gap of 30', () => {
+    expect(gapCoversEdges(30, SHADOW, topClearance(CARD_H, SCALE, RING))).toBe(false)
+  })
+
+  it('fails when the shadow grows past what the gap can pay for', () => {
+    expect(gapCoversEdges(GAP, 40, topClearance(CARD_H, SCALE, RING))).toBe(false)
+  })
+
+  it('fails when the focus scale grows past it', () => {
+    expect(gapCoversEdges(GAP, SHADOW, topClearance(CARD_H, 1.4, RING))).toBe(false)
+  })
+
+  it('is satisfied by making the gap larger', () => {
+    expect(gapCoversEdges(120, 40, topClearance(CARD_H, 1.4, RING))).toBe(true)
   })
 })

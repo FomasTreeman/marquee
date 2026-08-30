@@ -1,7 +1,7 @@
 import { logWarn } from './log'
 import {
   firstVisibleIndex, glide, metrics, move as moveIndex, poolSize, positionOf,
-  scrollToShow, topClearance, type Metrics,
+  scrollToShow, topClearance, gapCoversEdges, type Metrics,
 } from './grid-math'
 
 /**
@@ -115,9 +115,12 @@ export function createGrid(
   let gap = 20
   /** Horizontal gutter. Wider than the vertical one -- see design/tokens.json. */
   let gapX = 30
-  /** Space the focused row needs above it: it scales, draws a ring outside its
-   *  box, and must clear the fade at the top edge. */
-  let clearance = 40
+  /** Space the focused row needs above it: it scales and draws a ring outside
+   *  its own box, both of which clip against a hard top edge. */
+  let clearance = 12
+  /** How far a card's shadow reaches below it. Subtracted from the gap so the
+   *  row above is pushed fully out of view rather than leaving its shadow. */
+  let shadowReach = 19
   let focused = 0
   let scheduled = false
   /* Our own copies of the two scroll-related layout values.
@@ -150,12 +153,21 @@ export function createGrid(
     const scale = px('--s', 1) || 1
     gap = px('--gap', 20) * scale
     gapX = px('--gap-x', 30) * scale
-    clearance = topClearance(
-      m.cardH,
-      px('--focus-scale', 1) || 1,
-      px('--ring-offset', 4) * scale,
-      px('--grid-fade', 28) * scale,
-    )
+    clearance = topClearance(m.cardH, px('--focus-scale', 1) || 1, px('--ring-offset', 4) * scale)
+    shadowReach = px('--card-shadow-reach', 19) * scale
+
+    // The gap has to pay for the ring's clearance *and* keep the previous
+    // row's shadow out of view. Those pull in opposite directions and the
+    // numbers currently balance exactly, so a change to any of them is worth
+    // hearing about rather than discovering as a sliver at the top edge.
+    if (!gapCoversEdges(gap, shadowReach, clearance)) {
+      logWarn(
+        'grid',
+        'the vertical gap no longer covers the focus ring and the shadow above it; ' +
+          'the top edge will show a sliver of the previous row',
+        { gap, clearance, shadowReach: px('--card-shadow-reach', 19) * scale },
+      )
+    }
 
     viewH = viewport.clientHeight
     m = metrics({
@@ -339,7 +351,7 @@ export function createGrid(
    * Writes only, never reads back, so it cannot force a layout.
    */
   function scrollIntoView(): void {
-    const next = scrollToShow(focused, scrollTarget, m, viewH, gap, clearance)
+    const next = scrollToShow(focused, scrollTarget, m, viewH, gap, clearance, shadowReach)
     if (next === scrollTarget) return
 
     const duration = scrollDuration()

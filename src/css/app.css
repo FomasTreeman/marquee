@@ -356,34 +356,9 @@ body::after {
 
 /* --- library ------------------------------------------------------- */
 
-.library {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
+.library { flex: 1; min-height: 0; display: flex; }
 .library .grid-viewport { flex: 1; }
 
-/* --- faded edges ---------------------------------------------------
-   A row scrolling past a hard edge shows a sliver of itself and its
-   shadow, which reads as a rendering fault. Fading makes the same
-   pixels read as depth instead.
-
-   A black gradient painted over the grid rather than a mask on it: on
-   a pitch-black design the two are visually identical, and an overlay
-   is a static composited layer while a mask forces the scroller to
-   re-composite as it moves. The design being one colour is what makes
-   the cheap version indistinguishable from the expensive one. */
-.library::before,
-.library::after {
-  content: "";
-  position: absolute;
-  left: 0;
-  right: 0;
-  height: calc(var(--grid-fade) * var(--s));
-  pointer-events: none;
-  z-index: 2;
-}
 .library::before {
   top: 0;
   background: linear-gradient(to bottom, var(--bg0) 12%, rgb(0 0 0 / 0) 100%);

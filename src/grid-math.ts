@@ -116,23 +116,30 @@ export function scrollToShow(
   viewportHeight: number,
   gapY: number,
   /**
-   * Minimum space to leave above the focused row.
-   *
-   * More than the gap, because the focused card is *bigger than its box*: it
-   * scales up and draws a ring outside its own edges, and both are clipped
-   * against the top of the grid if the scroll leaves only a gap. That was
-   * visible as the focused card growing into a cut-off border.
-   *
-   * It also has to cover the fade at the top edge, or the focused card sits
-   * half-dimmed. Callers compute it from those two; see `topClearance`.
+   * Smallest space the focused row can have above it before its ring clips.
+   * From `topClearance`.
    */
-  minTopClearance = 0,
+  minClearance = 0,
+  /** How far a card's shadow reaches below its own box. */
+  shadowReach = 0,
 ): number {
   const row = Math.floor(index / m.cols)
   const top = gapY + row * m.rowH
   const bottom = top + m.cardH
-  // The first row has nothing above it and cannot be scrolled off anyway.
-  const above = row === 0 ? gapY : Math.max(gapY, minTopClearance)
+
+  // Two opposed constraints, and the direction is easy to get backwards.
+  //
+  // The previous row's card ends `gapY` above this one, and its shadow reaches
+  // `shadowReach` further. Leaving *less* room above the focused row pushes
+  // that shadow out of view — so clipping it wants a SMALL clearance, exactly
+  // `gapY - shadowReach`. The focus ring wants a LARGE one. Taking the larger
+  // of the two satisfies the ring and leaves the shadow showing, which is
+  // precisely the bug this comment exists to prevent recurring.
+  //
+  // When the gap covers both (see gapCoversEdges) `gapY - shadowReach` is
+  // already at least `minClearance` and wins. When it does not, the ring is
+  // protected and the shadow bleeds — the less ugly of the two failures.
+  const above = row === 0 ? gapY : Math.max(minClearance, gapY - shadowReach)
   if (top - above < scrollY) return Math.max(0, top - above)
   if (bottom + gapY > scrollY + viewportHeight) return Math.max(0, bottom + gapY - viewportHeight)
   return scrollY
@@ -143,17 +150,30 @@ export function scrollToShow(
  *
  * The focused card is larger than the box the grid lays out: it scales about
  * its centre, so it grows by half the extra height upwards, and its ring sits
- * outside that again. Add the fade at the top edge, which would otherwise dim
- * the card it is meant to be drawing attention to.
+ * outside that again. Clearance smaller than this clips the ring against the
+ * top of the grid.
  */
-export function topClearance(
-  cardHeight: number,
-  focusScale: number,
-  ringOffset: number,
-  fadeHeight: number,
-): number {
+export function topClearance(cardHeight: number, focusScale: number, ringOffset: number): number {
   const grown = (cardHeight * Math.max(1, focusScale) - cardHeight) / 2
-  return grown + ringOffset + fadeHeight
+  return grown + ringOffset
+}
+
+/**
+ * Does the vertical gap pay for everything that has to fit inside it?
+ *
+ * The edge of the grid is a hard one, so exactly two things compete for the
+ * space above a row scrolled to the top: the focused card's ring, which needs
+ * clearance, and the previous row's shadow, which needs *not* to be cleared
+ * into view. The gap has to cover both:
+ *
+ *     gapY  >=  shadowReach + topClearance
+ *
+ * It currently balances exactly, which is a coincidence of three tuned numbers
+ * and not a property anyone should rely on remembering. Hence a function, a
+ * test, and a runtime check.
+ */
+export function gapCoversEdges(gapY: number, shadowReach: number, clearance: number): boolean {
+  return gapY + 0.5 >= shadowReach + clearance
 }
 
 /**
