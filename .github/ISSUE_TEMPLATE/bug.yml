@@ -1,0 +1,61 @@
+name: Bug
+description: Something Marquee does wrong
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Adding the **claude** label, or writing `@claude` in a comment, hands
+        this to Claude Code, which will open a pull request against it.
+
+        The failure mode is not Claude refusing — it is Claude confidently
+        fixing the wrong thing. The fields below are what stops that.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what happened, and what you expected. In that order.
+      placeholder: |
+        Typed "rocket league" into Add a game.
+        Got "Nothing found. Try a shorter name."
+        Expected it to find Rocket League — I own it.
+    validations: { required: true }
+
+  - type: input
+    id: exact
+    attributes:
+      label: The exact input
+      description: >
+        The string you typed, or the game involved. "Rocket League returns
+        nothing" is a bug report; "search is broken" is a mood.
+      placeholder: rocket league
+
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Which machine
+      description: >
+        Windows and macOS diverge here more than anywhere else — roughly a
+        tenth of the Rust never compiles on the development machine.
+      options: [Windows, macOS, Linux, Steam Deck, More than one]
+    validations: { required: true }
+
+  - type: dropdown
+    id: input
+    attributes:
+      label: What you were using
+      description: Controller-first, so this matters more than it usually would.
+      options: [Controller, Keyboard, Mouse, More than one]
+
+  - type: textarea
+    id: log
+    attributes:
+      label: The log
+      description: >
+        Most of this app's failures are silent on screen and loud in the log —
+        that is deliberate, so please use it. Windows
+        `%LOCALAPPDATA%\Marquee\logs\marquee.log`, macOS
+        `~/Library/Logs/Marquee/marquee.log`, Linux
+        `~/.local/state/marquee/marquee.log`.
+      render: text
