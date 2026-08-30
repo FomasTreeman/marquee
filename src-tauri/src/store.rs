@@ -315,6 +315,18 @@ impl Store {
         })
     }
 
+    /// Hide a game, or bring it back. User data; no scanner may clear it.
+    pub fn set_hidden(&self, game_id: &str, hidden: bool) -> Result<(), String> {
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO user_game (game_id, hidden) VALUES (?1, ?2)
+                 ON CONFLICT(game_id) DO UPDATE SET hidden = ?2",
+                params![game_id, i64::from(hidden)],
+            )?;
+            Ok(())
+        })
+    }
+
     /// Remember where a game was found, so the next one nearby is found for
     /// free.
     ///

@@ -76,7 +76,7 @@ pub fn plan(game: &Game) -> Result<Launch, String> {
 }
 
 /// Hand a URI to the platform.
-fn open_uri(uri: &str) -> Result<(), String> {
+pub fn open_uri(uri: &str) -> Result<(), String> {
     // Guard the shape as well as the content. Everything we generate is a
     // steam:// URI built from digits we validated; refusing anything else
     // means a future provider cannot accidentally pass through a string that

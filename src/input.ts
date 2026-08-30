@@ -23,8 +23,10 @@ export type Action =
   /** Open the library search field. */
   | 'search'
   | 'fullscreen'
-  /** Cycle the sort order. */
+  /** Open the sort menu — left stick click. */
   | 'sort'
+  /** Open the filter menu — right stick click. */
+  | 'filter'
 
 export interface ActionEvent {
   action: Action
@@ -46,7 +48,8 @@ const KEYMAP: Record<string, Action> = {
   Escape: 'b', Backspace: 'b',
   KeyX: 'x', KeyY: 'y',
   KeyQ: 'lb', KeyE: 'rb',
-  Tab: 'menu', KeyM: 'menu', KeyG: 'mainmenu',
+  Tab: 'menu', KeyM: 'menu',
+  KeyI: 'filter',
   KeyP: 'perf',
   Slash: 'search', KeyF: 'search',
   F11: 'fullscreen',

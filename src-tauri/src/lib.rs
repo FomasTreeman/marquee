@@ -17,6 +17,7 @@ mod screen;
 mod search;
 mod sgdb;
 mod store;
+mod system;
 mod vdf;
 
 use std::sync::{Mutex, OnceLock};
@@ -242,6 +243,83 @@ fn set_steamgriddb_key(
     Ok(())
 }
 
+/// Quit, minimise, restart or shut down.
+///
+/// The last two end the user's session with everything else open in it, so the
+/// interface arms them with a second press before calling this. Here the only
+/// protection that matters is that the action name is parsed against a closed
+/// set rather than passed to a shell.
+#[tauri::command]
+fn system_action(window: tauri::Window, action: String) -> Result<(), String> {
+    let parsed =
+        system::Action::parse(&action).ok_or_else(|| format!("unknown action: {action}"))?;
+    match parsed {
+        system::Action::Minimise => window.minimize().map_err(|e| e.to_string()),
+        system::Action::Quit => {
+            log_info!("system", "quitting");
+            window.app_handle().exit(0);
+            Ok(())
+        }
+        other => system::run(other),
+    }
+}
+
+/// Hide a game from the library, or bring it back.
+///
+/// User data, in the table no scanner may touch, so it survives every rescan.
+#[tauri::command]
+fn set_hidden(
+    game_id: String,
+    hidden: bool,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<(), String> {
+    log_info!(
+        "store",
+        "{game_id} {}",
+        if hidden { "hidden" } else { "shown" }
+    );
+    store.set_hidden(&game_id, hidden)
+}
+
+/// Uninstall a game.
+///
+/// For a Steam game this hands off to Steam, which owns the files and the
+/// bookkeeping -- there is no version of this we should be doing ourselves. For
+/// a hand-added one there is nothing to uninstall, so it forgets the
+/// executable and keeps the entry.
+#[tauri::command]
+fn uninstall_game(
+    id: String,
+    library: tauri::State<'_, Library>,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<String, String> {
+    let game = {
+        let games = library.0.lock().map_err(|_| "library state is poisoned")?;
+        games.iter().find(|g| g.id == id).cloned()
+    }
+    .ok_or_else(|| format!("no game with id {id}"))?;
+
+    match game.provider.as_str() {
+        "steam" => {
+            let uri = format!("steam://uninstall/{}", game.provider_id);
+            run::open_uri(&uri)?;
+            log_info!("run", "handed {} to Steam to uninstall", game.title);
+            Ok(uri)
+        }
+        "manual" => {
+            let row = id
+                .split(':')
+                .nth(1)
+                .and_then(|n| n.parse::<i64>().ok())
+                .ok_or("not a manual game id")?;
+            store.set_executable(row, None)?;
+            log_info!("store", "cleared the executable for {}", game.title);
+            Ok("removed its executable".into())
+        }
+        other => Err(format!("cannot uninstall a {other} game")),
+    }
+}
+
 #[tauri::command]
 fn toggle_favourite(
     game_id: String,
@@ -460,6 +538,9 @@ pub fn run() {
             get_settings,
             set_steamgriddb_key,
             set_setting,
+            system_action,
+            set_hidden,
+            uninstall_game,
             art::artwork_report,
             search_artwork
         ])

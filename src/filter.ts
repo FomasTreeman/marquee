@@ -15,13 +15,16 @@
  */
 import type { Game } from './library'
 
-export type Preset = 'all' | 'favourites' | 'installed' | 'unplayed'
+export type Preset = 'all' | 'favourites' | 'installed' | 'unplayed' | 'hidden'
 
 export const PRESETS: Array<{ id: Preset; label: string }> = [
   { id: 'all', label: 'All' },
   { id: 'favourites', label: 'Favourites' },
   { id: 'installed', label: 'Installed' },
   { id: 'unplayed', label: 'Never played' },
+  // The only way back to a hidden game. Hiding something with no route to
+  // unhide it is a trap, not a feature.
+  { id: 'hidden', label: 'Hidden' },
 ]
 
 /** Case- and punctuation-insensitive, so "baldurs gate" finds "Baldur's Gate 3"
@@ -49,11 +52,18 @@ export function matches(
   query: string,
   extra?: Searchable,
 ): boolean {
+  // Hidden games are absent from every view except the one that exists to find
+  // them. Checked first, because it overrides the others.
+  if (preset === 'hidden') {
+    if (!game.hidden) return false
+  } else if (game.hidden) {
+    return false
+  }
   switch (preset) {
     case 'favourites': if (!game.favourite) return false; break
     case 'installed': if (!game.installed) return false; break
     case 'unplayed': if (game.playtimeMinutes > 0 || game.lastPlayed) return false; break
-    case 'all': break
+    case 'all': case 'hidden': break
   }
   const q = normalise(query)
   if (!q) return true

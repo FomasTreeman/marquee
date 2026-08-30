@@ -11,7 +11,7 @@
  */
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import {
-  setManualExecutable, removeManualGame, findExecutable,
+  setManualExecutable, removeManualGame, findExecutable, setHidden, uninstallGame,
   type ArtworkManifest, type Game, type Meta, type Artwork,
 } from './library'
 import { toast } from './toast'
@@ -136,6 +136,10 @@ export function createDetail(hooks: DetailHooks): DetailView {
   const scroll = el('div', 'detail-scroll', root)
   const body = el('div', 'detail-body', scroll)
 
+  // Top right, away from the primary actions: these are the two things nobody
+  // should reach for by accident.
+  const corner = el('div', 'detail-corner', root)
+
   const logo = el('img', 'detail-logo', body)
   logo.alt = ''
   const title = el('h1', 'detail-title', body)
@@ -186,6 +190,52 @@ export function createDetail(hooks: DetailHooks): DetailView {
       for (const genre of meta?.genres ?? []) {
         const tag = el('span', 'tag', tags)
         tag.textContent = genre
+      }
+
+      corner.textContent = ''
+      const hide = el('button', 'action action-quiet', corner)
+      hide.textContent = game.hidden ? 'Unhide' : 'Hide this game'
+      hide.onclick = () => {
+        void setHidden(game.id, !game.hidden)
+          .then(() => {
+            toast(game.hidden
+              ? `${game.title} is back in the library.`
+              : `${game.title} hidden. Find it again under Show → Hidden.`, 'info', 6000)
+            close()
+            onChanged()
+          })
+          .catch((e) => toast(`Could not do that. ${String(e)}`, 'error'))
+      }
+
+      if (game.installed) {
+        const remove = el('button', 'action action-quiet', corner)
+        remove.textContent = 'Uninstall'
+        // Two presses. The first arms it, the second commits -- the same shape
+        // as the machine actions in the main menu, and for the same reason.
+        let armed = false
+        remove.onclick = () => {
+          if (!armed) {
+            armed = true
+            remove.textContent = 'Uninstall — press again'
+            remove.classList.add('is-armed')
+            window.setTimeout(() => {
+              armed = false
+              remove.textContent = 'Uninstall'
+              remove.classList.remove('is-armed')
+            }, 4000)
+            return
+          }
+          void uninstallGame(game.id)
+            .then((what) => {
+              logInfo('detail', `uninstall ${game.title}: ${what}`)
+              toast(game.provider === 'steam'
+                ? `Handed ${game.title} to Steam to uninstall.`
+                : `${game.title} no longer has an executable.`, 'info', 6000)
+              close()
+              onChanged()
+            })
+            .catch((e) => toast(`Could not uninstall that. ${String(e)}`, 'error', 6000))
+        }
       }
 
       actions.textContent = ''

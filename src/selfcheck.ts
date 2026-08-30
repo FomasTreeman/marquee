@@ -78,13 +78,29 @@ function reachable(el: Element): { ok: boolean; blocker?: string } {
   return el.contains(hit) || hit === el ? { ok: true } : { ok: false, blocker: describe(hit) }
 }
 
-/** Overlays that legitimately cover the grid while they are open. */
-function openOverlay(): string | undefined {
-  for (const sel of ['.detail', '.add']) {
-    const el = document.querySelector<HTMLElement>(sel)
-    if (el && !el.hidden) return sel
-  }
-  return undefined
+/**
+ * Every surface that legitimately covers the grid, innermost first.
+ *
+ * One list, used both to decide whether grid assertions apply and to pick the
+ * topmost overlay to check. It was two hand-maintained lists, and adding a new
+ * surface meant remembering both -- which was forgotten three times, each one
+ * producing a confident false failure about the grid being covered by the thing
+ * that is supposed to cover it.
+ */
+const OVERLAYS: Array<[selector: string, name: string]> = [
+  ['.menu', 'list menu'],
+  ['.add:not([hidden])', 'panel'],
+  ['.detail', 'detail view'],
+]
+
+function isOpen(selector: string): boolean {
+  const el = document.querySelector<HTMLElement>(selector)
+  return !!el && !el.hidden
+}
+
+/** The topmost open overlay, or undefined when the grid is the top surface. */
+function openOverlay(): [string, string] | undefined {
+  return OVERLAYS.find(([selector]) => isOpen(selector))
 }
 
 export function runSelfCheck(): Check[] {
@@ -103,7 +119,7 @@ export function runSelfCheck(): Check[] {
   // surface. With an overlay open, "the cover art is painted on top" is false
   // and correct -- and a check that fires when the interface is working is
   // worse than no check, because it teaches everyone to ignore the output.
-  const covering = openOverlay()
+  const covering = openOverlay()?.[0]
 
   // --- artwork is actually visible ------------------------------------
   // The exact bug from the header. A loaded image behind an opaque sibling
@@ -344,6 +360,28 @@ export function runSelfCheck(): Check[] {
     const input = overlay.querySelector<HTMLInputElement>('input')
     if (input) out.push(check(`${name} field is reachable`, reachable(input).ok,
       reachable(input).blocker ?? 'ok'))
+  }
+
+  // --- list menus ------------------------------------------------------
+  const menu = document.querySelector<HTMLElement>('.menu')
+  if (menu && !menu.hidden) {
+    const rows = [...menu.querySelectorAll<HTMLElement>('.menu-item')]
+    const choosable = rows.filter((r) => r.dataset['disabled'] !== '1')
+    out.push(check('the menu has something to choose', choosable.length > 0,
+      `${choosable.length} of ${rows.length} usable`))
+
+    const on = rows.filter((r) => r.dataset['on'] === '1')
+    out.push(check('exactly one menu row is highlighted', on.length === 1, `${on.length}`))
+
+    // A highlighted row that is disabled is a cursor resting somewhere that
+    // does nothing, which reads as the menu being broken.
+    out.push(check('the highlighted row is not disabled',
+      on.length === 0 || on[0]!.dataset['disabled'] !== '1'))
+
+    if (on[0]) {
+      const hit = reachable(on[0])
+      out.push(check('the menu row is reachable', hit.ok, hit.blocker ?? 'ok'))
+    }
   }
 
   // --- the on-screen keyboard ------------------------------------------

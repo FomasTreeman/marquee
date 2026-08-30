@@ -45,8 +45,10 @@ pub enum Action {
     Rb,
     Menu,
     MainMenu,
-    /// Cycle the sort order.
+    /// Open the sort menu. Left stick click, as on a console.
     Sort,
+    /// Open the filter menu. Right stick click.
+    Filter,
 }
 
 impl Action {
@@ -84,7 +86,8 @@ fn button_action(b: Button) -> Option<Action> {
         Button::North => Action::Y,
         Button::LeftTrigger => Action::Lb,
         Button::RightTrigger => Action::Rb,
-        Button::LeftTrigger2 => Action::Sort,
+        Button::LeftThumb => Action::Sort,
+        Button::RightThumb => Action::Filter,
         Button::Start => Action::Menu,
         Button::Select => Action::MainMenu,
         _ => return None,

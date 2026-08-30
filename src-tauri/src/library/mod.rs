@@ -144,7 +144,9 @@ pub fn scan(store: &Store) -> ScanResult {
         Err(e) => crate::log_warn!("scan", "could not read user flags: {e}"),
     }
 
-    games.retain(|g| !g.hidden);
+    // Hidden games are *not* dropped here. The interface needs them to offer a
+    // way back: a hidden game with no route to unhide it is a trap. Filtering
+    // is the view's job, and it has a Hidden preset for exactly this.
 
     games.sort_by(|a, b| {
         b.favourite

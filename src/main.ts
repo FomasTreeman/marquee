@@ -14,13 +14,14 @@ import { createPicker } from './picker'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import { createHud } from './hud'
 import { createOsk } from './osk'
+import { createMenu } from './menu'
 import { createSettings } from './settings'
 import { toast } from './toast'
 import { hostInfo, pingMs, inApp } from './host'
 import { createInput, padStatus, type Action } from './input'
 import {
   scanLibrary, requestMeta, onMeta, onLaunchFailed, launchGame, toggleFavourite,
-  getSettings, setSetting, toggleFullscreen,
+  getSettings, setSetting, toggleFullscreen, systemAction,
   addManualGame, setManualExecutable, setArtSource, artworkReport,
   initArtwork, steamArtwork, artIdFor, tintFor,
   type Artwork, type Game, type Meta, type ScanResult,
@@ -109,7 +110,8 @@ async function main(): Promise<void> {
   const backdrop = createBackdrop(shell.backdropA, shell.backdropB)
   setHints(shell.hints, [
     ['A', 'Play'], ['Y', 'Details'], ['X', 'Favourite'],
-    ['LB/RB', 'Filter'], ['LT', 'Sort'], ['/', 'Search'], ['☰', 'Add'], ['⧉', 'Settings'],
+    ['L3', 'Sort'], ['R3', 'Filter'], ['LB/RB', 'Page'],
+    ['☰', 'Menu'], ['⧉', 'Add'],
   ])
   // Long-pressing a face button is the console convention for fullscreen, but
   // it needs a hold timer and a pad to test it on. F11 is the keyboard one and
@@ -357,17 +359,6 @@ async function main(): Promise<void> {
     }
   }
 
-  function cyclePreset(direction: number): void {
-    const at = PRESETS.findIndex((p) => p.id === preset)
-    const next = PRESETS[(at + direction + PRESETS.length) % PRESETS.length]!
-    preset = next.id
-    query = ''
-    shell.query.hidden = true
-    shell.query.value = ''
-    grid.focus(0)
-    applyView()
-  }
-
   const osk = createOsk()
 
   /**
@@ -377,13 +368,101 @@ async function main(): Promise<void> {
    * first run would otherwise reshuffle the grid under the cursor once per
    * metadata event, which is intolerable on a pad.
    */
-  function cycleSort(): void {
-    const at = SORTS.findIndex((s) => s.id === sort)
-    sort = SORTS[(at + 1) % SORTS.length]!.id
-    void setSetting('sort', sort).catch(() => { /* an unsaved preference is not worth a toast */ })
-    grid.focus(0)
-    applyView()
-    toast(`Sorted by ${SORTS.find((s) => s.id === sort)!.label.toLowerCase()}`, 'info', 2500)
+  const menu = createMenu()
+
+  /**
+   * Sort and filter are separate menus on separate sticks, because they are
+   * separate questions. Cycling a hidden value with a shoulder button meant
+   * neither was discoverable and the two were easy to confuse.
+   */
+  function openSort(): void {
+    menu.open({
+      title: 'Sort by',
+      items: SORTS.map((s) => ({ id: s.id, label: s.label, selected: s.id === sort })),
+      onChoose(id) {
+        sort = id as Sort
+        void setSetting('sort', sort).catch(() => { /* an unsaved preference is not a toast */ })
+        grid.focus(0)
+        applyView()
+      },
+    })
+    checkNow('sort')
+  }
+
+  function openFilter(): void {
+    menu.open({
+      title: 'Show',
+      anchor: 'right',
+      items: [
+        // Search belongs here, not on a button of its own. It is a way of
+        // narrowing the library, which is what this menu is for, and it gives
+        // search a controller route without inventing a binding for it —
+        // which is how PS5 and Xbox both handle it.
+        {
+          id: 'search',
+          label: query.trim() ? `Search — “${query.trim()}”` : 'Search…',
+          detail: query.trim() ? 'change' : '',
+        },
+        ...PRESETS.map((p) => ({
+          id: p.id,
+          label: p.label,
+          selected: p.id === preset,
+          // The count answers "is this worth opening" before it is opened, and
+          // dims a preset that would show an empty grid.
+          detail: String(applyFilter(games, p.id, '', sort).length),
+          disabled: applyFilter(games, p.id, '', sort).length ? undefined : 'none',
+        })),
+      ],
+      onChoose(id) {
+        if (id === 'search') { openSearch(); return }
+        preset = id as Preset
+        query = ''
+        shell.query.hidden = true
+        shell.query.value = ''
+        grid.focus(0)
+        applyView()
+      },
+    })
+    checkNow('filter')
+  }
+
+  function openMainMenu(): void {
+    menu.open({
+      title: 'Marquee',
+      items: [
+        { id: 'settings', label: 'Settings' },
+        {
+          id: 'rescan',
+          label: 'Update game library',
+          detail: `${games.length} games`,
+        },
+        { id: 'minimise', label: 'Minimise' },
+        { id: 'quit', label: 'Exit Marquee' },
+        // Two presses each. Ending someone's session from a misread menu row is
+        // not a mistake they can undo.
+        { id: 'restart', label: 'Restart system', confirm: 'Restart? Press again' },
+        { id: 'shutdown', label: 'Turn off system', confirm: 'Turn off? Press again' },
+      ],
+      async onChoose(id) {
+        if (id === 'settings') {
+          settings.open()
+          if (padConnected) osk.attach(settings.field)
+          return
+        }
+        if (id === 'rescan') {
+          toast('Updating library…', 'info', 2000)
+          await reloadLibrary()
+          toast(`${games.length} games.`)
+          return
+        }
+        try {
+          await systemAction(id)
+        } catch (e) {
+          toast(String(e), 'error', 6000)
+        }
+      },
+    })
+    checkNow('menu')
   }
 
   let resortPending: number | undefined
@@ -397,8 +476,8 @@ async function main(): Promise<void> {
     shell.query.hidden = false
     shell.query.focus()
     shell.query.select()
-    // Only when there is a pad. On a desk the physical keyboard is faster and
-    // an on-screen one is just a panel covering the results.
+    // The on-screen keyboard is what makes search reachable at all from a pad.
+    // Without it this opens a field nobody can type into.
     if (padConnected) osk.attach(shell.query)
   }
 
@@ -580,6 +659,7 @@ async function main(): Promise<void> {
     //
     // The keyboard is innermost of all: while it is up, the pad is typing.
     if (osk.handle(e.action)) return
+    if (menu.handle(e.action)) return
     if (settings.handle(e.action)) return
     if (picker.handle(e.action)) return
     if (detail.handle(e.action)) return
@@ -597,13 +677,10 @@ async function main(): Promise<void> {
         return
       }
       if (e.action === 'x') { void favourite(grid.focused); return }
-      if (e.action === 'menu') { openAdd(); return }
-      if (e.action === 'mainmenu') {
-        settings.open()
-        if (padConnected) osk.attach(settings.field)
-        checkNow('settings')
-        return
-      }
+      if (e.action === 'menu') { openMainMenu(); return }
+      if (e.action === 'mainmenu') { openAdd(); return }
+      if (e.action === 'filter') { openFilter(); return }
+      if (e.action === 'search') { openSearch(); return }
       if (e.action === 'y') {
         const game = gameAt(grid.focused)
         if (game) {
@@ -621,14 +698,14 @@ async function main(): Promise<void> {
         }
         return
       }
-      if (e.action === 'search') { openSearch(); return }
-      if (e.action === 'lb' || e.action === 'rb') { cyclePreset(e.action === 'rb' ? 1 : -1); return }
-      if (e.action === 'sort') { cycleSort(); return }
+      if (e.action === 'sort') { openSort(); return }
     }
-
-    // Shoulder buttons repeat, so preset cycling is handled before this and
-    // must not fall through to navigation.
-    if (e.action === 'lb' || e.action === 'rb') { cyclePreset(e.action === 'rb' ? 1 : -1); return }
+    // Shoulder buttons page through a long library. They repeat, so they are
+    // handled outside the no-repeat block.
+    if (e.action === 'lb' || e.action === 'rb') {
+      grid.move(0, e.action === 'rb' ? 3 : -3)
+      return
+    }
 
     const d = NAV[e.action]
     if (d) grid.move(d[0], d[1])
@@ -658,6 +735,10 @@ async function main(): Promise<void> {
         grid,
         picker,
         detail,
+        menu,
+        openMainMenu,
+        openSort,
+        openFilter,
         openAdd,
         openArtwork,
         settings,

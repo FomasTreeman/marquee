@@ -90,6 +90,7 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
   and [the plan](docs/PLAN.md) is explicit that a pass on one webview engine is
   not a pass
 - Categories and collections
+- Syncing settings and profiles between machines — see PLAN.md §Phase 3.5
 - Anything about a game that is owned but has never been played or installed
 
 - **[docs/PLAN.md](docs/PLAN.md)** — scope, stack, architecture, phasing, and
@@ -121,14 +122,21 @@ with two games installed. `?hud=0` hides the HUD, and **P** toggles it.
 | | |
 |---|---|
 | **A** | Play |
+| **B** | Back |
 | **Y** | Details |
 | **X** | Favourite |
-| **☰** / Tab | Add a game by name |
-| **LB / RB** | Cycle filter presets |
-| **/** or F | Search the library |
-| **LT** / O | Cycle sort order |
+| **L3** | Sort menu |
+| **R3** / I | Filter menu — search lives at the top of it |
+| **LB / RB** | Page up and down |
+| **☰** / Tab, M | Main menu — settings, rescan, quit, restart, shut down |
+| **⧉** / Select | Add a game by name |
+| **/** or F | Search (also reachable from the filter menu, for a pad) |
 | **F11** | Fullscreen |
 | **P** | Toggle the performance HUD |
+
+Everything is reachable with a pad alone, and everything is reachable with a
+keyboard alone. Search was keyboard-only for a while; it now sits at the top of
+the filter menu, which is where a console would put it.
 
 Motion is tunable in `design/tokens.json`: `--scroll-ms` for the grid glide,
 `--motion` as a global multiplier. Both go to zero under

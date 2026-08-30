@@ -168,6 +168,24 @@ export async function getSettings(): Promise<Settings> {
 
 /** Saving also clears the artwork cache, so games that previously found
  *  nothing are re-resolved against the new source. */
+/** Quit, minimise, restart or shut down. The last two end the whole session,
+ *  so the interface arms them with a second press first. */
+export async function systemAction(action: string): Promise<void> {
+  if (!inApp) throw new Error('that needs the app, not a browser tab')
+  return call<void>('system_action', { action })
+}
+
+/** Hide a game from the library, or bring it back. Survives every rescan. */
+export async function setHidden(gameId: string, hidden: boolean): Promise<void> {
+  return call<void>('set_hidden', { gameId, hidden })
+}
+
+/** Hand a Steam game to Steam to uninstall; for a hand-added one, forget where
+ *  it lives. Returns a description of what happened. */
+export async function uninstallGame(id: string): Promise<string> {
+  return call<string>('uninstall_game', { id })
+}
+
 /** Toggle fullscreen, returning the new state. Remembered across launches. */
 export async function toggleFullscreen(): Promise<boolean> {
   if (!inApp) {

@@ -620,6 +620,33 @@ detecting a game that failed to start, settings, and theming.
 **Exit:** a full session — boot, browse, launch, play, exit, sleep, wake —
 without touching a keyboard.
 
+### Phase 3.5 — Profiles and synced settings  ← *requested, not started*
+
+Carry a configuration between machines: the SteamGridDB key, sort order,
+favourites, hidden games, artwork corrections and hand-added games, so a second
+machine is set up by signing in rather than by repeating the work.
+
+**Everything needed is already in the right shape.** `user_game`, `manual_game`,
+`game_root` and `setting` are exactly the tables that would sync, and they are
+already separated from anything a scanner writes — which is the hard part of
+this and it is done. What would sync is small: kilobytes, not artwork.
+
+The open question is not the format, it is **where it goes**. This project's
+whole position is that it needs no server and no account (§6), and a sync
+service is both. Three options, in the order I would try them:
+
+1. **A file the user syncs themselves** — export to a folder that is already in
+   Dropbox, iCloud or a git repo. No account, no server, no liability, works
+   today for anyone who already syncs a folder. It is not automatic.
+2. **A user-supplied backend** — a WebDAV URL, an S3 bucket, a gist. Still no
+   service of ours, and automatic for people who want it.
+3. **A real account system.** Contradicts §6 and turns this into something with
+   users, uptime and a privacy policy. Worth it only if this goes public.
+
+Start at 1. It is a morning's work, it is honest about what it is, and it makes
+2 and 3 easier rather than harder because the export format is the same either
+way.
+
 ### Phase 4 — Release engineering
 
 Deferred while the project is private, but the work is known: Windows code
