@@ -69,15 +69,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Its own version-bump commit coming back round. A push made with
-          # GITHUB_TOKEN does not trigger workflows, so this cannot actually
-          # happen today -- but relying on that quietly means the day it
-          # changes, this loops forever cutting releases.
           msg=$(git log -1 --pretty=%s)
-          case "$msg" in
-            "Marquee "*) echo "skip=true" >> "$GITHUB_OUTPUT"
-                         echo "Version bump commit; nothing to do."; exit 0 ;;
-          esac
 
           # The pull request this commit came from, if any. A direct push to
           # main has none, and gets a patch.
@@ -136,37 +128,6 @@ jobs:
             echo "notes=$notes"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Write the version everywhere it appears
-        if: steps.plan.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          next='${{ steps.plan.outputs.version }}'
-          node -e '
-            const fs = require("fs");
-            const next = process.argv[1];
-            for (const f of ["src-tauri/tauri.conf.json", "package.json"]) {
-              const j = JSON.parse(fs.readFileSync(f, "utf8"));
-              j.version = next;
-              fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
-            }
-          ' "$next"
-          sed -i "0,/^version = \".*\"$/s//version = \"$next\"/" src-tauri/Cargo.toml
-          # Cargo.lock records the crate's own version too, and a stale one
-          # fails `cargo build --locked` in the build job below.
-          (cd src-tauri && cargo update -p marquee --offline 2>/dev/null || true)
-
-      - name: Commit and tag
-        if: steps.plan.outputs.skip != 'true'
-        run: |
-          set -euo pipefail
-          next='${{ steps.plan.outputs.version }}'
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add src-tauri/tauri.conf.json package.json src-tauri/Cargo.toml src-tauri/Cargo.lock
-          git commit -m "Marquee $next"
-          git tag "v$next"
-          git push origin HEAD:main
-          git push origin "v$next"
 
   build:
     needs: decide
@@ -205,10 +166,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The tag the job above just made, not the branch. Checking out main
-          # would race with anything merged in the meantime and build a version
-          # that does not match its own tag.
-          ref: v${{ needs.decide.outputs.version }}
+          # The exact commit that triggered this, so all four targets build
+          # identical source however busy main is.
+          ref: ${{ github.sha }}
+
+      # Written into the working copy and never committed.
+      #
+      # An earlier version committed the bump and pushed it to main, which
+      # meant the release automation needed write access to the one branch
+      # that should only ever change through a reviewed pull request -- every
+      # protection worth having would have had to carve out an exception for
+      # it. The tag and the release are the record of what shipped; the number
+      # sitting in main is not, and `decide` reads the newest tag anyway.
+      - name: Set the version for this build
+        shell: bash
+        run: |
+          set -euo pipefail
+          next='${{ needs.decide.outputs.version }}'
+          node -e '
+            const fs = require("fs");
+            const next = process.argv[1];
+            for (const f of ["src-tauri/tauri.conf.json", "package.json"]) {
+              const j = JSON.parse(fs.readFileSync(f, "utf8"));
+              j.version = next;
+              fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
+            }
+          ' "$next"
+          perl -0pi -e "s/^version = \"[^\"]*\"/version = \"$next\"/m" src-tauri/Cargo.toml
+          grep -m1 '^version' src-tauri/Cargo.toml
 
       - name: Linux dependencies
         if: matrix.os == 'ubuntu-22.04'

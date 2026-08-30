@@ -47,14 +47,27 @@ concurrency:
 
 jobs:
   claude:
-    # Only on an explicit ask. Without this guard every comment on every issue
-    # starts a run, which is both expensive and startling.
+    # A new issue is picked up on its own. Everything else still needs asking.
+    #
+    # `author_association` is the cheap half of the guard: OWNER for you, NONE
+    # for a stranger, so a spam issue on a public repository does not even
+    # start a runner. The action then does the real check -- it refuses anyone
+    # without write access, on every event type -- but that refusal costs a
+    # minute of Actions time and this costs nothing.
+    #
+    # `no-ai` keeps an issue off. Some issues are notes to self.
     if: |
-      contains(github.event.comment.body, '@claude') ||
-      contains(github.event.review.body, '@claude') ||
-      contains(github.event.issue.body, '@claude') ||
-      contains(github.event.issue.title, '@claude') ||
-      github.event.label.name == 'claude'
+      !contains(github.event.issue.labels.*.name, 'no-ai') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+               github.event.issue.author_association || github.event.comment.author_association) &&
+      (
+        (github.event_name == 'issues' && github.event.action == 'opened') ||
+        github.event.label.name == 'claude' ||
+        contains(github.event.comment.body, '@claude') ||
+        contains(github.event.review.body, '@claude') ||
+        contains(github.event.issue.body, '@claude') ||
+        contains(github.event.issue.title, '@claude')
+      )
     runs-on: ubuntu-latest
 
     # Who can set this off, now that the repository is public.
