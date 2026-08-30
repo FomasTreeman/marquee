@@ -191,7 +191,15 @@ jobs:
     # The signing key lives here rather than in repository secrets, so no other
     # workflow -- including one added by a pull request -- can reach it. Safe
     # if the environment does not exist yet: a job with an environment still
-    # sees repository secrets. See docs/UPDATES.md.
+    # sees repository secrets.
+    #
+    # If the environment does exist, its "deployment branches and tags" rule
+    # must allow **main**, not a `v*` tag pattern. GitHub checks that against
+    # the ref the workflow is running on -- a push to main -- not against the
+    # tag this job checks out below. A tag pattern here fails the whole release
+    # with "Branch main is not allowed to deploy", which reads like a
+    # permissions problem and is not one. Allowing main still blocks pull
+    # requests, which run on refs/pull/<n>/merge. See docs/UPDATES.md.
     environment: release
 
     steps:

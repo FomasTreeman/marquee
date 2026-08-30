@@ -106,9 +106,21 @@ once:
 1. **Settings → Environments → New environment**, called `release`.
 2. Add `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
    to it — **not** to repository secrets.
-3. Under **Deployment branches and tags**, choose *Selected* and add the tag
-   pattern `v*`. Now nothing running on a branch can reach the key, whatever
-   it does.
+3. Under **Deployment branches and tags**, choose *Selected* and add
+   **`main`** — the branch, not a tag pattern.
+
+   This is the rule that catches people, and it caught us. GitHub checks the
+   pattern against **the ref the workflow is running on**, not against whatever
+   the job later checks out. Releasing is triggered by a push to `main`, so the
+   workflow's ref is `refs/heads/main` even though the build then checks out
+   the `v0.2.1` tag. A `v*` tag pattern therefore blocks the release with
+   *"Branch main is not allowed to deploy to release due to environment
+   protection rules"*, which reads like a permissions problem and is not one.
+
+   Allowing `main` keeps the protection that matters. A pull request runs on
+   `refs/pull/<n>/merge`, which does not match `main`, so a workflow added or
+   edited in a pull request still cannot reach the signing key. That was the
+   threat; the tag pattern was never what stopped it.
 4. Optionally add yourself as a **required reviewer**, so signing a release
    pauses for a click.
 
