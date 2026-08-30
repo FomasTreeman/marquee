@@ -397,6 +397,20 @@ body::after {
 .hint.is-clickable { cursor: pointer; }
 .hint.is-clickable:hover { color: var(--fg1); }
 .hint.is-clickable:hover .hint-key { border-color: var(--focusBorder); }
+
+/* A hint with no keystroke to name -- a mouse -- is itself the control, so it
+   takes the pill the key cap would have had. Without this it rendered as bare
+   text and read as a label rather than a button. */
+.hint.is-button {
+  padding: 0 calc(11px * var(--s));
+  height: calc(26px * var(--s));
+  border: 1px solid var(--line);
+  border-radius: var(--r-pill);
+  background: var(--spec);
+  color: var(--fg1);
+}
+.hint.is-button:hover { border-color: var(--focusBorder); background: var(--spec2, var(--spec)); }
+.hint.is-button:focus-visible { outline: 2px solid var(--focusBorder); outline-offset: 2px; }
 .hint-key {
   display: inline-grid;
   place-items: center;

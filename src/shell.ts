@@ -1,3 +1,4 @@
+import type { Device } from './input'
 /**
  * The application shell.
  *
@@ -120,8 +121,9 @@ export function createShell(root: HTMLElement): Shell {
 }
 
 export interface Hint {
-  /** The key or button cap. */
-  key: string
+  /** The key or button cap. Absent for a mouse, which has no keystroke to
+   *  name -- those render as a pill you press instead. */
+  key?: string
   label: string
   /** Clicking the hint does the thing. A legend nobody can press is decoration
    *  for anyone holding a mouse. */
@@ -136,6 +138,74 @@ export interface Hint {
  * is clickable where there is something to click, which is what makes sort,
  * filter and the menus reachable without learning a binding.
  */
+/** The actions a legend can offer, whatever the device. */
+export interface LegendActions {
+  play(): void
+  details(): void
+  favourite(): void
+  sort(): void
+  filter(): void
+  search(): void
+  menu(): void
+  add(): void
+}
+
+/**
+ * The legend, in the vocabulary of whatever is being held.
+ *
+ * Telling someone to press A while they are holding a mouse is worse than
+ * telling them nothing, and a keyboard user has no way to guess that O sorts.
+ *
+ * Data rather than DOM so the property that matters can be asserted: every
+ * action is offered on every device. It was not -- the mouse row had no
+ * Details and no Favourite, and because moving the mouse switches the legend,
+ * a mouse user never saw the keyboard's "Y Details" either. Two missing rows
+ * made a whole screen unreachable.
+ */
+export function legendFor(device: Device, on: LegendActions): Hint[] {
+  switch (device) {
+    case 'pad':
+      return [
+        { key: 'A', label: 'Play', onClick: on.play },
+        { key: 'Y', label: 'Details', onClick: on.details },
+        { key: 'X', label: 'Favourite', onClick: on.favourite },
+        { key: 'L3', label: 'Sort', onClick: on.sort },
+        { key: 'R3', label: 'Filter', onClick: on.filter },
+        { key: '☰', label: 'Menu', onClick: on.menu },
+        { key: '⧉', label: 'Add', onClick: on.add },
+        // Search has no face button; it lives at the top of the filter menu,
+        // which is where a console would put it.
+        { key: 'LB/RB', label: 'Page' },
+      ]
+    case 'keyboard':
+      return [
+        { key: '↵', label: 'Play', onClick: on.play },
+        { key: 'Y', label: 'Details', onClick: on.details },
+        { key: 'X', label: 'Favourite', onClick: on.favourite },
+        { key: 'O', label: 'Sort', onClick: on.sort },
+        { key: 'I', label: 'Filter', onClick: on.filter },
+        { key: '/', label: 'Search', onClick: on.search },
+        { key: 'Tab', label: 'Menu', onClick: on.menu },
+        { key: 'N', label: 'Add', onClick: on.add },
+        { key: 'Esc', label: 'Back' },
+      ]
+    case 'mouse':
+      // No keystrokes to name, so these are pills you press. The two that
+      // describe the grid keep their caption; the rest are buttons.
+      return [
+        { key: 'Click', label: 'Select' },
+        { key: 'Double-click', label: 'Play' },
+        { label: 'Details', onClick: on.details },
+        { label: 'Favourite', onClick: on.favourite },
+        { label: 'Sort', onClick: on.sort },
+        { label: 'Filter', onClick: on.filter },
+        { label: 'Search', onClick: on.search },
+        { label: 'Menu', onClick: on.menu },
+        { label: 'Add', onClick: on.add },
+      ]
+  }
+}
+
 export function setHints(hints: HTMLElement, entries: Hint[]): void {
   hints.textContent = ''
   for (const entry of entries) {
@@ -144,8 +214,16 @@ export function setHints(hints: HTMLElement, entries: Hint[]): void {
       item.classList.add('is-clickable')
       ;(item as HTMLButtonElement).onclick = entry.onClick
     }
-    const key = el('b', 'hint-key', item)
-    key.textContent = entry.key
+    // No key means there is no keystroke to show -- the chip itself is the
+    // control. It used to render an em dash in the key slot, which read as
+    // "this action has no binding" rather than "click this", and left mouse
+    // users with five actions they could not tell were reachable at all.
+    if (entry.key) {
+      const key = el('b', 'hint-key', item)
+      key.textContent = entry.key
+    } else {
+      item.classList.add('is-button')
+    }
     const text = el('span', undefined, item)
     text.textContent = entry.label
   }

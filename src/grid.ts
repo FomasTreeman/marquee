@@ -103,6 +103,9 @@ export function createGrid(
   /** Double-click, or a second click on the already-selected card. Kept
    *  separate from selection so a mouse cannot launch a game by accident. */
   onActivate?: (index: number) => void,
+  /** Right-click. The mouse idiom for "tell me more about this", and the only
+   *  route to the details screen that does not require knowing a key. */
+  onInspect?: (index: number) => void,
 ): Grid {
   const canvas = document.createElement('div')
   canvas.className = 'grid-canvas'
@@ -242,6 +245,14 @@ export function createGrid(
     })
     el.addEventListener('dblclick', () => {
       if (s.index >= 0) onActivate?.(s.index)
+    })
+    // Select first, then open: right-clicking a card the user has not selected
+    // should still show that card, not whatever was selected before.
+    el.addEventListener('contextmenu', (e) => {
+      if (s.index < 0) return
+      e.preventDefault()
+      setFocus(s.index)
+      onInspect?.(s.index)
     })
 
     canvas.appendChild(el)

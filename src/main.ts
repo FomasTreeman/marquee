@@ -7,7 +7,7 @@
  */
 import { createGrid } from './grid'
 import { createFrameMeter, installGrainTile } from './perf'
-import { createShell, setHints } from './shell'
+import { createShell, legendFor, setHints } from './shell'
 import { createBackdrop } from './backdrop'
 import { createDetail } from './detail'
 import { createPicker } from './picker'
@@ -179,10 +179,23 @@ async function main(): Promise<void> {
     })
   }
 
+  /**
+   * Open the details screen for a card.
+   *
+   * Hoisted and shared rather than defined per device, because it was
+   * previously only reachable from the legend closure -- which is how the
+   * mouse ended up with no route to it at all.
+   */
+  function openDetails(index: number): void {
+    const game = gameAt(index)
+    if (game) detail.open(game, meta.get(game.providerId), artAt(index))
+  }
+
   const grid = createGrid(
     shell.gridViewport,
     refreshHero,
     (index) => void play_(index),
+    openDetails,
   )
 
   function showEmpty(): void {
@@ -397,46 +410,24 @@ async function main(): Promise<void> {
    */
   const menu = createMenu()
 
-  /**
-   * The legend, in the vocabulary of whatever is being held.
-   *
-   * Telling someone to press A while they are holding a mouse is worse than
-   * telling them nothing, and a keyboard user has no way to guess that O sorts.
-   * Every entry is clickable, which is what makes sort, filter and the menus
-   * reachable with a mouse without learning a binding.
-   */
+  /** Rebuild the legend for whatever is now being held. The table itself is
+   *  in shell.ts, as data, so "every action reaches every device" is tested. */
   function refreshHints(device: Device): void {
-    const play = () => void play_(grid.focused)
-    const details = () => {
-      const game = gameAt(grid.focused)
-      if (game) detail.open(game, meta.get(game.providerId), artAt(grid.focused))
-    }
-    const fav = () => void favourite(grid.focused)
-
-    const byDevice: Record<Device, Array<[string, string, (() => void) | undefined]>> = {
-      pad: [
-        ['A', 'Play', play], ['Y', 'Details', details], ['X', 'Favourite', fav],
-        ['L3', 'Sort', openSort], ['R3', 'Filter', openFilter],
-        ['LB/RB', 'Page', undefined],
-        ['☰', 'Menu', openMainMenu], ['⧉', 'Add', openAdd],
-      ],
-      keyboard: [
-        ['↵', 'Play', play], ['Y', 'Details', details], ['X', 'Favourite', fav],
-        ['O', 'Sort', openSort], ['I', 'Filter', openFilter], ['/', 'Search', openSearch],
-        ['Tab', 'Menu', openMainMenu], ['N', 'Add', openAdd], ['Esc', 'Back', undefined],
-      ],
-      mouse: [
-        ['Click', 'Select', undefined], ['Double-click', 'Play', undefined],
-        ['—', 'Sort', openSort], ['—', 'Filter', openFilter],
-        ['—', 'Search', openSearch], ['—', 'Menu', openMainMenu], ['—', 'Add', openAdd],
-      ],
-    }
-
     setHints(
       shell.hints,
-      byDevice[device].map(([key, label, onClick]) => ({ key, label, onClick })),
+      legendFor(device, {
+        play: () => void play_(grid.focused),
+        details: () => openDetails(grid.focused),
+        favourite: () => void favourite(grid.focused),
+        sort: openSort,
+        filter: openFilter,
+        search: openSearch,
+        menu: openMainMenu,
+        add: openAdd,
+      }),
     )
   }
+
 
   /**
    * Sort and filter are separate menus on separate sticks, because they are
