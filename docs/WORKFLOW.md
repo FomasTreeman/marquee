@@ -267,6 +267,7 @@ mentions it or opens a separate issue, so nothing becomes un-revertable.
 | Nothing happens on `@claude` | `CLAUDE_CODE_OAUTH_TOKEN` missing, or the label/mention didn't register |
 | Run works, then fails at the end | Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests" is off |
 | Release builds but won't sign | `TAURI_SIGNING_PRIVATE_KEY` not in the `release` environment — see `docs/UPDATES.md` |
+| "Wrong password for that key" | `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` has a placeholder in it. The key has no password, so that secret must be the empty string — **delete it** |
 | "Branch main is not allowed to deploy to release" | the `release` environment's deployment rule is set to a tag pattern. It must allow **`main`** — GitHub checks the ref the workflow runs on, not the one the job checks out |
 | No release after a merge | the PR was labelled `no-release`, or the commit was the version bump itself |
 | Release has only source archives | the build job failed — open the run. The release is made by the build, not by the tag |

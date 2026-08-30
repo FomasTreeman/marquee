@@ -76,9 +76,29 @@ mistake in this whole document you cannot undo.
 
 The key generated here has an empty password, which is a deliberate trade: an
 encrypted key needs its password stored beside it in CI anyway, so the
-encryption protects nothing that the secret store was not already protecting.
-If you would rather have one, regenerate now — before anything ships — and set
-`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+encryption protects nothing the secret store was not already protecting.
+
+**A passwordless key still needs the password secret to be the empty string.**
+This is worth stating precisely because all three cases behave differently and
+only one of them works:
+
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | What happens |
+|---|---|
+| **empty string** | signs correctly |
+| absent entirely | `incorrect updater private key password: Device not configured` — the CLI tries to prompt, and there is no terminal |
+| any other value | `incorrect updater private key password: Wrong password for that key` |
+
+So **delete the secret** rather than putting a placeholder in it. An absent
+secret makes `${{ secrets.X }}` evaluate to the empty string, which is exactly
+the case that works — while a placeholder is the case that fails.
+
+That failure used to arrive at the very end of a nine-minute build, because the
+bundler signs after building everything. The `key` job in `release.yml` now
+does the same decode against a scratch file first, so a key problem costs a
+minute and prints which of the three cases you are in.
+
+If you would rather the key had a real password, regenerate now — before
+anything ships — and set both secrets together.
 
 ## Where to put the private key: repository or environment?
 
