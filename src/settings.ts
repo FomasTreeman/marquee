@@ -17,7 +17,7 @@ import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialo
 import {
   getSettings, setSteamGridDbKey, exportProfile, importProfile, setProfileFolder, setSetting,
 } from './library'
-import { padStatus, webviewPads } from './input'
+import { onAnyInput, padStatus, webviewPads } from './input'
 import { hostInfo } from './host'
 import { checkForUpdate } from './update'
 import { logInfo, logWarn } from './log'
@@ -212,6 +212,49 @@ export function createSettings(onChanged: () => void): SettingsView {
       padStatusLine.textContent = ''
       padDetail.hidden = true
     }
+  }
+
+  /**
+   * What the controller is actually sending.
+   *
+   * Enumerating devices answers "is it there". It does not answer "why does
+   * this button do nothing", which is a different question and the one that
+   * keeps being asked -- a pad whose buttons arrive under names we do not map
+   * behaves exactly like a pad that sends nothing at all, and no amount of
+   * staring at a device list separates the two.
+   *
+   * So: press a button, see what arrived. Including the ones that mapped to
+   * nothing, which are the interesting ones.
+   */
+  const testButton = el('button', 'action', pad.controls)
+  testButton.textContent = 'Test a controller'
+  const testOut = el('pre', 'settings-diagnostic', pad.root)
+  testOut.hidden = true
+
+  let testing = false
+  let seen: string[] = []
+  let stopTest: (() => void) | undefined
+
+  function note(line: string): void {
+    // Newest first: the thing you just pressed should not be off the bottom.
+    seen.unshift(line)
+    seen = seen.slice(0, 12)
+    testOut.textContent = seen.join('\n')
+  }
+
+  testButton.onclick = () => {
+    testing = !testing
+    testButton.textContent = testing ? 'Stop testing' : 'Test a controller'
+    testButton.classList.toggle('action-primary', testing)
+    testOut.hidden = !testing
+    if (!testing) { stopTest?.(); stopTest = undefined; return }
+
+    seen = []
+    note('Press every button in turn. Anything that arrives shows up here.')
+    stopTest = onAnyInput(
+      (action, device) => note(`${device.padEnd(8)} ${action}`),
+      (raw) => note(`unmapped  ${raw}   <- this is why that button does nothing`),
+    )
   }
 
   // --- profile --------------------------------------------------------

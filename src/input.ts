@@ -12,6 +12,7 @@
 import { listen } from '@tauri-apps/api/event'
 import { call, inApp } from './host'
 import { createWebPad, type WebPad } from './webpad'
+import { logWarn } from './log'
 
 export type Action =
   | 'up' | 'down' | 'left' | 'right'
@@ -169,6 +170,7 @@ export async function createInput(
     // platform. The pad's repeat is tuned in Rust; this just reports honestly.
     note('keyboard')
     dispatch({ action, repeat: e.repeat, latency: null, device: 'keyboard' })
+    tap(action, 'keyboard')
   }
   window.addEventListener('keydown', onKey)
   disposers.push(() => window.removeEventListener('keydown', onKey))
@@ -189,6 +191,7 @@ export async function createInput(
         latency: performance.now() - (p.t + offset),
         device: 'pad',
       })
+      tap(p.action, 'pad')
       note('pad')
     })
     disposers.push(unlisten)
@@ -201,6 +204,7 @@ export async function createInput(
   webPad = createWebPad(
     (e) => {
       dispatch(e)
+      tap(e.action, 'pad')
       note('pad')
     },
     () => nativeDelivered || status.connected > 0,
@@ -216,4 +220,39 @@ let webPad: WebPad | undefined
 /** What the webview can see, whether or not it is the one driving. */
 export function webviewPads(): string[] {
   return webPad?.seen() ?? []
+}
+
+/** Everything watching the raw stream, for the tester in Settings. */
+const taps = new Set<(action: Action, device: Device) => void>()
+
+/** Called from the dispatch below, so the tap sees exactly what the app sees. */
+function tap(action: Action, device: Device): void {
+  for (const t of taps) t(action, device)
+}
+
+/**
+ * Watch every action as it arrives, and every button that mapped to nothing.
+ *
+ * The second half is the point. A pad whose buttons arrive under names we do
+ * not recognise behaves identically to a pad that sends nothing at all, and no
+ * device list separates the two -- but one is a two-line fix and the other is
+ * a driver problem.
+ *
+ * Returns a function that stops watching.
+ */
+export function onAnyInput(
+  onAction: (action: Action, device: Device) => void,
+  onUnmapped: (raw: string) => void,
+): () => void {
+  taps.add(onAction)
+  let stopRust: (() => void) | undefined
+  if (inApp) {
+    void listen<string>('input-unmapped', (e) => onUnmapped(e.payload))
+      .then((un) => { stopRust = un })
+      .catch((e) => logWarn('input', 'could not watch for unmapped buttons', e))
+  }
+  return () => {
+    taps.delete(onAction)
+    stopRust?.()
+  }
 }
