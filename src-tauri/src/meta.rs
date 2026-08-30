@@ -367,3 +367,139 @@ pub fn request_meta(app_ids: Vec<String>, enricher: tauri::State<'_, Enricher>) 
     enricher.request(app_ids);
     ready
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A response shaped like the real one, trimmed to the fields we read.
+    fn full_response() -> serde_json::Value {
+        json!({
+            "620": {
+                "success": true,
+                "data": {
+                    "name": "Portal 2",
+                    "short_description": "The sequel.",
+                    "developers": ["Valve"],
+                    "publishers": ["Valve"],
+                    "release_date": { "coming_soon": false, "date": "18 Apr, 2011" },
+                    "genres": [{ "id": "1", "description": "Action" },
+                               { "id": "25", "description": "Adventure" }],
+                    "metacritic": { "score": 95, "url": "https://example.invalid" },
+                    "header_image": "https://cdn.example.invalid/620/header.jpg?t=1"
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn reads_every_field_we_display() {
+        let m = parse("620", &full_response()).expect("a success entry parses");
+        assert_eq!(m.name, "Portal 2");
+        assert_eq!(m.description, "The sequel.");
+        assert_eq!(m.developers, vec!["Valve"]);
+        assert_eq!(m.publishers, vec!["Valve"]);
+        assert_eq!(m.release_date, "18 Apr, 2011");
+        assert_eq!(m.genres, vec!["Action", "Adventure"]);
+        assert_eq!(m.score, Some(95));
+        assert!(m.header_image.contains("/620/header.jpg"));
+    }
+
+    /// Every parsed entry has to carry the current version, or `cached` will
+    /// reject what we just wrote and the library re-fetches forever.
+    #[test]
+    fn stamps_the_cache_version() {
+        assert_eq!(parse("620", &full_response()).unwrap().v, CACHE_VERSION);
+    }
+
+    #[test]
+    fn an_unsuccessful_entry_is_none_not_a_default() {
+        // Delisted games and tools answer with success:false. Returning an
+        // empty Meta would cache a game called "" and never ask again.
+        let body = json!({ "620": { "success": false } });
+        assert!(parse("620", &body).is_none());
+    }
+
+    #[test]
+    fn a_response_for_a_different_appid_is_none() {
+        // The endpoint keys the response by appid. Reading the wrong key would
+        // attach one game's name to another's card.
+        assert!(parse("440", &full_response()).is_none());
+    }
+
+    #[test]
+    fn missing_pieces_are_empty_rather_than_a_panic() {
+        // Not every game has a Metacritic score, a publisher or a genre. The
+        // sparse shape is the common one, not the edge case.
+        let body = json!({ "42": { "success": true, "data": { "name": "Sparse" } } });
+        let m = parse("42", &body).expect("a name is all we require");
+        assert_eq!(m.name, "Sparse");
+        assert_eq!(m.score, None);
+        assert!(m.description.is_empty());
+        assert!(m.developers.is_empty());
+        assert!(m.publishers.is_empty());
+        assert!(m.genres.is_empty());
+        assert!(m.release_date.is_empty());
+        assert!(m.header_image.is_empty());
+    }
+
+    #[test]
+    fn an_entry_with_no_name_is_none() {
+        // A nameless entry would render as a blank card that never retries.
+        let body = json!({ "42": { "success": true, "data": { "genres": [] } } });
+        assert!(parse("42", &body).is_none());
+    }
+
+    #[test]
+    fn junk_in_a_list_is_skipped_not_fatal() {
+        let body = json!({ "42": { "success": true, "data": {
+            "name": "Odd", "developers": ["Real", 7, null], "genres": [{ "id": "1" }]
+        } } });
+        let m = parse("42", &body).unwrap();
+        assert_eq!(m.developers, vec!["Real"]);
+        assert!(m.genres.is_empty());
+    }
+
+    /// A regression test for a bug that shipped: `header_image` was added to
+    /// fix artwork for recent releases, and every already-cached entry
+    /// deserialised it as empty -- so the fix did nothing for exactly the games
+    /// that had been seen before, silently.
+    #[test]
+    fn a_cache_entry_from_an_older_schema_is_ignored() {
+        let path = cache_path("99001");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, r#"{"appId":"99001","name":"Stale"}"#).unwrap();
+        assert!(cached("99001").is_none(), "a v1 entry must not be trusted");
+
+        store(&Meta {
+            app_id: "99001".into(),
+            name: "Fresh".into(),
+            v: CACHE_VERSION,
+            ..Default::default()
+        });
+        assert_eq!(cached("99001").map(|m| m.name), Some("Fresh".into()));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A miss has to survive a round trip, or an appid Steam does not know
+    /// gets re-requested on every single launch.
+    #[test]
+    fn a_recorded_miss_is_remembered() {
+        let path = cache_path("99002");
+        store_miss("99002");
+        let got = cached("99002").expect("the miss was written");
+        assert!(got.name.is_empty(), "a miss is an entry with no name");
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn unreadable_or_corrupt_cache_is_a_miss_not_a_panic() {
+        let path = cache_path("99003");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "{ this is not json").unwrap();
+        assert!(cached("99003").is_none());
+        std::fs::remove_file(&path).ok();
+        assert!(cached("99004-never-written").is_none());
+    }
+}

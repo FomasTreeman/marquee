@@ -159,3 +159,33 @@ export function createMenu(): Menu {
 export function usableCount(items: MenuItem[]): number {
   return items.filter((i) => !i.disabled).length
 }
+
+/**
+ * Ids that end the user's whole session rather than just this app.
+ *
+ * The mirror of `Action::affects_the_machine` in src-tauri/src/system.rs. Kept
+ * here as data so the "two presses" rule can be asserted rather than trusted to
+ * whoever next edits the menu. Exiting Marquee is deliberately not on it: you
+ * land back where you started, which is not a loss.
+ */
+export const ENDS_THE_SESSION = ['restart', 'shutdown'] as const
+
+/**
+ * The Start-button menu, as data.
+ *
+ * Separate from the dispatch that acts on it so the shape can be tested. The
+ * ids have to match `Action::parse` on the Rust side; `settings` and `rescan`
+ * are handled in the frontend and never reach it.
+ */
+export function mainMenuItems(gameCount: number): MenuItem[] {
+  return [
+    { id: 'settings', label: 'Settings' },
+    { id: 'rescan', label: 'Update game library', detail: `${gameCount} games` },
+    { id: 'minimise', label: 'Minimise' },
+    { id: 'quit', label: 'Exit Marquee' },
+    // Two presses each. Ending someone's session from a misread menu row is
+    // not a mistake they can undo.
+    { id: 'restart', label: 'Restart system', confirm: 'Restart? Press again' },
+    { id: 'shutdown', label: 'Turn off system', confirm: 'Turn off? Press again' },
+  ]
+}

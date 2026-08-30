@@ -101,6 +101,11 @@ fn log_dir() -> PathBuf {
 /// A launcher runs for hours on a television; an unbounded log is a slow leak.
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
+// Checked when the constant is edited rather than when the tests are run: a
+// log too small to hold one session is useless for debugging, and one too
+// large is not a bound at all.
+const _: () = assert!(MAX_BYTES >= 1024 * 1024 && MAX_BYTES <= 16 * 1024 * 1024);
+
 pub fn path() -> PathBuf {
     log_dir().join("marquee.log")
 }
@@ -181,7 +186,9 @@ macro_rules! log_debug {
 /// forever: the app works, it just silently redoes the work on every launch
 /// and nothing ever says why. This keeps the tolerance and adds the sentence.
 ///
-///     log_if_err!("art", std::fs::rename(&tmp, path), "caching {}", slug);
+/// ```text
+/// log_if_err!("art", std::fs::rename(&tmp, path), "caching {}", slug);
+/// ```
 #[macro_export]
 macro_rules! log_if_err {
     ($src:expr, $expr:expr, $($arg:tt)*) => {
@@ -230,4 +237,85 @@ pub fn log_from_ui(level: String, source: String, message: String, detail: Optio
 #[tauri::command]
 pub fn log_path() -> String {
     path().display().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The frontend sends a level as a string. Anything unrecognised has to
+    /// land somewhere visible rather than being dropped or upgraded to a
+    /// warning nobody trusts.
+    #[test]
+    fn a_level_from_the_ui_is_parsed_generously() {
+        assert_eq!(Level::from("debug"), Level::Debug);
+        assert_eq!(Level::from("trace"), Level::Debug);
+        assert_eq!(Level::from("info"), Level::Info);
+        assert_eq!(Level::from("WARN"), Level::Warn);
+        assert_eq!(Level::from("Warning"), Level::Warn);
+        assert_eq!(Level::from("error"), Level::Error);
+        assert_eq!(Level::from("fatal"), Level::Error);
+    }
+
+    #[test]
+    fn an_unknown_level_becomes_info_rather_than_disappearing() {
+        assert_eq!(Level::from(""), Level::Info);
+        assert_eq!(Level::from("catastrophe"), Level::Info);
+    }
+
+    /// `write` routes to stderr at Warn and above, so the ordering is not
+    /// cosmetic -- it decides which stream a line lands on.
+    #[test]
+    fn levels_order_by_severity() {
+        assert!(Level::Debug < Level::Info);
+        assert!(Level::Info < Level::Warn);
+        assert!(Level::Warn < Level::Error);
+    }
+
+    /// Every tag is the same width so the source column lines up. A ragged
+    /// column is the difference between a log you scan and one you read.
+    #[test]
+    fn tags_are_a_fixed_width() {
+        for l in [Level::Debug, Level::Info, Level::Warn, Level::Error] {
+            assert_eq!(l.tag().len(), 5, "{l} breaks the column");
+        }
+    }
+
+    #[test]
+    fn display_drops_the_padding() {
+        assert_eq!(Level::Info.to_string(), "INFO");
+        assert_eq!(Level::Error.to_string(), "ERROR");
+    }
+
+    /// Fixed-width, wall-clock, millisecond. Parsed by eye when correlating a
+    /// Rust line against a frontend one, so the shape has to be exact.
+    #[test]
+    fn the_timestamp_is_fixed_width() {
+        let s = stamp();
+        assert_eq!(s.len(), 12, "{s} is not hh:mm:ss.mmm");
+        let (time, ms) = s.split_once('.').expect("a millisecond field");
+        assert_eq!(ms.len(), 3);
+        let parts: Vec<u32> = time
+            .split(':')
+            .map(|p| p.parse().expect("numeric"))
+            .collect();
+        assert_eq!(parts.len(), 3);
+        assert!(
+            parts[0] < 24 && parts[1] < 60 && parts[2] < 60,
+            "{s} is not a time"
+        );
+    }
+
+    #[test]
+    fn the_log_path_is_absolute_and_named_for_the_app() {
+        let p = path();
+        assert!(p.is_absolute(), "{p:?} is relative");
+        assert_eq!(p.file_name().unwrap(), "marquee.log");
+        // Rotation renames onto this. If the two ever disagreed the previous
+        // session would be written somewhere nothing looks.
+        assert_eq!(
+            p.with_extension("log.1").file_name().unwrap(),
+            "marquee.log.1"
+        );
+    }
 }

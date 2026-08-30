@@ -44,7 +44,7 @@ pub enum Action {
     Lb,
     Rb,
     Menu,
-    MainMenu,
+    Add,
     /// Open the sort menu. Left stick click, as on a console.
     Sort,
     /// Open the filter menu. Right stick click.
@@ -89,7 +89,9 @@ fn button_action(b: Button) -> Option<Action> {
         Button::LeftThumb => Action::Sort,
         Button::RightThumb => Action::Filter,
         Button::Start => Action::Menu,
-        Button::Select => Action::MainMenu,
+        // Select/Back adds a game. Not the main menu, despite sitting next to
+        // Start -- that is Action::Menu.
+        Button::Select => Action::Add,
         _ => return None,
     })
 }

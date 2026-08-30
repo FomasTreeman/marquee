@@ -14,7 +14,7 @@ import { createPicker } from './picker'
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import { createHud } from './hud'
 import { createOsk } from './osk'
-import { createMenu } from './menu'
+import { createMenu, mainMenuItems } from './menu'
 import { createSettings } from './settings'
 import { toast } from './toast'
 import { hostInfo, pingMs, inApp } from './host'
@@ -416,7 +416,7 @@ async function main(): Promise<void> {
       keyboard: [
         ['↵', 'Play', play], ['Y', 'Details', details], ['X', 'Favourite', fav],
         ['O', 'Sort', openSort], ['I', 'Filter', openFilter], ['/', 'Search', openSearch],
-        ['Tab', 'Menu', openMainMenu], ['Esc', 'Back', undefined],
+        ['Tab', 'Menu', openMainMenu], ['N', 'Add', openAdd], ['Esc', 'Back', undefined],
       ],
       mouse: [
         ['Click', 'Select', undefined], ['Double-click', 'Play', undefined],
@@ -490,20 +490,7 @@ async function main(): Promise<void> {
   function openMainMenu(): void {
     menu.open({
       title: 'Marquee',
-      items: [
-        { id: 'settings', label: 'Settings' },
-        {
-          id: 'rescan',
-          label: 'Update game library',
-          detail: `${games.length} games`,
-        },
-        { id: 'minimise', label: 'Minimise' },
-        { id: 'quit', label: 'Exit Marquee' },
-        // Two presses each. Ending someone's session from a misread menu row is
-        // not a mistake they can undo.
-        { id: 'restart', label: 'Restart system', confirm: 'Restart? Press again' },
-        { id: 'shutdown', label: 'Turn off system', confirm: 'Turn off? Press again' },
-      ],
+      items: mainMenuItems(games.length),
       async onChoose(id) {
         if (id === 'settings') {
           settings.open()
@@ -742,7 +729,7 @@ async function main(): Promise<void> {
       }
       if (e.action === 'x') { void favourite(grid.focused); return }
       if (e.action === 'menu') { openMainMenu(); return }
-      if (e.action === 'mainmenu') { openAdd(); return }
+      if (e.action === 'add') { openAdd(); return }
       if (e.action === 'filter') { openFilter(); return }
       if (e.action === 'search') { openSearch(); return }
       if (e.action === 'y') {

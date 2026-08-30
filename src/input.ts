@@ -16,7 +16,9 @@ export type Action =
   | 'up' | 'down' | 'left' | 'right'
   | 'a' | 'b' | 'x' | 'y'
   | 'lb' | 'rb'
-  | 'menu' | 'mainmenu'
+  | 'menu'
+  /** Add a game -- Select/Back on a pad. */
+  | 'add'
   /** Keyboard only. The HUD is a development tool and does not deserve a
    *  face button. */
   | 'perf'
@@ -47,7 +49,7 @@ export interface ActionEvent {
  *    A [X]  confirm     B [O]  back
  *    X [□]  quick       Y [△]  details
  */
-const KEYMAP: Record<string, Action> = {
+export const KEYMAP: Record<string, Action> = {
   ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
   KeyW: 'up', KeyS: 'down', KeyA: 'left', KeyD: 'right',
   Enter: 'a', Space: 'a',
@@ -55,12 +57,29 @@ const KEYMAP: Record<string, Action> = {
   KeyX: 'x', KeyY: 'y',
   KeyQ: 'lb', KeyE: 'rb',
   Tab: 'menu', KeyM: 'menu',
+  KeyN: 'add',
   KeyI: 'filter',
   KeyP: 'perf',
   Slash: 'search', KeyF: 'search',
   F11: 'fullscreen',
   KeyO: 'sort',
 }
+
+/**
+ * Every action a controller can produce.
+ *
+ * Marquee is controller-first but has to be fully usable on keyboard and
+ * mouse, and "fully" is the part that rots: a new pad binding gets added and
+ * the keyboard route is remembered a release later, if at all. Listing them
+ * here lets a test hold the two in step.
+ */
+export const PAD_ACTIONS: readonly Action[] = [
+  'up', 'down', 'left', 'right',
+  'a', 'b', 'x', 'y',
+  'lb', 'rb',
+  'menu', 'add',
+  'search', 'sort', 'filter',
+]
 
 interface RustInputEvent { action: Action; repeat: boolean; t: number }
 
