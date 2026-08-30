@@ -253,6 +253,11 @@ fn set_steamgriddb_key(
 fn system_action(window: tauri::Window, action: String) -> Result<(), String> {
     let parsed =
         system::Action::parse(&action).ok_or_else(|| format!("unknown action: {action}"))?;
+    if parsed.affects_the_machine() {
+        // Logged distinctly from everything else. Someone who finds their
+        // machine off and wonders why should find the line that says so.
+        log_warn!("system", "ending the session: {parsed:?}");
+    }
     match parsed {
         system::Action::Minimise => window.minimize().map_err(|e| e.to_string()),
         system::Action::Quit => {
