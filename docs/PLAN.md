@@ -620,7 +620,7 @@ detecting a game that failed to start, settings, and theming.
 **Exit:** a full session — boot, browse, launch, play, exit, sleep, wake —
 without touching a keyboard.
 
-### Phase 3.5 — Profiles and synced settings  ← *requested, not started*
+### Phase 3.5 — Profiles and synced settings  ✅ *(option 1, done)*
 
 Carry a configuration between machines: the SteamGridDB key, sort order,
 favourites, hidden games, artwork corrections and hand-added games, so a second
@@ -643,9 +643,21 @@ service is both. Three options, in the order I would try them:
 3. **A real account system.** Contradicts §6 and turns this into something with
    users, uptime and a privacy policy. Worth it only if this goes public.
 
-Start at 1. It is a morning's work, it is honest about what it is, and it makes
-2 and 3 easier rather than harder because the export format is the same either
-way.
+Option 1 is built, with a twist that makes it better than manual export usually
+is:
+
+- **Export and import to any path**, from Settings.
+- **A configured folder is kept current**, rewritten on every change rather than
+  when someone remembers. Point it at a synced folder and it is cloud sync;
+  point it at a second drive and it survives the reinstall that took the first.
+- **A profile is looked for on first run** — in the configured folder, and in
+  every folder the app has learned games live in. That last one is what makes
+  it work without anyone remembering: a machine whose C: drive was just
+  reinstalled still has its games on D:, and a profile saved beside them is
+  found on its own.
+
+Options 2 and 3 remain open and are now cheaper, because the format is the same
+either way and the only new part would be where the bytes go.
 
 ### Phase 4 — Release engineering
 

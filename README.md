@@ -73,6 +73,10 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
   a custom folder on whichever drive had room gets found, which guessing at
   `Program Files` never would
 
+- **A profile that survives the machine.** Favourites, hidden games, hand-added
+  games and where they live, artwork corrections, settings — exported to any
+  path, kept current in a folder of your choosing, and found on its own after a
+  reinstall if it was saved beside your games
 - Fullscreen (**F11**, remembered across launches), and the screen kept awake
   while you browse — a controller is not an input device as far as the OS is
   concerned, so ten minutes of browsing looks like ten minutes of idle
@@ -90,7 +94,7 @@ Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
   and [the plan](docs/PLAN.md) is explicit that a pass on one webview engine is
   not a pass
 - Categories and collections
-- Syncing settings and profiles between machines — see PLAN.md §Phase 3.5
+
 - Anything about a game that is owned but has never been played or installed
 
 - **[docs/PLAN.md](docs/PLAN.md)** — scope, stack, architecture, phasing, and

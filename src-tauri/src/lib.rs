@@ -12,6 +12,7 @@ mod locate;
 pub mod log;
 mod meta;
 mod paths;
+mod profile;
 mod run;
 mod screen;
 mod search;
@@ -103,6 +104,7 @@ fn add_manual_game(
 ) -> Result<i64, String> {
     let id = store.add_manual_game(&title, steam_app_id.as_deref())?;
     log_info!("store", "added {title:?} as manual:{id}");
+    profile_changed(&store);
     Ok(id)
 }
 
@@ -121,6 +123,7 @@ fn set_manual_executable(
             log_warn!("store", "could not record a game root: {e}");
         }
     }
+    profile_changed(&store);
     Ok(())
 }
 
@@ -130,7 +133,9 @@ fn remove_manual_game(
     store: tauri::State<'_, std::sync::Arc<store::Store>>,
 ) -> Result<(), String> {
     log_info!("store", "removed manual:{id}");
-    store.remove_manual_game(id)
+    let out = store.remove_manual_game(id);
+    profile_changed(&store);
+    out
 }
 
 /// Point a game's artwork at a different Steam appid, or None to undo.
@@ -145,7 +150,9 @@ fn set_art_source(
     store: tauri::State<'_, std::sync::Arc<store::Store>>,
 ) -> Result<(), String> {
     log_info!("store", "artwork for {game_id} -> {app_id:?}");
-    store.set_art_source(&game_id, app_id.as_deref())
+    let out = store.set_art_source(&game_id, app_id.as_deref());
+    profile_changed(&store);
+    out
 }
 
 /// Search SteamGridDB by name, for the artwork picker.
@@ -202,7 +209,9 @@ fn set_setting(
     if !ALLOWED.contains(&key.as_str()) {
         return Err(format!("not a settable preference: {key}"));
     }
-    store.set_setting(&key, &value)
+    let out = store.set_setting(&key, &value);
+    profile_changed(&store);
+    out
 }
 
 #[tauri::command]
@@ -211,7 +220,9 @@ fn set_custom_title(
     title: Option<String>,
     store: tauri::State<'_, std::sync::Arc<store::Store>>,
 ) -> Result<(), String> {
-    store.set_custom_title(&game_id, title.as_deref())
+    let out = store.set_custom_title(&game_id, title.as_deref());
+    profile_changed(&store);
+    out
 }
 
 /// Settings the interface can read. Only one so far.
@@ -222,6 +233,7 @@ fn get_settings(
     Ok(serde_json::json!({
         "steamgriddbKey": store.setting(sgdb::SETTING_KEY)?.unwrap_or_default(),
         "sort": store.setting("sort")?.unwrap_or_default(),
+        "profileFolder": store.setting(profile::FOLDER_SETTING)?.unwrap_or_default(),
     }))
 }
 
@@ -236,6 +248,7 @@ fn set_steamgriddb_key(
     store: tauri::State<'_, std::sync::Arc<store::Store>>,
 ) -> Result<(), String> {
     store.set_setting(sgdb::SETTING_KEY, &key)?;
+    profile_changed(&store);
     match art::clear_cache() {
         Ok(()) => log_info!("art", "artwork cache cleared after a source change"),
         Err(e) => log_warn!("art", "could not clear the artwork cache: {e}"),
@@ -283,7 +296,9 @@ fn set_hidden(
         "{game_id} {}",
         if hidden { "hidden" } else { "shown" }
     );
-    store.set_hidden(&game_id, hidden)
+    let out = store.set_hidden(&game_id, hidden);
+    profile_changed(&store);
+    out
 }
 
 /// Uninstall a game.
@@ -325,12 +340,73 @@ fn uninstall_game(
     }
 }
 
+/// Keep the configured copy of the profile current.
+///
+/// Called by every command that changes it. Silent when no folder is
+/// configured, and never fatal -- a profile that cannot be written is worth a
+/// log line, not a failed favourite.
+///
+/// Written on every change rather than debounced: it is a few kilobytes, and a
+/// backup that is *usually* current is not one anybody would trust.
+fn profile_changed(store: &store::Store) {
+    profile::auto_export(store);
+}
+
+/// Write the profile to a path the user chose.
+#[tauri::command]
+fn export_profile(
+    path: String,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<(), String> {
+    profile::write(&store, std::path::Path::new(&path))
+}
+
+/// Read a profile and merge it in.
+#[tauri::command]
+fn import_profile(
+    path: String,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<profile::ImportSummary, String> {
+    let loaded = profile::read(std::path::Path::new(&path))?;
+    profile::apply(&store, &loaded)
+}
+
+/// Where a profile might already be, and whether one was found.
+///
+/// Checked on first run. A machine whose C: drive was just reinstalled still
+/// has its games on D:, and a profile saved beside them is found without anyone
+/// remembering where they put it.
+#[tauri::command]
+fn find_profile(
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<Option<String>, String> {
+    Ok(profile::discover(&store).map(|p| p.display().to_string()))
+}
+
+/// Set the folder an up-to-date copy is kept in, and write one now.
+#[tauri::command]
+fn set_profile_folder(
+    folder: String,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<(), String> {
+    store.set_setting(profile::FOLDER_SETTING, &folder)?;
+    if !folder.trim().is_empty() {
+        profile::write(
+            &store,
+            &std::path::Path::new(&folder).join(profile::FILENAME),
+        )?;
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn toggle_favourite(
     game_id: String,
     store: tauri::State<'_, std::sync::Arc<store::Store>>,
 ) -> Result<bool, String> {
-    store.toggle_favourite(&game_id)
+    let out = store.toggle_favourite(&game_id);
+    profile_changed(&store);
+    out
 }
 
 /// Round-trip probe for the IPC bridge. Deliberately trivial, so the number it
@@ -546,6 +622,10 @@ pub fn run() {
             system_action,
             set_hidden,
             uninstall_game,
+            export_profile,
+            import_profile,
+            find_profile,
+            set_profile_folder,
             art::artwork_report,
             search_artwork
         ])

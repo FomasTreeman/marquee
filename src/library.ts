@@ -153,6 +153,8 @@ export interface Settings {
   steamgriddbKey: string
   /** Sort order, remembered across launches. */
   sort: string
+  /** Folder an up-to-date copy of the profile is kept in, if any. */
+  profileFolder: string
 }
 
 /** Store any single setting. */
@@ -162,12 +164,47 @@ export async function setSetting(key: string, value: string): Promise<void> {
 }
 
 export async function getSettings(): Promise<Settings> {
-  if (!inApp) return { steamgriddbKey: '', sort: 'recent' }
+  if (!inApp) return { steamgriddbKey: '', sort: 'recent', profileFolder: '' }
   return call<Settings>('get_settings')
 }
 
 /** Saving also clears the artwork cache, so games that previously found
  *  nothing are re-resolved against the new source. */
+export interface ImportSummary {
+  settings: number
+  games: number
+  manual: number
+  roots: number
+}
+
+/**
+ * Everything the user authored, as a file.
+ *
+ * Favourites, hidden games, hand-added games and where they live, artwork
+ * corrections, learned folders, settings. Kilobytes. Artwork and metadata are
+ * deliberately excluded — they are a cache and rebuild themselves.
+ */
+export async function exportProfile(path: string): Promise<void> {
+  return call<void>('export_profile', { path })
+}
+
+/** Merge a profile in. Nothing is deleted; imported values win on a conflict. */
+export async function importProfile(path: string): Promise<ImportSummary> {
+  return call<ImportSummary>('import_profile', { path })
+}
+
+/** A profile already on this machine, if there is one — the configured folder,
+ *  then the folders games are known to live in. */
+export async function findProfile(): Promise<string | null> {
+  if (!inApp) return null
+  return call<string | null>('find_profile')
+}
+
+/** Keep an up-to-date copy in this folder, rewritten on every change. */
+export async function setProfileFolder(folder: string): Promise<void> {
+  return call<void>('set_profile_folder', { folder })
+}
+
 /** Quit, minimise, restart or shut down. The last two end the whole session,
  *  so the interface arms them with a second press first. */
 export async function systemAction(action: string): Promise<void> {

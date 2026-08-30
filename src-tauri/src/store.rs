@@ -76,6 +76,19 @@ fn db_path() -> PathBuf {
 }
 
 impl Store {
+    /// A fresh, empty database that exists only for the duration of a test.
+    ///
+    /// Tests previously shared the on-disk database, so one that inserted a row
+    /// changed what the next one saw -- and a second run of the suite behaved
+    /// differently from the first. Isolation is not optional for a test that
+    /// asserts "importing twice adds one row".
+    #[cfg(test)]
+    pub fn in_memory() -> Self {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        migrate(&conn).expect("migrations");
+        Store(Mutex::new(conn))
+    }
+
     pub fn open() -> Result<Self, String> {
         let path = db_path();
         if let Some(dir) = path.parent() {
@@ -315,6 +328,46 @@ impl Store {
         })
     }
 
+    /// Every setting, for export.
+    pub fn all_settings(&self) -> Result<Vec<(String, String)>, String> {
+        self.with(|c| {
+            let mut stmt = c.prepare("SELECT key, value FROM setting ORDER BY key")?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+            rows.collect()
+        })
+    }
+
+    /// Write a game's user data wholesale, for import.
+    ///
+    /// One statement rather than four separate toggles: an import that applied
+    /// favourite, hidden, title and artwork as four writes would leave a
+    /// half-imported game if it failed partway.
+    pub fn set_user_game(
+        &self,
+        game_id: &str,
+        favourite: bool,
+        hidden: bool,
+        custom_title: Option<&str>,
+        art_app_id: Option<&str>,
+    ) -> Result<(), String> {
+        self.with(|c| {
+            c.execute(
+                "INSERT INTO user_game (game_id, favourite, hidden, custom_title, art_app_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(game_id) DO UPDATE SET
+                   favourite = ?2, hidden = ?3, custom_title = ?4, art_app_id = ?5",
+                params![
+                    game_id,
+                    i64::from(favourite),
+                    i64::from(hidden),
+                    custom_title,
+                    art_app_id
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
     /// Hide a game, or bring it back. User data; no scanner may clear it.
     pub fn set_hidden(&self, game_id: &str, hidden: bool) -> Result<(), String> {
         self.with(|c| {
@@ -380,9 +433,7 @@ mod tests {
     use super::*;
 
     fn memory() -> Store {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
-        Store(Mutex::new(conn))
+        Store::in_memory()
     }
 
     #[test]

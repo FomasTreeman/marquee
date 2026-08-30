@@ -21,7 +21,7 @@ import { hostInfo, pingMs, inApp } from './host'
 import { createInput, padStatus, type Action } from './input'
 import {
   scanLibrary, requestMeta, onMeta, onLaunchFailed, launchGame, toggleFavourite,
-  getSettings, setSetting, toggleFullscreen, systemAction,
+  getSettings, setSetting, toggleFullscreen, systemAction, findProfile, importProfile,
   addManualGame, setManualExecutable, setArtSource, artworkReport,
   initArtwork, steamArtwork, artIdFor, tintFor,
   type Artwork, type Game, type Meta, type ScanResult,
@@ -748,6 +748,42 @@ async function main(): Promise<void> {
         selfCheck: () => import('./selfcheck').then((m) => m.runSelfCheck()),
       },
     })
+  }
+
+  // --- a profile left behind by a previous install ----------------------
+  //
+  // A fresh Windows install wipes %APPDATA% and takes the database with it,
+  // but the games are usually on another drive — and so, if a copy was kept
+  // beside them, is the profile. Offered rather than applied: importing over
+  // someone's library without asking is not a decision to make for them.
+  if (games.length && !games.some((g) => g.favourite || g.hidden || g.provider === 'manual')) {
+    void findProfile()
+      .then(async (found) => {
+        if (!found) return
+        logInfo('profile', `found a profile at ${found}`)
+        menu.open({
+          title: 'Found a profile',
+          items: [
+            { id: 'import', label: 'Restore it', detail: found.split(/[/\\]/).pop() ?? '' },
+            { id: 'ignore', label: 'Start fresh' },
+          ],
+          async onChoose(id) {
+            if (id !== 'import') return
+            try {
+              const summary = await importProfile(found)
+              toast(
+                `Restored ${summary.games} game settings and ${summary.manual} hand-added games.`,
+                'info',
+                7000,
+              )
+              await reloadLibrary()
+            } catch (e) {
+              toast(`Could not restore that. ${String(e)}`, 'error', 8000)
+            }
+          },
+        })
+      })
+      .catch(() => { /* no profile is the normal case, not an error */ })
   }
 
   // If artwork is missing and the source that would fix it is switched off,
