@@ -128,11 +128,29 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # The board is moved by the workflow, not by Claude.
+      #
+      # Asking the agent to run `gh issue edit` was the wrong mechanism. It is
+      # an instruction competing with the actual task for attention, it is
+      # skipped silently when it loses, and a board that is only sometimes
+      # right is worse than one nobody expects to be right at all. These steps
+      # always run, in order, whatever happened inside.
+      - name: Mark it in progress
+        if: github.event.issue.number
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue edit ${{ github.event.issue.number }} \
+            --add-label claude-working \
+            --remove-label needs-decision \
+            --remove-label in-review || true
+
       # Appended, not replaced. `--system-prompt-file` would discard Claude
       # Code's own defaults along with the GitHub context this action installs,
       # and the symptom would be an agent that works but cannot see the issue
       # it was called about.
       - uses: anthropics/claude-code-action@v1
+        id: claude
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -142,3 +160,12 @@ jobs:
           claude_args: |
             --allowed-tools "Bash(pnpm:*),Bash(cargo:*),Bash(node:*),Bash(git:*),Bash(tools/:*),Bash(python3:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh pr edit:*)"
             --append-system-prompt-file .github/claude-instructions.md
+
+      # `always()`, because the interesting case is the run that failed or was
+      # cancelled: leaving claude-working on an issue nobody is working on is
+      # exactly the stale label that makes a board untrustworthy.
+      - name: Stop marking it in progress
+        if: always() && github.event.issue.number
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh issue edit ${{ github.event.issue.number }} --remove-label claude-working || true
