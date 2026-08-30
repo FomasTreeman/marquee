@@ -135,8 +135,52 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
 
-  build:
+  # Prove the signing key works before spending nine minutes finding out it
+  # does not.
+  #
+  # The whole matrix built for 5-9 minutes each and then died at the very last
+  # step on "incorrect updater private key password: Wrong password for that
+  # key" -- the bundler signs after it has built everything. This does the same
+  # decode against a scratch file in about a minute, so a key problem costs a
+  # minute and says so plainly.
+  key:
     needs: decide
+    if: needs.decide.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with: { node-version: 20 }
+      - uses: pnpm/action-setup@v4
+        with: { version: 9 }
+      - run: pnpm install --frozen-lockfile
+      - name: The signing key and its password agree
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set in the 'release' environment."
+            exit 1
+          fi
+          echo probe > probe.txt
+          if ! pnpm tauri signer sign probe.txt >/dev/null 2>signer.log; then
+            echo "::error::The signing key could not be decoded. $(tail -1 signer.log)"
+            echo
+            echo "A key generated with no password needs the password secret to be the"
+            echo "EMPTY STRING -- not absent, and not a placeholder. Unset fails with"
+            echo "'Device not configured' because the CLI tries to prompt; a non-empty"
+            echo "value fails with 'Wrong password for that key'. Deleting the secret"
+            echo "gives an empty string, which is what works."
+            echo "See docs/UPDATES.md."
+            exit 1
+          fi
+          echo "Signing key OK."
+
+  build:
+    needs: [decide, key]
     if: needs.decide.outputs.skip != 'true'
     strategy:
       fail-fast: false
