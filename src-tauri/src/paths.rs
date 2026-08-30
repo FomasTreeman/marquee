@@ -17,10 +17,9 @@ fn home() -> PathBuf {
 /// Redirected under test for the same reason as the log directory: a test run
 /// must never touch a real user's database.
 ///
-/// Unused until the SQLite store lands. Defined now so the cache/data split is
-/// established before anything writes user data into the wrong one -- that is
-/// a mistake you cannot take back once people have libraries.
-#[allow(dead_code)]
+/// Kept strictly separate from `cache_dir` so that clearing the cache can
+/// never reach anything the user authored -- a mistake you cannot take back
+/// once people have libraries. `store.rs` puts marquee.db here.
 pub fn data_dir() -> PathBuf {
     if cfg!(test) {
         return std::env::temp_dir().join("marquee-test-data");

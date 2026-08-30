@@ -117,7 +117,8 @@ pnpm app        # the real thing: Tauri window, real numbers
 pnpm dev        # plain browser tab, fast loop for CSS work only
 pnpm tokens     # regenerate src/css/tokens.css from design/tokens.json
 pnpm logs       # tail the log (both runtimes, one file)
-pnpm test       # frontend tests + tsc + cargo test
+pnpm test       # silence check + frontend tests + tsc + cargo test
+pnpm check      # just the silence check: discarded failures with no reason given
 pnpm build:windows   # cross-compile a Windows .exe from here
 ```
 
@@ -138,7 +139,7 @@ with two games installed. `?hud=0` hides the HUD, and **P** toggles it.
 | **R3** / I | Filter menu — search lives at the top of it |
 | **LB / RB** | Page up and down |
 | **☰** / Tab, M | Main menu — settings, rescan, quit, restart, shut down |
-| **⧉** / Select | Add a game by name |
+| **⧉** (Select) / N | Add a game by name |
 | **/** or F | Search (also reachable from the filter menu, for a pad) |
 | **F11** | Fullscreen |
 | **P** | Toggle the performance HUD |
@@ -150,7 +151,10 @@ without learning a binding. In the grid, click selects and double-click plays.
 
 Everything is reachable with a pad alone, with a keyboard alone, and with a
 mouse alone. Search was keyboard-only for a while; it now sits at the top of
-the filter menu, which is where a console would put it.
+the filter menu, which is where a console would put it. "Add a game" was the
+mirror of that -- pad only, on Select, with no key at all -- which is the sort
+of gap that lasts a year in a controller-first app, so a test now holds every
+pad action to having a keyboard route.
 
 Motion is tunable in `design/tokens.json`: `--scroll-ms` for the grid glide,
 `--motion` as a global multiplier. Both go to zero under

@@ -261,6 +261,15 @@ export async function setArtSource(gameId: string, appId: string | null): Promis
   return call<void>('set_art_source', { gameId, appId })
 }
 
+/**
+ * Rename a game, persistently.
+ *
+ * No caller yet: the store, the command and the profile round trip are all
+ * built and tested, but nothing in the interface offers a rename, so today a
+ * custom title can only arrive by importing a profile that already has one.
+ * The missing piece is a text prompt the pad can drive, which is a screen
+ * rather than a button. On the roadmap in docs/PLAN.md, not forgotten.
+ */
 export async function setCustomTitle(gameId: string, title: string | null): Promise<void> {
   return call<void>('set_custom_title', { gameId, title })
 }

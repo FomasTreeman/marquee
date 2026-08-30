@@ -64,6 +64,31 @@ diagnosable bug into two, and the second hides the first.
 - **A failed provider degrades.** The shell still comes up, the games that did
   scan are still shown, and the error appears beside them.
 
+## Failures that are discarded on purpose
+
+Some failures really are survivable. A backdrop that will not decode, a cache
+write that the disk refuses, a log line that cannot be flushed -- none of them
+should stop the app. The danger is that the *reason* lives only in the head of
+whoever wrote the line, and what is left on the page is `let _ =` or
+`catch {}`.
+
+That is not a hypothetical here. If the artwork cache silently fails to write,
+Marquee re-downloads 215 covers on every launch, forever, and the only symptom
+is that it feels slow. If the version stamp never lands, the cache is cleared
+every start. Both look exactly like a slow network.
+
+So the rule is: a discarded failure carries either a log call or a comment
+saying why nobody needs to know. `tools/check-silence.sh` enforces it and runs
+inside `pnpm test` and before a Windows build. Neither pattern is banned -- the
+reason just has to be written down.
+
+```bash
+pnpm check      # or tools/check-silence.sh
+```
+
+`log_if_err!(source, expr, "context {}", detail)` is the short way to keep the
+tolerance and add the sentence.
+
 ## The self-check
 
 **This is the part that matters, because error handling does not catch the
