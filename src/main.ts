@@ -32,7 +32,6 @@ import {
   apply as applyFilter, describe as describeFilter,
   PRESETS, SORTS, type Preset, type Sort,
 } from './filter'
-import { SAMPLE_LIBRARY } from './sample'
 
 const params = new URLSearchParams(location.search)
 /** ?mock=40 forces a synthetic library, for looking at the design on a machine
@@ -276,7 +275,15 @@ async function main(): Promise<void> {
       scan = { games: [], providers: [{ provider: 'scan', detected: true, error: String(e), tookMs: 0 }], tookMs: 0 }
     }
 
-    games = MOCK ? SAMPLE_LIBRARY(MOCK) : scan.games
+    // Loaded on demand so the mock library -- a hundred-odd real appids and
+    // titles -- is not carried in the bundle every user downloads. It is a
+    // development affordance; `?mock=` is the only thing that reaches it.
+    if (MOCK) {
+      const { SAMPLE_LIBRARY } = await import('./sample')
+      games = SAMPLE_LIBRARY(MOCK)
+    } else {
+      games = scan.games
+    }
     // Artwork follows the user's override where there is one, so a game whose
     // own appid has no cover can borrow another's.
     art = games.map((g) => { const key = artIdFor(g); return key ? steamArtwork(key) : {} })
