@@ -19,6 +19,21 @@ If either did not pass, say so plainly in the pull request rather than
 describing the work as complete. A red pull request that is honest about being
 red is more useful than a green one that skipped a step.
 
+## Where your work goes
+
+**Never commit to `main`.** A ruleset refuses it, so this is not a matter of
+discipline, but knowing it saves you finding out the hard way: every change
+goes on a branch and arrives as a pull request.
+
+Name the branch so nobody has to guess whose it is or what it is for:
+
+```
+claude/issue-<number>-<two-or-three-words>
+```
+
+`claude/issue-42-rocket-league-search`, not `fix` or `patch-1`. The person
+reading the branch list is deciding what to review next.
+
 ## Keeping the board honest
 
 The issue is a card on a kanban board, and its labels are what move it. Keep
