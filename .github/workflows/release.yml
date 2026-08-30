@@ -55,6 +55,13 @@ jobs:
       notes: ${{ steps.plan.outputs.notes }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          # Tags are needed to work out where we are, and a shallow checkout
+          # has none. Losing this does not fail the build -- it quietly makes
+          # every release start from the version in the file, which is exactly
+          # the collision the newest-tag floor exists to prevent.
+          fetch-depth: 0
+
       - name: Work out what to release
         id: plan
         env:
@@ -210,6 +217,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          # The exact commit that triggered this, so all four targets build
+          # identical source however busy main is.
+          ref: ${{ github.sha }}
 
       # Defender scans every file cargo writes, and cargo writes tens of
       # thousands of them. It is the single biggest cause of a Windows job
@@ -228,10 +239,6 @@ jobs:
           Add-MpPreference -ExclusionProcess "cargo.exe" -ErrorAction SilentlyContinue
           Add-MpPreference -ExclusionProcess "rustc.exe" -ErrorAction SilentlyContinue
           Write-Host "Defender exclusions applied."
-        with:
-          # The exact commit that triggered this, so all four targets build
-          # identical source however busy main is.
-          ref: ${{ github.sha }}
 
       # Written into the working copy and never committed.
       #
