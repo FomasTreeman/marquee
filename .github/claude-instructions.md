@@ -28,8 +28,11 @@ them true as you go — someone is reading the board instead of the thread.
   there:
   `gh issue edit <number> --add-label claude-working --remove-label needs-decision`
 
-- **When you open the pull request**, remove `claude-working`. The open PR is
-  the state now: `gh issue edit <number> --remove-label claude-working`
+- **When you open the pull request**, swap the labels over:
+  `gh issue edit <number> --add-label in-review --remove-label claude-working`
+  Removing `claude-working` without adding `in-review` sends the card back to
+  Todo, which reads as "nothing has happened here" on the very issue that is
+  finished and waiting to be read.
 
 - **Put `Closes #<number>` in the pull request body.** That is what closes the
   issue on merge, which is what moves the card to Done. Without it every card

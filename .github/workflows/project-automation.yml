@@ -1,0 +1,166 @@
+# Move an issue's card to match its state, so nobody drags cards by hand.
+#
+# The three built-in project workflows (item added, item closed, PR merged) do
+# the obvious moves already -- turn those on first, in Project -> Settings ->
+# Workflows. This exists for the one thing they cannot see: the labels Claude
+# sets while it works, which is what makes "in progress" and "waiting on me"
+# different columns rather than the same one.
+#
+# ---------------------------------------------------------------------------
+# Needs a PROJECT_TOKEN secret. The default GITHUB_TOKEN cannot write to a
+# user or organisation Projects (v2) board -- Projects live outside the
+# repository, so a repository-scoped token has no reach into them.
+#
+#   Fine-grained PAT (preferred): Settings -> Developer settings -> Personal
+#   access tokens -> Fine-grained. Resource owner FomasTreeman, and under
+#   Account permissions set **Projects: Read and write**. Nothing else.
+#
+#   Classic PAT also works with the `project` scope, but a classic token is
+#   all-or-nothing across everything you own, which is a lot of authority for
+#   moving a card.
+#
+# Check PROJECT_NUMBER below against the URL of your board:
+# github.com/users/FomasTreeman/projects/<number>
+# ---------------------------------------------------------------------------
+
+name: Project automation
+
+on:
+  issues:
+    types: [opened, labeled, unlabeled, closed, reopened]
+
+# Rapid label changes -- which is exactly what Claude does when it picks an
+# issue up and then opens a pull request -- would otherwise race and leave the
+# card showing whichever run happened to finish last.
+concurrency:
+  group: project-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  move-card:
+    runs-on: ubuntu-latest
+    # Everything here goes through PROJECT_TOKEN. The workflow's own token
+    # needs nothing at all.
+    permissions: {}
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.PROJECT_TOKEN }}
+          script: |
+            const PROJECT_OWNER = "FomasTreeman";
+            const PROJECT_NUMBER = 8;
+            const STATUS_FIELD = "Status";
+
+            // The column an issue belongs in, worked out from what is true
+            // about it now rather than from whichever label just changed.
+            //
+            // Deriving it from the event was the tempting version and it is
+            // wrong in a way that is hard to see: on `unlabeled` the payload
+            // still names the label that was *removed*, so taking
+            // claude-working off an issue moved it straight back to In
+            // progress -- the exact state it had just left.
+            //
+            // First match wins, so order is the priority.
+            // These strings must match the board's Status options exactly,
+            // capitals included -- GitHub's default board ships "In Progress",
+            // not "In progress". A mismatch throws below and prints the names
+            // the board actually has, so it tells you what to fix.
+            function statusFor(issue) {
+              const labels = new Set(issue.labels.map(l => l.name));
+              if (issue.state === "CLOSED") return "Done";
+              // Needs decision outranks the rest: it is the only state that
+              // is waiting on a person, so it should never be hidden behind a
+              // card that also happens to have a pull request open.
+              if (labels.has("needs-decision")) return "Needs Decision";
+              if (labels.has("in-review")) return "In Review";
+              if (labels.has("claude-working")) return "In Progress";
+              return "Todo";
+            }
+
+            const issue = context.payload.issue;
+            const want = statusFor({
+              labels: issue.labels ?? [],
+              state: (issue.state ?? "open").toUpperCase(),
+            });
+
+            // A user account, not an organisation. `organization(login:)`
+            // resolves to null for a personal account and every run dies on
+            // the null before it reaches the board.
+            const q = await github.graphql(`
+              query($owner: String!, $number: Int!, $field: String!) {
+                user(login: $owner) {
+                  projectV2(number: $number) {
+                    id
+                    field(name: $field) {
+                      ... on ProjectV2SingleSelectField { id options { id name } }
+                    }
+                  }
+                }
+              }`, { owner: PROJECT_OWNER, number: PROJECT_NUMBER, field: STATUS_FIELD });
+
+            const proj = q.user?.projectV2;
+            if (!proj) {
+              throw new Error(
+                `No project ${PROJECT_NUMBER} for ${PROJECT_OWNER}. ` +
+                `Check the number against the board's URL.`);
+            }
+            if (!proj.field) {
+              throw new Error(`Project ${PROJECT_NUMBER} has no "${STATUS_FIELD}" field.`);
+            }
+
+            const option = proj.field.options.find(o => o.name === want);
+            if (!option) {
+              // Loud on purpose. A missing column is a typo in the board or
+              // here, and the alternative -- doing nothing -- looks exactly
+              // like the automation working.
+              throw new Error(
+                `No "${STATUS_FIELD}" option named "${want}". ` +
+                `Board has: ${proj.field.options.map(o => o.name).join(", ")}`);
+            }
+
+            // Ask the issue which project items it has, rather than reading
+            // the board and looking for the issue in it. The board scan was
+            // capped at the first 100 items with no pagination, so once the
+            // board passed 100 cards an issue beyond that page was silently
+            // skipped -- the automation would simply stop working, with a
+            // green tick.
+            const found = await github.graphql(`
+              query($id: ID!) {
+                node(id: $id) {
+                  ... on Issue {
+                    projectItems(first: 20) {
+                      nodes { id project { id } }
+                    }
+                  }
+                }
+              }`, { id: issue.node_id });
+
+            let itemId = found.node.projectItems.nodes
+              .find(n => n.project.id === proj.id)?.id;
+
+            // Not on the board yet. Adding it is the useful thing to do --
+            // returning quietly meant a new issue stayed invisible until
+            // somebody noticed and added it by hand.
+            if (!itemId) {
+              const added = await github.graphql(`
+                mutation($projectId: ID!, $contentId: ID!) {
+                  addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
+                    item { id }
+                  }
+                }`, { projectId: proj.id, contentId: issue.node_id });
+              itemId = added.addProjectV2ItemById.item.id;
+              core.info(`Added issue #${issue.number} to the board.`);
+            }
+
+            await github.graphql(`
+              mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
+                updateProjectV2ItemFieldValue(input: {
+                  projectId: $projectId, itemId: $itemId, fieldId: $fieldId,
+                  value: { singleSelectOptionId: $optionId }
+                }) { projectV2Item { id } }
+              }`, {
+                projectId: proj.id, itemId,
+                fieldId: proj.field.id, optionId: option.id,
+              });
+
+            core.info(`Issue #${issue.number} -> ${want}`);

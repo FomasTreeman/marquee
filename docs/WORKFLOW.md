@@ -7,17 +7,23 @@ buttons.
 ## The board
 
 ```
-  ┌──────────┐   ┌────────────────┐   ┌──────────────┐   ┌────────┐
-  │   Todo   │   │  In progress   │   │  In review   │   │  Done  │
-  ├──────────┤   ├────────────────┤   ├──────────────┤   ├────────┤
-  │ issue    │──►│ claude-working │──►│ PR open,     │──►│ merged │
-  │ filed    │   │                │   │ linked       │   │        │
-  │          │   │ needs-decision │   │              │   │        │
-  │          │   │ ← YOUR TURN    │   │ ← YOUR TURN  │   │        │
-  └──────────┘   └────────────────┘   └──────────────┘   └────────┘
+  ┌────────┐  ┌──────────────┐  ┌────────────┐  ┌────────────────┐  ┌──────┐
+  │  Todo  │  │ In Progress  │  │ In Review  │  │ Needs Decision │  │ Done │
+  ├────────┤  ├──────────────┤  ├────────────┤  ├────────────────┤  ├──────┤
+  │ issue  │─►│claude-working│─►│ in-review  │─►│ needs-decision │  │merged│
+  │ filed  │  │              │  │            │  │                │  │      │
+  │        │  │              │  │ ← YOUR     │  │ ← YOUR TURN    │  │      │
+  │        │  │              │  │    TURN    │  │                │  │      │
+  └────────┘  └──────────────┘  └────────────┘  └────────────────┘  └──────┘
 ```
 
 Two columns want you. Everything else runs on its own.
+
+The **labels are the source of truth** and the columns follow them, not the
+other way round — `.github/workflows/project-automation.yml` recomputes the
+column from the issue's current labels and state on every change. Drag a card
+by hand and the next label change will put it back, which is the right way
+round: a board that disagrees with the labels is a board nobody trusts.
 
 **Setting it up** — one command, then two clicks:
 
@@ -27,6 +33,13 @@ gh project create --owner FomasTreeman --title Marquee
 ```
 
 Or make it in the browser: **your profile → Projects → New project → Board**.
+
+**Add the two Status options the default board does not have.** Project →
+Settings → Fields → Status. It ships with `Todo`, `In Progress` and `Done`;
+add **`In Review`** and **`Needs Decision`**. Capitals matter — the automation
+throws with the list of names your board actually has if one does not match, so
+a typo tells you what it is rather than quietly doing nothing.
+
 Then **⋯ → Settings → Workflows** and switch on the three built-in ones:
 
 | Workflow | What it does |
@@ -89,11 +102,10 @@ API credits.
 
 ## 4. One of two things happens
 
-### It opens a pull request → *In review*
+### It opens a pull request → *In Review*
 
 Linked to the issue with `Closes #12`, which is what closes the issue when you
-merge and moves the card to Done. It removes `claude-working` — the open PR is
-the state now.
+merge and moves the card to Done. It swaps `claude-working` for `in-review`.
 
 ### It gets stuck → **`needs-decision`**, and that's your turn
 
@@ -161,6 +173,7 @@ running, so a release that fails its signature check will not install.
 |---|---|---|
 | `claude` | hand this over | — (starts the run) |
 | `claude-working` | picked up, running | nobody, wait |
+| `in-review` | pull request open | **yours** |
 | `needs-decision` | blocked on a question | **yours** |
 | `bug` / `enhancement` | what kind of thing it is | — |
 | `wont-fix-yet` | real, deliberately parked | — |
@@ -189,3 +202,5 @@ mentions it or opens a separate issue, so nothing becomes un-revertable.
 | Run works, then fails at the end | Settings → Actions → General → "Allow GitHub Actions to create and approve pull requests" is off |
 | Release builds but won't sign | `TAURI_SIGNING_PRIVATE_KEY` not in the `release` environment — see `docs/UPDATES.md` |
 | App never offers an update | the release is still a draft, or the tag and `tauri.conf.json` disagree |
+| Cards never move | `PROJECT_TOKEN` missing, or `PROJECT_NUMBER` is not your board's number (check the URL) |
+| Automation fails naming a Status | your board has no option with that exact name — the error lists the ones it does have |
