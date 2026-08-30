@@ -38,7 +38,7 @@ const DEADZONE = 0.55
 const BUTTONS: Array<Action | undefined> = [
   'a', 'b', 'x', 'y',       // 0-3   face
   'lb', 'rb',               // 4-5   bumpers
-  'lb', 'rb',               // 6-7   triggers: page as well, see input.rs
+  undefined, undefined,     // 6-7   triggers: see input.rs, they do not page
   'add', 'menu',            // 8-9   Select/Back, Start
   'sort', 'filter',         // 10-11 stick clicks
   'up', 'down', 'left', 'right', // 12-15 d-pad

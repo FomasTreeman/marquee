@@ -84,16 +84,18 @@ fn button_action(b: Button) -> Option<Action> {
         Button::East => Action::B,
         Button::West => Action::X,
         Button::North => Action::Y,
-        // Both the bumper and the trigger page the library.
+        // The bumpers page the library. gilrs names them confusingly:
+        // LeftTrigger is the *bumper* (L1, LB); LeftTrigger2 is the analogue
+        // trigger (L2, LT).
         //
-        // gilrs names these confusingly: LeftTrigger is the *bumper* (L1, LB)
-        // and LeftTrigger2 is the analogue trigger (L2, LT). Only the bumpers
-        // were mapped, so pulling a trigger did nothing at all -- and "the
-        // triggers do not work" is indistinguishable from "the controller does
-        // not work" when you are the one holding it. Accepting both costs
-        // nothing and removes a whole class of confusion.
-        Button::LeftTrigger | Button::LeftTrigger2 => Action::Lb,
-        Button::RightTrigger | Button::RightTrigger2 => Action::Rb,
+        // The triggers deliberately do not page. Mapping both to one action
+        // sounded forgiving and was not: on Windows the analogue triggers are
+        // reported as axes as well as buttons, so they emit constantly, and
+        // sharing an action with the bumpers made the two interfere. A control
+        // that is sometimes a page and sometimes nothing is worse than one
+        // that does nothing at all.
+        Button::LeftTrigger => Action::Lb,
+        Button::RightTrigger => Action::Rb,
         Button::LeftThumb => Action::Sort,
         Button::RightThumb => Action::Filter,
         Button::Start => Action::Menu,
@@ -109,6 +111,50 @@ fn button_action(b: Button) -> Option<Action> {
 /// for -- so the dominant axis wins.
 struct AxisState {
     held: Option<Action>,
+}
+
+/// What is auto-repeating, and what started it.
+///
+/// The origin is the whole point. Repeat used to be a bare
+/// `Option<(Action, Instant)>` cleared by *any* axis settling back to centre
+/// -- and on Windows the analogue triggers are axes as well as buttons, so
+/// they emit constantly even at rest. Holding a bumper to page through the
+/// library therefore stopped repeating the moment a trigger twitched, which
+/// from the sofa is a shoulder button that works intermittently for no
+/// visible reason.
+///
+/// A stick's repeat is cancelled by the stick going quiet. A button's repeat
+/// is cancelled by the button coming up, and by nothing else.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Repeat {
+    action: Action,
+    due: Instant,
+    from_stick: bool,
+}
+
+impl Repeat {
+    fn from_button(action: Action, now: Instant) -> Self {
+        Repeat {
+            action,
+            due: now + REPEAT_DELAY,
+            from_stick: false,
+        }
+    }
+    fn from_stick(action: Action, now: Instant) -> Self {
+        Repeat {
+            action,
+            due: now + REPEAT_DELAY,
+            from_stick: true,
+        }
+    }
+    /// Whether the sticks going quiet should end this.
+    fn ends_with_the_sticks(&self) -> bool {
+        self.from_stick
+    }
+    /// Whether releasing `action` should end this.
+    fn ends_with_button(&self, action: Action) -> bool {
+        !self.from_stick && self.action == action
+    }
 }
 
 impl AxisState {
@@ -285,7 +331,7 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
         let decide_at = Instant::now() + Duration::from_secs(3);
         let mut reported = false;
 
-        let mut held: Option<(Action, Instant)> = None;
+        let mut held: Option<Repeat> = None;
         let mut xs = AxisState { held: None };
         let mut ys = AxisState { held: None };
 
@@ -307,7 +353,7 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
                         if let Some(a) = button_action(b) {
                             emit(a, false);
                             if a.repeats() {
-                                held = Some((a, Instant::now() + REPEAT_DELAY));
+                                held = Some(Repeat::from_button(a, Instant::now()));
                             }
                         } else {
                             // A pad that sends buttons we do not understand
@@ -321,7 +367,7 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
                     }
                     EventType::ButtonReleased(b, _) => {
                         if let Some(a) = button_action(b) {
-                            if matches!(held, Some((h, _)) if h == a) {
+                            if matches!(held, Some(h) if h.ends_with_button(a)) {
                                 held = None;
                             }
                         }
@@ -335,14 +381,16 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
                         match changed {
                             Some(a) => {
                                 emit(a, false);
-                                held = Some((a, Instant::now() + REPEAT_DELAY));
+                                held = Some(Repeat::from_stick(a, Instant::now()));
                             }
                             None => {
-                                // Released back inside the deadzone: stop any
-                                // repeat this stick owned.
+                                // Both sticks back inside the deadzone ends a
+                                // repeat a stick started -- and only that. A
+                                // bumper being held is none of this branch's
+                                // business, which is what it used to get wrong.
                                 if xs.held.is_none()
                                     && ys.held.is_none()
-                                    && matches!(held, Some((h, _)) if h.repeats())
+                                    && matches!(held, Some(h) if h.ends_with_the_sticks())
                                 {
                                     held = None;
                                 }
@@ -384,15 +432,154 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
                 }
             }
 
-            if let Some((action, due)) = held {
+            if let Some(r) = held {
                 let now = Instant::now();
-                if now >= due {
-                    emit(action, true);
-                    held = Some((action, now + REPEAT_RATE));
+                if now >= r.due {
+                    emit(r.action, true);
+                    held = Some(Repeat {
+                        due: now + REPEAT_RATE,
+                        ..r
+                    });
                 }
             }
 
             std::thread::sleep(POLL);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bug this type exists for.
+    ///
+    /// Repeat used to be a bare tuple, cleared whenever the sticks settled
+    /// back to centre. On Windows the analogue triggers are reported as axes
+    /// as well as buttons, so they emit continuously even at rest -- which
+    /// meant holding a bumper to page through the library stopped repeating
+    /// the moment a trigger twitched. From the sofa that is a shoulder button
+    /// that works intermittently for no visible reason.
+    #[test]
+    fn a_stick_going_quiet_does_not_cancel_a_held_bumper() {
+        let held = Repeat::from_button(Action::Lb, Instant::now());
+        assert!(
+            !held.ends_with_the_sticks(),
+            "a bumper's repeat is not the sticks' business"
+        );
+    }
+
+    #[test]
+    fn a_stick_going_quiet_does_cancel_a_held_direction() {
+        let held = Repeat::from_stick(Action::Down, Instant::now());
+        assert!(held.ends_with_the_sticks());
+    }
+
+    #[test]
+    fn releasing_the_button_ends_its_own_repeat_and_no_other() {
+        let held = Repeat::from_button(Action::Lb, Instant::now());
+        assert!(held.ends_with_button(Action::Lb));
+        assert!(
+            !held.ends_with_button(Action::Rb),
+            "the other bumper is unrelated"
+        );
+        assert!(!held.ends_with_button(Action::A));
+    }
+
+    #[test]
+    fn releasing_a_button_never_ends_a_sticks_repeat() {
+        // A stick pushed down while a face button is tapped must keep moving.
+        let held = Repeat::from_stick(Action::Down, Instant::now());
+        assert!(!held.ends_with_button(Action::Down));
+        assert!(!held.ends_with_button(Action::A));
+    }
+
+    /// Only the things you can hold down should repeat. A repeating confirm
+    /// launches the game under the cursor over and over.
+    #[test]
+    fn only_navigation_repeats() {
+        for a in [
+            Action::Up,
+            Action::Down,
+            Action::Left,
+            Action::Right,
+            Action::Lb,
+            Action::Rb,
+        ] {
+            assert!(a.repeats(), "{a:?} should repeat");
+        }
+        for a in [
+            Action::A,
+            Action::B,
+            Action::X,
+            Action::Y,
+            Action::Menu,
+            Action::Add,
+            Action::Sort,
+            Action::Filter,
+        ] {
+            assert!(!a.repeats(), "{a:?} must not repeat");
+        }
+    }
+
+    /// The bumpers page. The triggers do not, deliberately: on Windows they
+    /// arrive as axes as well as buttons, and sharing an action with the
+    /// bumpers made the two interfere.
+    #[test]
+    fn the_bumpers_page_and_the_triggers_are_left_alone() {
+        assert_eq!(button_action(Button::LeftTrigger), Some(Action::Lb));
+        assert_eq!(button_action(Button::RightTrigger), Some(Action::Rb));
+        assert_eq!(button_action(Button::LeftTrigger2), None);
+        assert_eq!(button_action(Button::RightTrigger2), None);
+    }
+
+    #[test]
+    fn every_face_button_and_menu_control_is_mapped() {
+        for (b, a) in [
+            (Button::South, Action::A),
+            (Button::East, Action::B),
+            (Button::West, Action::X),
+            (Button::North, Action::Y),
+            (Button::Start, Action::Menu),
+            (Button::Select, Action::Add),
+            (Button::LeftThumb, Action::Sort),
+            (Button::RightThumb, Action::Filter),
+            (Button::DPadUp, Action::Up),
+            (Button::DPadDown, Action::Down),
+            (Button::DPadLeft, Action::Left),
+            (Button::DPadRight, Action::Right),
+        ] {
+            assert_eq!(button_action(b), Some(a), "{b:?}");
+        }
+    }
+
+    /// A stick pushed diagonally must not fire two directions at once -- on a
+    /// grid that reads as a diagonal jump nobody asked for.
+    #[test]
+    fn an_axis_reports_only_when_it_crosses_the_deadzone() {
+        let mut ax = AxisState { held: None };
+        assert_eq!(
+            ax.update(0.2, Action::Left, Action::Right),
+            None,
+            "inside the deadzone"
+        );
+        assert_eq!(
+            ax.update(0.9, Action::Left, Action::Right),
+            Some(Action::Right)
+        );
+        assert_eq!(
+            ax.update(0.95, Action::Left, Action::Right),
+            None,
+            "already held"
+        );
+        assert_eq!(
+            ax.update(0.0, Action::Left, Action::Right),
+            None,
+            "released"
+        );
+        assert_eq!(
+            ax.update(-0.9, Action::Left, Action::Right),
+            Some(Action::Left)
+        );
     }
 }

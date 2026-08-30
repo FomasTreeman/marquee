@@ -111,26 +111,24 @@ describe('once armed', () => {
     }
   })
 
-  it('pages on the triggers as well as the bumpers', () => {
-    // Indices 6 and 7 are the analogue triggers. Leaving them unmapped meant
-    // pulling a trigger did nothing, and "the triggers do not work" is
-    // indistinguishable from "the controller does not work" when you are the
-    // one holding it.
-    pads = [press(fakePad(), 6)]
+  it('pages on the bumpers', () => {
+    pads = [press(fakePad(), 4)]
     tick()
     expect(events.map((e) => e.action)).toEqual(['lb'])
     events = []
     pads = [fakePad()]; tick()
-    pads = [press(fakePad(), 7)]; tick()
+    pads = [press(fakePad(), 5)]; tick()
     expect(events.map((e) => e.action)).toEqual(['rb'])
   })
 
-  it('does not fire a trigger twice when the bumper is held too', () => {
-    // Both map to the same action, and the pressed set is a Set, so holding
-    // L1 and L2 together is one press rather than two.
-    pads = [press(fakePad(), 4, 6)]
-    tick()
-    expect(events.filter((e) => e.action === 'lb')).toHaveLength(1)
+  it('leaves the analogue triggers alone', () => {
+    // Indices 6 and 7. They rest at a non-zero value on some pads and are
+    // reported as axes as well as buttons, so giving them the bumpers' action
+    // made the two interfere -- a page that sometimes happened and sometimes
+    // did not, for no reason visible from the sofa.
+    pads = [press(fakePad(), 6, 7)]
+    tick(); tick()
+    expect(events).toEqual([])
   })
 
   it('ignores a pad with no standard mapping rather than guessing', () => {
