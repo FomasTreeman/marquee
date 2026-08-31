@@ -76,11 +76,29 @@ fn launch_game(
     // A game that dies on startup is reported after the fact, because spawn()
     // succeeding says nothing about whether the thing actually ran.
     let title = game.title.clone();
-    let notify = move |detail: String| {
-        let _ = app.emit(
-            "launch-failed",
-            serde_json::json!({ "title": title, "detail": detail }),
-        );
+    let notify = {
+        // The window may already be minimised for this launch (see below), and
+        // a failure toast behind a minimised window is never seen -- bring it
+        // back before telling the interface.
+        let window = window.clone();
+        move |detail: String| {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+            let _ = app.emit(
+                "launch-failed",
+                serde_json::json!({ "title": title, "detail": detail }),
+            );
+        }
+    };
+    // Marquee minimised itself to get out of the game's way; nothing else
+    // restores it, so quitting the game left it minimised behind the desktop
+    // forever instead of coming back the way a console does (#63).
+    let on_exit = {
+        let window = window.clone();
+        move || {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
     };
     // Checked before launching so the interface can say how long this will
     // take. A cold Steam is several seconds; a warm one is instant, and telling
@@ -101,7 +119,7 @@ fn launch_game(
         .map(|v| v != "0")
         .unwrap_or(true);
 
-    match run::start(&game, notify) {
+    match run::start(&game, notify, on_exit) {
         Ok(run::Launch::Uri(uri)) => {
             if minimise {
                 let _ = window.minimize();

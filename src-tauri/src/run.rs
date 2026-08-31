@@ -210,12 +210,18 @@ fn ensure_steam_ready() -> bool {
 pub fn start(
     game: &Game,
     on_failure: impl FnOnce(String) + Send + 'static,
+    on_exit: impl FnOnce() + Send + 'static,
 ) -> Result<Launch, String> {
     let plan = plan(game)?;
     match &plan {
         Launch::Uri(uri) => {
             let uri = uri.clone();
             let title = game.title.clone();
+            // `on_exit` is not called from this arm: as the module doc says,
+            // the game belongs to Steam once the URI is handed off, and there
+            // is no owned child here to wait on. Steam-launched games are
+            // outside the scope of #63 for that reason.
+            //
             // Off the interface's thread: waiting for a cold Steam takes
             // seconds, and the grid must stay responsive while it happens.
             std::thread::spawn(move || {
@@ -271,14 +277,26 @@ pub fn start(
                     Ok(Some(_)) => {
                         // Exited cleanly and at once. A launcher stub handing
                         // off to a store client looks exactly like this, so it
-                        // is not treated as a failure.
+                        // is not treated as a failure -- and there is no real
+                        // session here to report the end of, since whatever
+                        // this handed off to is not a process we own.
                         log_info!(
                             "run",
                             "{title} exited immediately, cleanly -- probably a launcher stub"
                         );
+                        return;
                     }
                     _ => log_info!("run", "{title} is running"),
                 }
+
+                // Still alive past the grace period: this is a real, owned
+                // session, and Marquee minimised the window for it. Waiting
+                // here for the real exit -- not just the startup check above
+                // -- is what makes "quit to desktop" bring Marquee back
+                // instead of leaving it minimised until the next Alt-Tab (#63).
+                let _ = child.wait();
+                log_info!("run", "{title} session ended");
+                on_exit();
             });
         }
     }
@@ -383,9 +401,13 @@ mod tests {
         if cfg!(windows) {
             return;
         }
-        start(&g, move |detail| {
-            let _ = tx.send(detail);
-        })
+        start(
+            &g,
+            move |detail| {
+                let _ = tx.send(detail);
+            },
+            || {},
+        )
         .unwrap();
         let reported = rx.recv_timeout(std::time::Duration::from_secs(4));
         assert!(reported.is_ok(), "a failed launch should be reported");
@@ -393,24 +415,81 @@ mod tests {
     }
 
     /// A launcher stub that hands off to a store client exits cleanly and at
-    /// once, and must not be reported as a failure.
+    /// once, and must not be reported as a failure. Nor is it a session
+    /// ending, since whatever it handed off to is not a process we own.
     #[test]
     fn a_clean_immediate_exit_is_not_a_failure() {
         if cfg!(windows) || !std::path::Path::new("/usr/bin/true").exists() {
             return;
         }
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (fail_tx, fail_rx) = std::sync::mpsc::channel();
+        let (exit_tx, exit_rx) = std::sync::mpsc::channel();
         let mut g = steam_game("1");
         g.provider = "manual".into();
         g.install_dir = Some(PathBuf::from("/usr/bin/true"));
-        start(&g, move |detail| {
-            let _ = tx.send(detail);
-        })
+        start(
+            &g,
+            move |detail| {
+                let _ = fail_tx.send(detail);
+            },
+            move || {
+                let _ = exit_tx.send(());
+            },
+        )
         .unwrap();
         assert!(
-            rx.recv_timeout(std::time::Duration::from_secs(3)).is_err(),
+            fail_rx.recv_timeout(std::time::Duration::from_secs(3)).is_err(),
             "a clean exit must not be reported as a failure"
         );
+        assert!(
+            exit_rx.try_recv().is_err(),
+            "a launcher stub is not a session we own the end of"
+        );
+    }
+
+    /// A process that survives the startup grace period and then exits on its
+    /// own is a real session ending -- "quit to desktop" -- and the caller
+    /// must be told, because the window that was minimised for the game needs
+    /// to come back. Before this, `start` stopped watching once the grace
+    /// period's single `try_wait` came back empty, so nothing ever fired and
+    /// Marquee stayed minimised after the game closed (#63).
+    #[test]
+    fn a_process_that_outlives_the_grace_period_reports_its_end() {
+        if cfg!(windows) {
+            return; // the shebang script below is a unix mechanism
+        }
+        use std::os::unix::fs::PermissionsExt;
+
+        let script = std::env::temp_dir().join(format!(
+            "marquee-test-session-{}-{}.sh",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("t")
+        ));
+        std::fs::write(&script, "#!/bin/sh\nsleep 1\n").expect("write test script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod test script");
+
+        let (fail_tx, fail_rx) = std::sync::mpsc::channel();
+        let (exit_tx, exit_rx) = std::sync::mpsc::channel();
+        let mut g = steam_game("1");
+        g.provider = "manual".into();
+        g.install_dir = Some(script.clone());
+
+        start(
+            &g,
+            move |detail| {
+                let _ = fail_tx.send(detail);
+            },
+            move || {
+                let _ = exit_tx.send(());
+            },
+        )
+        .unwrap();
+
+        let ended = exit_rx.recv_timeout(std::time::Duration::from_secs(4));
+        let _ = std::fs::remove_file(&script);
+        assert!(ended.is_ok(), "a session that ends on its own must be reported");
+        assert!(fail_rx.try_recv().is_err(), "a clean session is not a failure");
     }
 
     #[test]
