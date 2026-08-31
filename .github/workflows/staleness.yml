@@ -91,7 +91,8 @@ jobs:
             exit 1
           fi
 
-          # 2. A branch old enough to be undoing somebody else's work. The line
+          # 2. A branch old enough to be undoing somebody else's work, reported
+          #    rather than refused -- see below. The line
           #    counts above cannot answer this: in the two-dot diff every line
           #    $BASE gained is a deletion and every line it lost is an addition,
           #    so the ratio in rule 1 washes out -- the eight-commits-behind
@@ -114,13 +115,23 @@ jobs:
           fi
           echo "$overlap file(s) changed on both sides, $at_risk lines of $BASE at risk."
 
+          #    It says so rather than refusing, and that is deliberate. The
+          #    ruleset on this repository has strict required status checks --
+          #    `strict_required_status_checks_policy: true` -- so a branch that
+          #    is behind physically cannot merge until it is updated. Failing
+          #    here would be a second lock on a door that is already locked,
+          #    and the only thing a redundant gate can add is a red cross on a
+          #    pull request that was never going to merge anyway. Red crosses
+          #    that turn out to be nothing are how people learn to skim them.
+          #
+          #    So: the header's own position, kept. The ruleset is the guard.
+          #    This says it early, where somebody can act on it.
           if [ "$behind" -gt 0 ] && [ "$at_risk" -gt 200 ]; then
-            echo "::error::This branch is $behind commits behind $BASE and edits $overlap file(s)"
-            echo "::error::that $BASE has changed by $at_risk lines since the branch was cut."
-            echo "::error::Merging it as-is is how that work gets quietly reverted. Rebase, or"
-            echo "::error::merge $BASE into the branch, then look at the diff again:"
-            sed 's/^/::error::  /' /tmp/overlap.txt
-            exit 1
+            echo "::warning::This branch is $behind commits behind $BASE and edits $overlap file(s)"
+            echo "::warning::that $BASE has changed by $at_risk lines since the branch was cut."
+            echo "::warning::Update it before reviewing: merging as-is is how that work gets"
+            echo "::warning::quietly reverted, and the ruleset will refuse the merge regardless."
+            sed 's/^/::warning::  /' /tmp/overlap.txt
           fi
 
           # Behind is not fatal on its own -- the ruleset requires the branch to
