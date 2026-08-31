@@ -75,6 +75,18 @@ Progress is ticked off in the issue thread as it goes.
 You can keep talking to it. `@claude` in a review comment on the PR, and it
 picks up from there with the review as context.
 
+**If CI goes red on that pull request, it fixes it without being asked.**
+`.github/workflows/ci-repair.yml` watches CI finish, and on a failing run for a
+`claude/` branch with an open pull request it starts a run whose brief is the
+failing log. Three attempts, each announced in a comment on the pull request;
+after the third it says so, labels the pull request `needs-decision` and stops,
+because an agent that has not fixed something in three goes will not find it on
+the ninth.
+
+It skips a failure whose commit has already been superseded, and it does not
+touch pull requests from forks — that restriction is load-bearing, and the
+header of the file explains why.
+
 ## Reviewing
 
 CI runs on all three platforms with warnings as errors, plus the silence check,
