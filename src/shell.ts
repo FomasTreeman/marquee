@@ -16,6 +16,7 @@ import type { Device } from './input'
 export interface Shell {
   hero: HTMLElement
   presets: HTMLElement
+  searchButton: HTMLButtonElement
   query: HTMLInputElement
   backdropA: HTMLImageElement
   backdropB: HTMLImageElement
@@ -81,6 +82,16 @@ export function createShell(root: HTMLElement): Shell {
   const brand = el('div', 'brand', topbar)
   brand.textContent = 'Library'
   const presets = el('nav', 'presets', topbar)
+
+  // Sat beside the preset tabs rather than buried in the footer legend or a
+  // pad-only menu, because that is where a 215-game library is actually
+  // scanned for a way in. It only opens the field below -- the box itself
+  // stays out of the bar until there is something in it, so this is the one
+  // permanent trace of search rather than a second permanent field.
+  const searchButton = el('button', 'search-button', topbar)
+  searchButton.type = 'button'
+  searchButton.setAttribute('aria-label', 'Search')
+
   el('div', 'spacer', topbar)
 
   // Hidden until there is a query. A search box occupying the top bar
@@ -117,7 +128,7 @@ export function createShell(root: HTMLElement): Shell {
   tick()
   setInterval(tick, 20_000)
 
-  return { hero, presets, query, backdropA, backdropB, heroLogo, heroTitle, heroMeta, gridViewport, count, clock, hints }
+  return { hero, presets, searchButton, query, backdropA, backdropB, heroLogo, heroTitle, heroMeta, gridViewport, count, clock, hints }
 }
 
 export interface Hint {

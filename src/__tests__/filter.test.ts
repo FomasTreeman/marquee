@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { apply, compare, describe as describeFilter, matches, sortKey } from '../filter'
+import { apply, compare, describe as describeFilter, matches, searchLabel, sortKey } from '../filter'
 import type { Game } from '../library'
 
 function game(over: Partial<Game> = {}): Game {
@@ -151,5 +151,25 @@ describe('searching beyond the title', () => {
   it('still matches the title with no metadata at all', () => {
     expect(matches(game({ title: 'Hades' }), 'all', 'hades', undefined)).toBe(true)
     expect(matches(game({ title: 'Hades' }), 'all', 'hades', {})).toBe(true)
+  })
+})
+
+/**
+ * The label on the permanent search entry in the top bar. It is the only
+ * always-visible sign that a query is active -- see shell.ts -- so it has to
+ * name the query rather than just say "Search" once one exists.
+ */
+describe('searchLabel', () => {
+  it('invites a query when there is none', () => {
+    expect(searchLabel('')).toBe('Search')
+    expect(searchLabel('   ')).toBe('Search')
+  })
+
+  it('shows the query once one is typed', () => {
+    expect(searchLabel('halo')).toBe('“halo”')
+  })
+
+  it('trims the query rather than showing trailing whitespace', () => {
+    expect(searchLabel('  hades  ')).toBe('“hades”')
   })
 })
