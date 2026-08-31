@@ -34,31 +34,41 @@ round: a board that disagrees with the labels is a board nobody trusts.
 **Setting it up** — one command, then two clicks:
 
 ```bash
-gh auth refresh -s project        # your token cannot see Projects yet
+gh auth refresh -s project
 gh project create --owner FomasTreeman --title Marquee
 ```
 
-Or make it in the browser: **your profile → Projects → New project → Board**.
+The board needs six Status options: `Todo (Human)`, `Todo`, `In Progress`,
+`Needs Decision`, `In Review`, `Done`. If one is missing the automation fails
+loudly, naming the ones your board does have.
 
-**Add the three Status options the default board does not have.** Project →
-Settings → Fields → Status. It ships with `Todo`, `In Progress` and `Done`;
-add **`In Review`**, **`Needs Decision`** and **`Todo (Human)`**. Capitals
-matter — the automation throws with the list of names your board actually has
-if one does not match, so a typo tells you what it is rather than quietly
-doing nothing.
+**`PROJECT_TOKEN`** — a fine-grained PAT with **Projects: read and write** and
+**Issues: read and write**. The default `GITHUB_TOKEN` cannot reach a
+user-level Projects board at all.
 
-Then **⋯ → Settings → Workflows** and switch on the three built-in ones:
+### One thing owns the board
 
-| Workflow | What it does |
-|---|---|
-| *Item added to project* → Todo | new issues land in the first column |
-| *Item closed* → Done | a merged fix leaves the board |
-| *Pull request merged* → Done | same, from the PR side |
+`.github/workflows/board.yml`, and the rules in
+`.github/scripts/board.mjs`. It reads what is *true* about an issue — its
+state, its linked pull requests, whether their checks pass — and writes the
+label and the card in the same run.
 
-Finally **Settings → Manage access → link the `marquee` repository**, so issues
-land on it automatically.
+That shape matters. Three workflows used to share this job and chain through
+label events, which does not work: **GitHub will not run a workflow off an
+event that `GITHUB_TOKEN` caused**. A label written by one was invisible to the
+next, the card never moved, and nothing failed anywhere. Only the one status
+that happened to be set by an action carrying its own token ever worked.
 
-The labels do the rest, and Claude maintains them itself — see below.
+Nothing here depends on a second trigger, so nothing can be suppressed. And it
+runs on an hourly sweep as well as on events, so a dropped event is a delay
+rather than a permanently wrong board.
+
+**Only issues are cards.** A pull request speaks for the issues it closes and
+is reachable from them. Putting both on the board meant thirty-four pull
+request cards beside thirteen issues, which is a board nobody reads.
+
+The rules are pure and tested without a network — `node
+.github/scripts/board.test.mjs`, and they run in `pnpm test` and in CI.
 
 ### The two tokens, and exactly what each needs
 
