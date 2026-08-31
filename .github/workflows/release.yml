@@ -43,6 +43,7 @@ on:
       - 'docs/**'
       - '.github/**'
       - 'design/**'
+      - 'tools/**'
       - LICENSE
   workflow_dispatch:
     inputs:
