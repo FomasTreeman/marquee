@@ -15,6 +15,12 @@ buttons.
   │        │  │              │  │ ← YOUR     │  │ ← YOUR TURN    │  │      │
   │        │  │              │  │    TURN    │  │                │  │      │
   └────────┘  └──────────────┘  └────────────┘  └────────────────┘  └──────┘
+
+  ┌────────────────┐
+  │  Todo (Human)  │  a no-ai issue nobody has picked up yet -- it still
+  ├────────────────┤  moves to In Review / Needs Decision / Done like any
+  │     no-ai      │  other, once a human is actually working it
+  └────────────────┘
 ```
 
 Two columns want you. Everything else runs on its own.
@@ -28,30 +34,125 @@ round: a board that disagrees with the labels is a board nobody trusts.
 **Setting it up** — one command, then two clicks:
 
 ```bash
-gh auth refresh -s project        # your token cannot see Projects yet
+gh auth refresh -s project
 gh project create --owner FomasTreeman --title Marquee
 ```
 
-Or make it in the browser: **your profile → Projects → New project → Board**.
+The board needs six Status options: `Todo (Human)`, `Todo`, `In Progress`,
+`Needs Decision`, `In Review`, `Done`. If one is missing the automation fails
+loudly, naming the ones your board does have.
 
-**Add the two Status options the default board does not have.** Project →
-Settings → Fields → Status. It ships with `Todo`, `In Progress` and `Done`;
-add **`In Review`** and **`Needs Decision`**. Capitals matter — the automation
-throws with the list of names your board actually has if one does not match, so
-a typo tells you what it is rather than quietly doing nothing.
+**`PROJECT_TOKEN`** — a fine-grained PAT with **Projects: read and write** and
+**Issues: read and write**. The default `GITHUB_TOKEN` cannot reach a
+user-level Projects board at all.
 
-Then **⋯ → Settings → Workflows** and switch on the three built-in ones:
+### The two tokens, and exactly what each needs
 
-| Workflow | What it does |
+**`PROJECT_TOKEN` has to be a classic token.** A user-owned Projects board has
+no fine-grained permission — that exists for *organisation* projects only — so
+there is no fine-grained equivalent to grant.
+
+Classic tokens are coarse, so it is kept to one job:
+
+| Token | Kind | Scope / permissions | Does |
+|---|---|---|---|
+| **`PROJECT_TOKEN`** | classic | **`project`** — and nothing else | moves cards on the board |
+| *(labels & issues)* | none needed | the workflow's own `GITHUB_TOKEN` | reads issues, writes labels |
+| **`CLAUDE_WORKFLOW_TOKEN`** | fine-grained | see below | what the agent acts as |
+
+Not adding `repo` to the classic token is the point. With it, a token whose job
+is moving a card would carry write access to every repository on the account.
+Without it, the board token can reach the board and nothing else, and the
+repository half runs on `GITHUB_TOKEN` — which cannot see the board but does
+not need to.
+
+**`CLAUDE_WORKFLOW_TOKEN`** — fine-grained, repository permissions:
+
+| Permission | Why |
 |---|---|
-| *Item added to project* → Todo | new issues land in the first column |
-| *Item closed* → Done | a merged fix leaves the board |
-| *Pull request merged* → Done | same, from the PR side |
+| **Contents: Read and write** | push branches and commits |
+| **Pull requests: Read and write** | open PRs, comment, read diffs |
+| **Issues: Read and write** | comment, label, read the thread |
+| **Actions: Read** | read the failing run it is repairing |
+| **Workflows: Read and write** | *easy to miss* — a commit touching anything under `.github/workflows/` is rejected without it, and the agent has written workflow files more than once |
 
-Finally **Settings → Manage access → link the `marquee` repository**, so issues
-land on it automatically.
+Two things worth knowing:
 
-The labels do the rest, and Claude maintains them itself — see below.
+- **It is why anything cascades.** GitHub will not run a workflow off an event
+  `GITHUB_TOKEN` caused. Everything falls back to `GITHUB_TOKEN` when this is
+  unset, which mostly works and silently does not trigger anything downstream.
+- **Nothing needs to bypass the branch ruleset.** The agent pushes to branches
+  and opens pull requests; it never writes to `main`.
+
+### One thing owns the board
+
+`.github/workflows/board.yml`, and the rules in
+`.github/scripts/board.mjs`. It reads what is *true* about an issue — its
+state, its linked pull requests, whether their checks pass — and writes the
+label and the card in the same run.
+
+That shape matters. Three workflows used to share this job and chain through
+label events, which does not work: **GitHub will not run a workflow off an
+event that `GITHUB_TOKEN` caused**. A label written by one was invisible to the
+next, the card never moved, and nothing failed anywhere. Only the one status
+that happened to be set by an action carrying its own token ever worked.
+
+Nothing here depends on a second trigger, so nothing can be suppressed. And it
+runs on an hourly sweep as well as on events, so a dropped event is a delay
+rather than a permanently wrong board.
+
+**Only issues are cards.** A pull request speaks for the issues it closes and
+is reachable from them. Putting both on the board meant thirty-four pull
+request cards beside thirteen issues, which is a board nobody reads.
+
+The rules are pure and tested without a network — `node
+.github/scripts/board.test.mjs`, and they run in `pnpm test` and in CI.
+
+### The two tokens, and exactly what each needs
+
+Both are **fine-grained** personal access tokens. A classic token would work
+but grants `repo`, which is everything in every repository you can reach — far
+more authority than either of these jobs needs.
+
+**`PROJECT_TOKEN`** — moves cards and labels. Used by `board.yml`.
+
+| Where | Permission | Why |
+|---|---|---|
+| Account permissions | **Projects: Read and write** | a user-level board is an *account* resource, not a repository one |
+| Repository | **Issues: Read and write** | add and remove `in-review`, `ci-failing`, `claude-working` |
+| Repository | **Pull requests: Read** | reads a linked PR's state and check results |
+| Repository | Metadata: Read | forced on every fine-grained token |
+
+**`CLAUDE_WORKFLOW_TOKEN`** — what the agent acts as. Used by `claude.yml` and
+`ci-repair.yml`.
+
+| Where | Permission | Why |
+|---|---|---|
+| Repository | **Contents: Read and write** | push branches and commits |
+| Repository | **Pull requests: Read and write** | open PRs, comment, read diffs |
+| Repository | **Issues: Read and write** | comment, label, read the thread |
+| Repository | **Actions: Read** | read the failing run it is repairing |
+| Repository | **Workflows: Read and write** | *easy to miss* — a commit touching anything under `.github/workflows/` is rejected without it, and the agent has written workflow files more than once |
+
+Two things worth knowing about that second token:
+
+- **It is why anything happens at all after a label changes.** GitHub will not
+  run a workflow off an event `GITHUB_TOKEN` caused. Everything falls back to
+  `GITHUB_TOKEN` if this is unset, which mostly works and silently does not
+  cascade.
+- **Nothing needs to bypass the branch ruleset.** The agent pushes to branches
+  and opens pull requests; it never writes to `main`.
+
+### Proving it rather than guessing
+
+**Actions → Token check → Run workflow.**
+
+It tries each operation for real and prints a table saying which permission is
+missing when one fails. A token short of one permission does not fail loudly —
+the board moves cards but never touches a label, or the agent opens a pull
+request but cannot comment — and each of those looks like a different bug.
+
+Read-only except for one label added and immediately removed.
 
 ## 1. You file an issue
 
@@ -85,7 +186,9 @@ on, or to send one back round after a review:
 - write **`@claude`** in a comment, or in a pull request review
 
 And to keep it off one: the **`no-ai`** label. Some issues are notes to self,
-and a note to self does not need a patch.
+and a note to self does not need a patch. A `no-ai` issue sits in **Todo
+(Human)** rather than plain `Todo`, so a pass over the board doesn't read it
+as something waiting for Claude that just hasn't started yet.
 
 ## 3. Claude works
 
@@ -242,7 +345,7 @@ running, so a release that fails its signature check will not install.
 | `enhancement` | minor release on merge | — |
 | `breaking` | major release on merge | — |
 | `no-release` | merge without releasing | — |
-| `no-ai` | keep Claude off this issue | — |
+| `no-ai` | keep Claude off this issue | **yours** — sits in *Todo (Human)* |
 | `wont-fix-yet` | real, deliberately parked | — |
 
 ## Things worth knowing
@@ -278,5 +381,6 @@ mentions it or opens a separate issue, so nothing becomes un-revertable.
 | No release after a merge | the PR was labelled `no-release`, or the commit was the version bump itself |
 | Release has only source archives | the build job failed — open the run. The release is made by the build, not by the tag |
 | App never offers an update | no `latest.json` on the release, so either `createUpdaterArtifacts` is off or the build did not finish |
-| Cards never move | `PROJECT_TOKEN` missing, or `PROJECT_NUMBER` is not your board's number (check the URL) |
+| Cards never move at all | `PROJECT_TOKEN` missing, or `PROJECT_NUMBER` is not your board's number (check the URL) |
+| Cards reach Todo and Done but never In Progress, In Review or Needs Decision | `CLAUDE_WORKFLOW_TOKEN` is not set. Without it, `claude.yml` labels the issue with `secrets.GITHUB_TOKEN`, and GitHub's loop guard means a workflow run never fires off an event that `GITHUB_TOKEN` itself caused — so `project-automation.yml` never sees the label change. Every run still shows green, because nothing in that path actually fails |
 | Automation fails naming a Status | your board has no option with that exact name — the error lists the ones it does have |

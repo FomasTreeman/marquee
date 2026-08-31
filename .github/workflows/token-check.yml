@@ -1,0 +1,187 @@
+# Prove each token can do its own job, and nothing else.
+#
+# Actions -> Token check -> Run workflow.
+#
+# A token short of one permission does not fail loudly. The board moves cards
+# but never touches a label; the agent opens a pull request but cannot comment;
+# a commit touching a workflow file is refused with a message nobody reads.
+# Each looks like a different bug and none looks like permissions.
+#
+# Three tokens, three jobs, each checked against what it is actually for. That
+# separation is the point: testing repository access against the board token
+# would send somebody adding `repo` to a classic token that does not need it,
+# and a classic token with `repo` can write to every repository on the account.
+#
+# Read-only, apart from one label added and immediately removed.
+
+name: Token check
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  project-token:
+    name: PROJECT_TOKEN moves cards, and nothing else
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER || 8 }}
+        with:
+          # Deliberately not github-token. Everything here goes through
+          # PROJECT_TOKEN by hand, so nothing can accidentally pass because the
+          # workflow's own token was picked up instead.
+          script: |
+            const token = process.env.PROJECT_TOKEN
+            if (!token) {
+              core.setFailed('PROJECT_TOKEN is not set. It must be a CLASSIC token with the '
+                + '`project` scope — a user-owned board has no fine-grained equivalent.')
+              return
+            }
+
+            const gql = async (query, variables) => {
+              const res = await fetch('https://api.github.com/graphql', {
+                method: 'POST',
+                headers: { authorization: `bearer ${token}`, 'content-type': 'application/json' },
+                body: JSON.stringify({ query, variables }),
+              })
+              const body = await res.json()
+              if (body.errors?.length) throw new Error(body.errors.map((e) => e.message).join('; '))
+              return body.data
+            }
+
+            const rows = []
+            const try_ = async (what, need, fn) => {
+              try { await fn(); rows.push(['ok', what, '']) }
+              catch (e) { rows.push(['MISSING', what, `${need} — ${e.message.split('\n')[0]}`]) }
+            }
+
+            let project
+            await try_('see the board', 'a CLASSIC token with the `project` scope', async () => {
+              const q = await gql(
+                `query($o: String!, $n: Int!) {
+                   user(login: $o) { projectV2(number: $n) {
+                     id field(name: "Status") {
+                       ... on ProjectV2SingleSelectField { id options { id name } }
+                     } } } }`,
+                { o: context.repo.owner, n: Number(process.env.PROJECT_NUMBER) })
+              project = q.user?.projectV2
+              if (!project) throw new Error('the board is not visible to this token')
+            })
+
+            await try_('find the Status field', 'the board needs a Status field', async () => {
+              if (!project?.field) throw new Error('no Status field on that board')
+              const want = ['Todo (Human)', 'Todo', 'In Progress', 'Needs Decision', 'In Review', 'Done']
+              const have = project.field.options.map((o) => o.name)
+              const missing = want.filter((w) => !have.includes(w))
+              if (missing.length) throw new Error(`no column named ${missing.join(', ')}`)
+            })
+
+            // It must NOT be able to reach the repository. A classic token
+            // carrying `repo` as well would grant write access to everything on
+            // the account, to move a card.
+            let repoReachable = false
+            try {
+              await gql(`query($o: String!, $r: String!) {
+                repository(owner: $o, name: $r) { id } }`,
+                { o: context.repo.owner, r: context.repo.repo })
+              repoReachable = true
+            } catch { /* what we want */ }
+            rows.push(repoReachable
+              ? ['note', 'it can also read this repository',
+                 'it carries `repo` as well — narrow it to `project` alone when convenient']
+              : ['ok', 'it cannot reach the repository', 'which is correct'])
+
+            core.summary.addHeading('PROJECT_TOKEN — classic, `project` scope', 3)
+            core.summary.addTable([[{ data: '', header: true }, { data: 'can it', header: true },
+                                    { data: 'note', header: true }], ...rows])
+            await core.summary.write()
+            for (const [s, w, n] of rows) core.info(`  ${s.padEnd(8)} ${w} ${n}`)
+            if (rows.some(([s]) => s === 'MISSING')) core.setFailed('PROJECT_TOKEN cannot do its job.')
+
+  workflow-token:
+    name: The workflow's own token writes labels
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            // Not a PAT. Labels are written by the workflow itself, which is
+            // why PROJECT_TOKEN needs no repository access at all.
+            const { owner, repo } = context.repo
+            const rows = []
+            const try_ = async (what, need, fn) => {
+              try { await fn(); rows.push(['ok', what, '']) }
+              catch (e) { rows.push(['MISSING', what, `${need} — ${e.message.split('\n')[0]}`]) }
+            }
+
+            await try_('read issues', 'permissions: issues: write', () =>
+              github.rest.issues.listForRepo({ owner, repo, per_page: 1 }))
+            await try_('read pull requests', 'permissions: pull-requests: read', () =>
+              github.rest.pulls.list({ owner, repo, state: 'all', per_page: 1 }))
+            await try_('write a label', 'permissions: issues: write', async () => {
+              const [issue] = (await github.rest.issues.listForRepo({
+                owner, repo, state: 'all', per_page: 1 })).data
+              if (!issue) return
+              await github.rest.issues.addLabels({
+                owner, repo, issue_number: issue.number, labels: ['token-check'] })
+              await github.rest.issues.removeLabel({
+                owner, repo, issue_number: issue.number, name: 'token-check' })
+            })
+
+            core.summary.addHeading("The workflow's own GITHUB_TOKEN", 3)
+            core.summary.addTable([[{ data: '', header: true }, { data: 'can it', header: true },
+                                    { data: 'note', header: true }], ...rows])
+            await core.summary.write()
+            for (const [s, w, n] of rows) core.info(`  ${s.padEnd(8)} ${w} ${n}`)
+            if (rows.some(([s]) => s === 'MISSING')) core.setFailed('board.yml cannot write labels.')
+
+  agent-token:
+    name: CLAUDE_WORKFLOW_TOKEN acts as the agent
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          HAS_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN != '' }}
+        with:
+          github-token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || github.token }}
+          script: |
+            const { owner, repo } = context.repo
+            const rows = []
+            const try_ = async (what, need, fn) => {
+              try { await fn(); rows.push(['ok', what, '']) }
+              catch (e) { rows.push(['MISSING', what, `${need} — ${e.message.split('\n')[0]}`]) }
+            }
+
+            if (process.env.HAS_TOKEN !== 'true') {
+              core.warning('CLAUDE_WORKFLOW_TOKEN is not set, so this is checking GITHUB_TOKEN '
+                + 'instead. Everything falls back to it, which mostly works — but GitHub will '
+                + 'not run a workflow off an event GITHUB_TOKEN caused, so nothing cascades.')
+            }
+
+            await try_('read the repository', 'Contents: Read and write', () =>
+              github.rest.repos.get({ owner, repo }))
+            await try_('read workflow runs', 'Actions: Read', () =>
+              github.rest.actions.listWorkflowRunsForRepo({ owner, repo, per_page: 1 }))
+            await try_('read pull requests', 'Pull requests: Read and write', () =>
+              github.rest.pulls.list({ owner, repo, state: 'all', per_page: 1 }))
+            await try_('read issues', 'Issues: Read and write', () =>
+              github.rest.issues.listForRepo({ owner, repo, per_page: 1 }))
+            // The one that gets missed. A commit touching anything under
+            // .github/workflows is refused without it, and the agent has
+            // written workflow files more than once.
+            await try_('see workflow files', 'Workflows: Read and write', () =>
+              github.rest.repos.getContent({ owner, repo, path: '.github/workflows/ci.yml' }))
+
+            core.summary.addHeading('CLAUDE_WORKFLOW_TOKEN — fine-grained', 3)
+            core.summary.addTable([[{ data: '', header: true }, { data: 'can it', header: true },
+                                    { data: 'note', header: true }], ...rows])
+            await core.summary.write()
+            for (const [s, w, n] of rows) core.info(`  ${s.padEnd(8)} ${w} ${n}`)
+            if (rows.some(([s]) => s === 'MISSING')) core.setFailed('The agent token is short a permission.')

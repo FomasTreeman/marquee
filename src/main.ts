@@ -571,7 +571,7 @@ async function main(): Promise<void> {
     if (e.key === 'Enter') shell.query.blur()
   })
 
-  const picker = createPicker()
+  const picker = createPicker(() => osk.close())
 
   /**
    * Re-run the invariants after a surface appears.
@@ -706,7 +706,7 @@ async function main(): Promise<void> {
     // library rebuilds them all with the same URLs, which the webview will now
     // re-request because the cache behind them is empty.
     void reloadLibrary()
-  })
+  }, () => osk.close())
 
   const detail = createDetail({
     onPlay: () => void play_(grid.focused),
@@ -717,6 +717,7 @@ async function main(): Promise<void> {
     // A closure rather than a conditional hook because padConnected is read
     // later in startup than this.
     onTextField: (field) => { if (padConnected) osk.attach(field) },
+    onTextFieldClosed: () => osk.close(),
   })
 
   // Steam writes playtime into localconfig itself, so returning to the window

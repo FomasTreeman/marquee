@@ -98,7 +98,9 @@ def check(path: pathlib.Path) -> None:
                 problems.append(f"{at}: a Windows `run` step should name its shell")
             # A local action (./path) or a container (docker://) has no tag to
             # move, so there is nothing to pin.
-            if has_uses and not step["uses"].startswith(("./", "docker://")):
+            if has_uses and not isinstance(step["uses"], str):
+                problems.append(f"{at}: `uses` is empty — a failed substitution, most likely")
+            elif has_uses and not step["uses"].startswith(("./", "docker://")):
                 if not PINNED.match(step["uses"]):
                     unpinned.append(f"{at}: {step['uses']}")
             for key in step:

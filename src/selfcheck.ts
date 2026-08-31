@@ -415,6 +415,16 @@ export function runSelfCheck(): Check[] {
     })
     out.push(check('keyboard does not cover the field it drives', covered.length === 0,
       `${covered.length} field(s) overlapped`))
+
+    // The keyboard is only ever attached from inside one of these screens, so
+    // it has no reason to be up once all of them have closed. It used to stay
+    // up regardless -- issue #18, where adding a game left it on screen with
+    // nothing left to type into.
+    const owner = ['.settings', '.add', '.detail', '.query'].some((sel) => {
+      const el = document.querySelector<HTMLElement>(sel)
+      return !!el && !el.hidden
+    })
+    out.push(check('keyboard has an open screen to belong to', owner))
   }
 
   // --- toasts must never swallow input ---------------------------------
