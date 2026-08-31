@@ -5,11 +5,22 @@ body:
   - type: markdown
     attributes:
       value: |
-        Adding the **claude** label, or writing `@claude` in a comment, hands
-        this to Claude Code, which will open a pull request against it.
-
         The failure mode is not Claude refusing — it is Claude confidently
         fixing the wrong thing. The fields below are what stops that.
+
+  - type: dropdown
+    id: who
+    attributes:
+      label: Who should fix this
+      description: >
+        Answered here so the issue arrives already routed. An issue that
+        reaches the board with neither answer sits in a queue nobody is
+        working through, which is how a to-do list quietly becomes a graveyard.
+      options:
+        - Claude — pick it up now and open a pull request
+        - Claude — but read the thread first, there is context above
+        - Me — do not touch it
+    validations: { required: true }
 
   - type: textarea
     id: what
