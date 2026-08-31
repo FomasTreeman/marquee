@@ -46,6 +46,44 @@ loudly, naming the ones your board does have.
 **Issues: read and write**. The default `GITHUB_TOKEN` cannot reach a
 user-level Projects board at all.
 
+### The two tokens, and exactly what each needs
+
+**`PROJECT_TOKEN` has to be a classic token.** A user-owned Projects board has
+no fine-grained permission — that exists for *organisation* projects only — so
+there is no fine-grained equivalent to grant.
+
+Classic tokens are coarse, so it is kept to one job:
+
+| Token | Kind | Scope / permissions | Does |
+|---|---|---|---|
+| **`PROJECT_TOKEN`** | classic | **`project`** — and nothing else | moves cards on the board |
+| *(labels & issues)* | none needed | the workflow's own `GITHUB_TOKEN` | reads issues, writes labels |
+| **`CLAUDE_WORKFLOW_TOKEN`** | fine-grained | see below | what the agent acts as |
+
+Not adding `repo` to the classic token is the point. With it, a token whose job
+is moving a card would carry write access to every repository on the account.
+Without it, the board token can reach the board and nothing else, and the
+repository half runs on `GITHUB_TOKEN` — which cannot see the board but does
+not need to.
+
+**`CLAUDE_WORKFLOW_TOKEN`** — fine-grained, repository permissions:
+
+| Permission | Why |
+|---|---|
+| **Contents: Read and write** | push branches and commits |
+| **Pull requests: Read and write** | open PRs, comment, read diffs |
+| **Issues: Read and write** | comment, label, read the thread |
+| **Actions: Read** | read the failing run it is repairing |
+| **Workflows: Read and write** | *easy to miss* — a commit touching anything under `.github/workflows/` is rejected without it, and the agent has written workflow files more than once |
+
+Two things worth knowing:
+
+- **It is why anything cascades.** GitHub will not run a workflow off an event
+  `GITHUB_TOKEN` caused. Everything falls back to `GITHUB_TOKEN` when this is
+  unset, which mostly works and silently does not trigger anything downstream.
+- **Nothing needs to bypass the branch ruleset.** The agent pushes to branches
+  and opens pull requests; it never writes to `main`.
+
 ### One thing owns the board
 
 `.github/workflows/board.yml`, and the rules in

@@ -14,9 +14,21 @@
 # the same. That also means a missed event costs nothing: the sweep below puts
 # everything right within the hour regardless.
 #
-# Needs PROJECT_TOKEN -- a fine-grained PAT with Projects: read and write, and
-# Issues: read and write. The default GITHUB_TOKEN cannot reach a user-level
-# Projects board at all.
+# Two tokens, deliberately.
+#
+# A user-owned Projects board has no fine-grained token permission -- that
+# exists for organisation projects only -- so reaching one needs a **classic**
+# token with the `project` scope. Classic tokens are coarse, so this one is
+# used for the board and nothing else.
+#
+# Everything touching the repository -- reading issues, writing labels -- goes
+# through the workflow's own GITHUB_TOKEN, which cannot see the board but does
+# not need to. The alternative was a single classic token also carrying `repo`,
+# which would mean write access to every repository on the account in order to
+# add a label to this one.
+#
+#   PROJECT_TOKEN   classic PAT, `project` scope only
+#   (labels)        GITHUB_TOKEN, from the permissions block below
 
 name: Board
 
@@ -59,14 +71,18 @@ jobs:
 
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
-          github-token: ${{ secrets.PROJECT_TOKEN }}
+          # The repository token. It cannot reach the board, and the script
+          # uses PROJECT_TOKEN for that half.
+          github-token: ${{ github.token }}
           script: |
-            const { loadProject, reconcile } = await import(
+            const { loadProject, projectCaller, reconcile } = await import(
               `${process.env.GITHUB_WORKSPACE}/.github/scripts/board.mjs`)
 
             const owner = context.repo.owner
             const repo = context.repo.repo
-            const project = await loadProject(github, owner, ${{ vars.PROJECT_NUMBER || 8 }})
+            const projectApi = projectCaller(process.env.PROJECT_TOKEN)
+            const project = await loadProject(
+              projectApi, owner, Number(process.env.PROJECT_NUMBER))
 
             // Which issues this event is about. A pull request is not itself a
             // card -- it speaks for the issues it closes.
@@ -107,5 +123,8 @@ jobs:
             }
 
             for (const number of [...new Set(numbers)]) {
-              await reconcile({ github, core, owner, repo, project, number })
+              await reconcile({ github, project, projectApi, core, owner, repo, number })
             }
+        env:
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER || 8 }}
