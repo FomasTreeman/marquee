@@ -319,6 +319,19 @@ export function runSelfCheck(): Check[] {
       `${active.length} of ${pills.length}`))
   }
 
+  // --- the search entry is reachable ------------------------------------
+  // The one part of search meant to be visible at all times -- see
+  // shell.ts. A button sitting in the DOM behind the backdrop scrim or a
+  // later sibling looks identical to a working one and reads as "there is no
+  // search", which is the discoverability bug it exists to fix.
+  if (!covering) {
+    const searchButton = document.querySelector<HTMLElement>('.search-button')
+    if (searchButton) {
+      const hit = reachable(searchButton)
+      out.push(check('search button is reachable', hit.ok, hit.blocker ?? 'ok'))
+    }
+  }
+
   // --- overlays, when one is open --------------------------------------
   // Only asserted while open. An overlay is exactly the kind of surface that
   // is hard to reach and easy to break, and its buttons are the only things in

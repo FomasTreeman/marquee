@@ -30,7 +30,7 @@ import { installErrorHandlers, logInfo, logWarn, logError, renderFatal, logPath 
 import { scheduleSelfCheck } from './selfcheck'
 import { declineUpdate, scheduleUpdateCheck, updateMenuItems } from './update'
 import {
-  apply as applyFilter, describe as describeFilter,
+  apply as applyFilter, describe as describeFilter, searchLabel,
   PRESETS, SORTS, type Preset, type Sort,
 } from './filter'
 
@@ -244,6 +244,12 @@ async function main(): Promise<void> {
   }
 
   function paintPresets(): void {
+    // The label doubles as the indicator: it names the query once one exists,
+    // rather than a fixed "Search" sitting there disconnected from the state
+    // the bar is otherwise reporting via the count next to the clock.
+    shell.searchButton.textContent = searchLabel(query)
+    shell.searchButton.dataset['active'] = query.trim() ? '1' : '0'
+
     shell.presets.textContent = ''
     for (const p of PRESETS) {
       const pill = document.createElement('span')
@@ -546,6 +552,8 @@ async function main(): Promise<void> {
     // Without it this opens a field nobody can type into.
     if (padConnected) osk.attach(shell.query)
   }
+
+  shell.searchButton.onclick = openSearch
 
   shell.query.addEventListener('input', () => {
     query = shell.query.value
