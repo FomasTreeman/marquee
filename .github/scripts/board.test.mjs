@@ -8,7 +8,7 @@
  * the ones that only happen when something goes wrong, which are the ones that
  * used to leave a card lying about a thing nobody was doing.
  */
-import { CONFIG, statusFor, labelsFor } from './board.mjs'
+import { CONFIG, statusFor, labelsFor, factsFor } from './board.mjs'
 
 const S = CONFIG.status
 let failed = 0
@@ -62,6 +62,73 @@ console.log('\nrepeating a run changes nothing')
 const settled = issue({ openPr: 7, labels: ['in-review'] })
 check('already correct, so no writes', labelsFor(settled), { add: [], remove: [] })
 check('and the same column', statusFor(settled), S.inReview)
+
+// ---------------------------------------------------------------------------
+// Reading the facts. `factsFor` takes `github` as an argument precisely so it
+// can be handed a fake one, and the two bugs below were both in the shape of
+// the query rather than in the rules -- which is why the rules all passed
+// while the card sat still.
+// ---------------------------------------------------------------------------
+
+const pr = (number, over = {}) => ({
+  number, state: 'OPEN', isDraft: false,
+  commits: { nodes: [{ commit: { statusCheckRollup: { state: 'SUCCESS' } } }] },
+  ...over,
+})
+
+// A fake `github` that records the query it was given and replays a timeline.
+const fakeGithub = (nodes, spy = {}) => ({
+  graphql: async (query) => {
+    spy.query = query
+    return {
+      repository: {
+        issue: {
+          id: 'I_1', state: 'OPEN',
+          labels: { nodes: [] },
+          timelineItems: { nodes },
+        },
+      },
+    }
+  },
+})
+
+const facts = async (nodes, spy) => factsFor(fakeGithub(nodes, spy), 'o', 'r', 1)
+
+console.log('\nreading a pull request off the timeline')
+
+check('a cross-referenced pull request is found',
+  (await facts([{ source: pr(7) }])).openPr, 7)
+
+// A pull request linked through the Development sidebar rather than by being
+// mentioned raises a ConnectedEvent and nothing else. The query asked for
+// those and then only destructured `source`, which exists on
+// CrossReferencedEvent alone, so every one of them mapped to undefined and was
+// filtered away -- the issue's card never moved and nothing failed.
+check('a connected pull request is found too',
+  (await facts([{ subject: pr(7) }])).openPr, 7)
+
+check('one pull request raising both events is still one',
+  (await facts([{ source: pr(7) }, { subject: pr(7) }])).openPr, 7)
+
+check('a closed pull request is not an open one',
+  (await facts([{ source: pr(7, { state: 'CLOSED' }) }])).openPr, undefined)
+
+check('the newest open pull request wins, not the oldest',
+  (await facts([{ source: pr(7) }, { source: pr(9) }])).openPr, 9)
+
+check('a red pull request is reported failing',
+  (await facts([{ source: pr(7, {
+    commits: { nodes: [{ commit: { statusCheckRollup: { state: 'FAILURE' } } }] } }) }])).prFailing, true)
+
+check('checks still running are not a failure',
+  (await facts([{ source: pr(7, {
+    commits: { nodes: [{ commit: { statusCheckRollup: { state: 'PENDING' } } }] } }) }])).prFailing, false)
+
+// A timeline is oldest first. `first: 50` on an issue with any history returns
+// the opening chatter and drops the newest pull request off the end.
+const spy = {}
+await facts([{ source: pr(7) }], spy)
+check('the timeline is read from the newest end', /timelineItems\(last: 50/.test(spy.query), true)
 
 console.log(failed ? `\n  ${failed} failed\n` : '\n  all rules hold\n')
 process.exit(failed ? 1 : 0)

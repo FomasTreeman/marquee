@@ -186,24 +186,31 @@ export async function loadProject(project, owner, number) {
  * for any reason puts the card right.
  */
 export async function factsFor(github, owner, repo, number) {
+  // `last`, not `first`. A timeline is oldest first, so `first: 50` on an
+  // issue with any history returns the opening chatter and drops the newest
+  // pull request off the end -- which is the one the card depends on.
+  //
+  // Both item types are read, which they were not. The query asked for
+  // CONNECTED_EVENT and then only ever destructured `source`, a field that
+  // exists on CrossReferencedEvent alone, so every connected event came back,
+  // mapped to undefined and was filtered away. That is not a spare belt: a
+  // pull request linked through the Development sidebar rather than by being
+  // mentioned raises a ConnectedEvent and nothing else, and its issue's card
+  // never moved.
   const q = await github.graphql(
-    `query($owner: String!, $repo: String!, $number: Int!) {
+    `fragment pr on PullRequest {
+       number state isDraft
+       commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
+     }
+     query($owner: String!, $repo: String!, $number: Int!) {
        repository(owner: $owner, name: $repo) {
          issue(number: $number) {
            id state
            labels(first: 50) { nodes { name } }
-           timelineItems(first: 50, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT]) {
+           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT]) {
              nodes {
-               ... on CrossReferencedEvent {
-                 source {
-                   ... on PullRequest {
-                     number state isDraft
-                     commits(last: 1) { nodes { commit {
-                       statusCheckRollup { state }
-                     } } }
-                   }
-                 }
-               }
+               ... on CrossReferencedEvent { source { ...pr } }
+               ... on ConnectedEvent { subject { ...pr } }
              }
            }
          }
@@ -214,10 +221,16 @@ export async function factsFor(github, owner, repo, number) {
   const issue = q.repository?.issue
   if (!issue) return undefined
 
+  // One pull request can raise both kinds of event, so the same number can
+  // arrive twice.
+  const seen = new Set()
   const prs = issue.timelineItems.nodes
-    .map((n) => n.source)
+    .map((n) => n.source || n.subject)
     .filter((s) => s && s.number && s.state === 'OPEN')
-  const openPr = prs[0]
+    .filter((s) => !seen.has(s.number) && seen.add(s.number))
+  // The newest, not the oldest. Where an issue has had a pull request
+  // abandoned and reopened, the later one is the live one.
+  const openPr = prs[prs.length - 1]
   const rollup = openPr?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state
 
   return {

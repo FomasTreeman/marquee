@@ -178,9 +178,18 @@ jobs:
           deadline=$(( $(date +%s) + 1800 ))
 
           while :; do
-            run=$(gh api \
+            # A call that fails is not a run that has not started, and this
+            # discarded both into the same empty string. A rate limit or a blip
+            # then read as "CI has not begun", the loop polled on for the full
+            # half hour, and the release failed blaming CI for something that
+            # had never been asked. Still not fatal -- one blip should not stop
+            # a release -- but no longer indistinguishable.
+            if ! run=$(gh api \
                     "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=1" \
-                    --jq '.workflow_runs[0] // empty' 2>/dev/null || true)
+                    --jq '.workflow_runs[0] // empty' 2>err.log); then
+              echo "::warning::could not read CI runs for $SHA: $(tail -1 err.log)"
+              run=''
+            fi
             # Not `${run:-{}}`. Bash reads that as ${run:-{} followed by a
             # literal }, which parses fine until the first time there is a real
             # run to find. The same trap is written up in `decide` above.
