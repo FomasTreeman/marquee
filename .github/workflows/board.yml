@@ -63,6 +63,9 @@ concurrency:
 jobs:
   reconcile:
     runs-on: ubuntu-latest
+    # Two GraphQL calls per issue. The hourly sweep over every open issue
+    # is the long case and it is seconds, not minutes.
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

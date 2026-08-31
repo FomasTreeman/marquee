@@ -131,6 +131,10 @@ jobs:
         contains(github.event.issue.title, '@claude')
       )
     runs-on: ubuntu-latest
+    # Long enough for a real fix with a test, short enough that a run
+    # which has stopped making progress stops spending subscription
+    # usage on it.
+    timeout-minutes: 30
 
     # Who can set this off, now that the repository is public.
     #

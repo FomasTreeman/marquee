@@ -52,6 +52,7 @@ concurrency:
 jobs:
   decide:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       version: ${{ steps.plan.outputs.version }}
       skip: ${{ steps.plan.outputs.skip }}
@@ -156,6 +157,10 @@ jobs:
     needs: decide
     if: needs.decide.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    # Above the half-hour deadline the step sets for itself, so the step's own
+    # message -- which names the run and its last known status -- is what fails
+    # the job, rather than a bare cancellation that says nothing.
+    timeout-minutes: 35
     outputs:
       green: ${{ steps.wait.outputs.green }}
     steps:
@@ -236,6 +241,7 @@ jobs:
     needs: decide
     if: needs.decide.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -304,6 +310,13 @@ jobs:
             target: x86_64-pc-windows-msvc
 
     runs-on: ${{ matrix.os }}
+
+    # Per target, and the matrix is serial, so the worst case is four of these.
+    # The bundles take five to nine minutes each; this leaves room for a slow
+    # runner without leaving room for a wedged one, which would otherwise hold
+    # `concurrency: release` -- it does not cancel in progress -- and block
+    # every release behind it for the six-hour default.
+    timeout-minutes: 45
 
     # The signing key lives here rather than in repository secrets, so no other
     # workflow -- including one added by a pull request -- can reach it. Safe
@@ -438,6 +451,7 @@ jobs:
     needs: [decide, build]
     if: needs.decide.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Every platform is in the manifest
         env:

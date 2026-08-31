@@ -20,9 +20,11 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
 
+# Read only. This reports through `::error::` annotations on the run, which
+# need no write access at all -- the `pull-requests: write` that used to be
+# here was never spent on anything.
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   group: staleness-${{ github.event.pull_request.number }}
@@ -31,6 +33,7 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
