@@ -279,7 +279,7 @@ export async function reconcile({ github, project, projectApi, core, owner, repo
              nodes {
                id
                project { id }
-               fieldValueByName: fieldValues(first: 20) {
+               fieldValueByName: fieldValues(first: 50) {
                  nodes {
                    ... on ProjectV2ItemFieldSingleSelectValue {
                      name
