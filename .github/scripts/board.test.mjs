@@ -8,6 +8,7 @@
  * the ones that only happen when something goes wrong, which are the ones that
  * used to leave a card lying about a thing nobody was doing.
  */
+import { readFileSync } from 'node:fs'
 import { CONFIG, statusFor, labelsFor, factsFor, reconcile } from './board.mjs'
 
 const S = CONFIG.status
@@ -192,6 +193,39 @@ await relabelRun.run()
 check('a correct column with a missing label still writes the label',
   relabelRun.calls.labelWrites, ['+in-review'])
 check('but does not rewrite the column', relabelRun.calls.mutations, [])
+
+// ---------------------------------------------------------------------------
+// The queries themselves, read from the source.
+//
+// Everything above hands `projectApi` and `github.graphql` a fake, and a fake
+// will accept any string at all. So a query can be malformed in a way that
+// every test passes and the board still dies on its next real run -- which is
+// exactly what happened: a `$field` variable was declared, filtered on in
+// JavaScript instead, and never used in the query body. GraphQL rejects that
+// outright ("Variable $field is declared by anonymous query but not used"),
+// the hourly sweep failed on every issue, and nothing here noticed.
+//
+// This reads the actual file, so it cannot be fooled by a stub.
+// ---------------------------------------------------------------------------
+
+console.log('\nthe queries are well formed')
+
+const source = readFileSync(new URL('./board.mjs', import.meta.url), 'utf8')
+// Every query lives in a backtick literal. Odd-numbered pieces of a backtick
+// split are the literals themselves.
+const literals = source.split('`').filter((_, i) => i % 2 === 1)
+const operations = literals.filter((l) => /\b(query|mutation)\s*\(/.test(l))
+
+check('every query in the file was found', operations.length > 0, true)
+
+for (const op of operations) {
+  const head = op.match(/\b(query|mutation)\s*\(([^)]*)\)/)
+  const name = op.trim().split('\n')[0].slice(0, 44)
+  const declared = [...head[2].matchAll(/\$(\w+)\s*:/g)].map((m) => m[1])
+  const body = op.slice(head.index + head[0].length)
+  const unused = declared.filter((v) => !new RegExp(`\\$${v}\\b`).test(body))
+  check(`no unused variable in \`${name}\``, unused, [])
+}
 
 console.log(failed ? `\n  ${failed} failed\n` : '\n  all rules hold\n')
 process.exit(failed ? 1 : 0)

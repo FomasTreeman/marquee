@@ -272,7 +272,7 @@ export async function reconcile({ github, project, projectApi, core, owner, repo
   // the project, and reading it with the repository token returned nothing --
   // silently, so every run would have added a duplicate card.
   const existing = await projectApi(
-    `query($id: ID!, $field: ID!) {
+    `query($id: ID!) {
        node(id: $id) {
          ... on Issue {
            projectItems(first: 20) {
@@ -292,7 +292,7 @@ export async function reconcile({ github, project, projectApi, core, owner, repo
          }
        }
      }`,
-    { id: facts.id, field: project.field.id },
+    { id: facts.id },
   )
   const item = existing.node.projectItems.nodes
     .find((i) => i.project.id === project.id)
