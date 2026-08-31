@@ -1,0 +1,75 @@
+# Refuse a pull request that would undo work rather than add to it.
+#
+# The failure this exists for is quiet and looks like a normal pull request.
+# A branch cut from an old `main` still shows a green tick -- its own tests
+# pass -- while its diff against today's `main` silently removes everything
+# merged since. Nothing in CI notices, because nothing in CI is looking at the
+# *shape* of the change.
+#
+# Five branches in this repository were one click from doing exactly that: work
+# written before a batch of controller and release fixes landed, each of which
+# would have read as a thousand deletions if opened as-is.
+#
+# `strict` status checks on the branch ruleset stop a stale branch *merging*,
+# which is the real guard. This says so early, on the pull request, where
+# somebody can act on it without waiting for a merge to be refused.
+
+name: Staleness
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: staleness-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: How far behind, and what would that undo
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin "$BASE"
+          base="origin/$BASE"
+
+          behind=$(git rev-list --count "$HEAD_SHA..$base")
+          ahead=$(git rev-list --count "$base..$HEAD_SHA")
+          echo "This branch is $behind commits behind $BASE and $ahead ahead."
+
+          # What merging it would actually do to the current tree.
+          added=$(git diff --numstat "$base...$HEAD_SHA" | awk '{a+=$1} END {print a+0}')
+          removed=$(git diff --numstat "$base...$HEAD_SHA" | awk '{r+=$2} END {print r+0}')
+          echo "Against today's $BASE it adds $added lines and removes $removed."
+
+          # A change that deletes a great deal more than it adds is either a
+          # deliberate removal -- rare, and worth a human looking anyway -- or
+          # a branch old enough to be undoing other people's work.
+          if [ "$removed" -gt 200 ] && [ "$removed" -gt $((added * 3)) ]; then
+            echo "::error::This removes $removed lines and adds $added. If that is not"
+            echo "::error::deliberate, the branch is probably cut from an old $BASE and"
+            echo "::error::merging it would undo work. Rebase or merge $BASE into it first."
+            exit 1
+          fi
+
+          # Behind is not fatal on its own -- the ruleset requires the branch to
+          # be up to date before merging anyway -- but saying it here means it
+          # is fixed while somebody is looking at the pull request rather than
+          # discovered at the moment they try to merge.
+          if [ "$behind" -gt 25 ]; then
+            echo "::warning::$behind commits behind $BASE. Update the branch before"
+            echo "::warning::reviewing, or the diff describes a tree nobody has any more."
+          fi
+          echo "Shape looks reasonable."
