@@ -14,7 +14,7 @@
 //!     touched again, so an outage or a format change is invisible to anyone
 //!     with an existing library.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::Mutex;
@@ -32,6 +32,13 @@ use crate::{log_debug, log_if_err, log_info, log_warn, paths};
 /// fix silently did nothing for exactly the games that had been seen before.
 /// A cache with no version is a cache that can only ever be wrong once.
 const CACHE_VERSION: u32 = 2;
+
+/// How many times an appid is retried before it is written off.
+///
+/// A rate limit clears in a minute or two, so a handful of attempts covers
+/// every transient cause. Anything still failing after that is not transient,
+/// and retrying it until the app closes is just noise with a sleep in it.
+const MAX_RETRIES: u32 = 4;
 
 /// 200 per 5 minutes is one per 1.5 s. Sit just outside it.
 const SPACING: Duration = Duration::from_millis(1700);
@@ -305,6 +312,9 @@ pub fn spawn(app: AppHandle) -> Enricher {
         // grows by 215 each time and the worker spends its budget re-checking
         // things it has already answered.
         let mut queued: HashSet<String> = HashSet::new();
+        // How many times each appid has been retried, so nothing loops for
+        // the life of the process.
+        let mut attempts: HashMap<String, u32> = HashMap::new();
         let mut fetched = 0usize;
 
         loop {
@@ -344,7 +354,22 @@ pub fn spawn(app: AppHandle) -> Enricher {
                 Fetched::Retry => {
                     // Back of the queue, not the front: a game that cannot be
                     // fetched right now must not block every game behind it.
-                    log_debug!("meta", "will retry {app_id}");
+                    //
+                    // But not forever. Appid 0 -- which a manual game with no
+                    // Steam entry produces -- retried every twelve seconds for
+                    // as long as the app was open, writing a line each time.
+                    // It never succeeded and never could, and it filled a
+                    // debug report so completely that the controller
+                    // diagnosis it was meant to carry was three lines at the
+                    // bottom of a hundred and twenty.
+                    let tries = attempts.entry(app_id.clone()).or_insert(0);
+                    *tries += 1;
+                    if *tries > MAX_RETRIES {
+                        log_debug!("meta", "giving up on {app_id} after {tries} tries");
+                        store_miss(&app_id);
+                        continue;
+                    }
+                    log_debug!("meta", "will retry {app_id} ({tries})");
                     queue.push_back(app_id);
                     std::thread::sleep(BACKOFF);
                 }

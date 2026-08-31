@@ -56,6 +56,8 @@ function livePads(): Gamepad[] {
 export interface WebPad {
   /** Names of the pads the webview can see, for the diagnostics screen. */
   seen(): string[]
+  /** Whether this path is currently the one dispatching. */
+  armed(): boolean
   /** How many of those this path could actually drive. A pad with no standard
    *  mapping is visible but unusable, so it does not count towards deciding
    *  which path knows about more hardware. */
@@ -188,6 +190,7 @@ export function createWebPad(
 
   return {
     seen: () => livePads().map((p) => `${p.id} — ${p.mapping || 'non-standard'} mapping`),
+    armed: () => armed,
     usable: () => livePads().filter((p) => p.mapping === 'standard').length,
     stop() {
       stopped = true
