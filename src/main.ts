@@ -18,7 +18,7 @@ import { createMenu, mainMenuItems } from './menu'
 import { createSettings } from './settings'
 import { toast } from './toast'
 import { hostInfo, pingMs, inApp } from './host'
-import { createInput, padStatus, type Action, type Device } from './input'
+import { createInput, padStatus, wantsOsk, type Action, type Device } from './input'
 import {
   scanLibrary, requestMeta, onMeta, onLaunchFailed, launchGame, toggleFavourite,
   getSettings, setSetting, toggleFullscreen, systemAction, findProfile, importProfile,
@@ -427,6 +427,11 @@ async function main(): Promise<void> {
 
   const osk = createOsk()
 
+  /** What is currently being held, per the same signal the legend follows.
+   *  Set for real once input starts below; a pad plugged in later switches
+   *  it live, same as a mouse touched later switches the legend. */
+  let heldDevice: Device = 'keyboard'
+
   /**
    * Change the order, and remember it.
    *
@@ -439,6 +444,7 @@ async function main(): Promise<void> {
   /** Rebuild the legend for whatever is now being held. The table itself is
    *  in shell.ts, as data, so "every action reaches every device" is tested. */
   function refreshHints(device: Device): void {
+    heldDevice = device
     setHints(
       shell.hints,
       legendFor(device, {
@@ -518,7 +524,7 @@ async function main(): Promise<void> {
       async onChoose(id) {
         if (id === 'settings') {
           settings.open()
-          if (padConnected) osk.attach(settings.field)
+          if (wantsOsk(heldDevice)) osk.attach(settings.field)
           return
         }
         if (id === 'rescan') {
@@ -550,7 +556,7 @@ async function main(): Promise<void> {
     shell.query.select()
     // The on-screen keyboard is what makes search reachable at all from a pad.
     // Without it this opens a field nobody can type into.
-    if (padConnected) osk.attach(shell.query)
+    if (wantsOsk(heldDevice)) osk.attach(shell.query)
   }
 
   shell.searchButton.onclick = openSearch
@@ -633,7 +639,7 @@ async function main(): Promise<void> {
         }
       },
     })
-    if (padConnected) osk.attach(picker.field)
+    if (wantsOsk(heldDevice)) osk.attach(picker.field)
     checkNow('add')
   }
 
@@ -656,7 +662,7 @@ async function main(): Promise<void> {
         9000,
       )
       settings.open()
-      if (padConnected) osk.attach(settings.field)
+      if (wantsOsk(heldDevice)) osk.attach(settings.field)
       return
     }
     picker.open({
@@ -677,7 +683,7 @@ async function main(): Promise<void> {
         }
       },
     })
-    if (padConnected) osk.attach(picker.field)
+    if (wantsOsk(heldDevice)) osk.attach(picker.field)
     checkNow('artwork')
   }
 
@@ -716,9 +722,9 @@ async function main(): Promise<void> {
     onFindArtwork: openArtwork,
     // Only when a pad is what is being held -- putting a keyboard on screen
     // for someone who has one in front of them is in the way, not helpful.
-    // A closure rather than a conditional hook because padConnected is read
-    // later in startup than this.
-    onTextField: (field) => { if (padConnected) osk.attach(field) },
+    // A closure rather than a conditional hook because heldDevice changes
+    // live, after this callback is wired up.
+    onTextField: (field) => { if (wantsOsk(heldDevice)) osk.attach(field) },
     onTextFieldClosed: () => osk.close(),
   })
 
@@ -738,10 +744,10 @@ async function main(): Promise<void> {
     left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1],
   }
   const hud = createHud(grid, createFrameMeter())
-  // Whether to offer the on-screen keyboard at all. Read once at startup; a
-  // pad plugged in later is handled by the status the input layer reports.
+  // A starting guess for what is held, good enough for the very first paint
+  // below -- refreshHints() takes over from the moment real input arrives.
   const pad = await padStatus()
-  const padConnected = pad.connected > 0
+  heldDevice = pad.connected > 0 ? 'pad' : 'keyboard'
 
   await createInput((e) => {
     hud.noteInput(e.latency)
@@ -811,7 +817,7 @@ async function main(): Promise<void> {
 
   // Something has to be on screen before the first key is pressed. A pad is
   // assumed only when one is actually connected.
-  refreshHints(padConnected ? 'pad' : 'keyboard')
+  refreshHints(heldDevice)
 
   await hud.attach({
     host: await hostInfo(),
