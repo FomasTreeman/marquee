@@ -12,7 +12,7 @@
 import { listen } from '@tauri-apps/api/event'
 import { call, inApp } from './host'
 import { createWebPad, type WebPad } from './webpad'
-import { logWarn } from './log'
+import { logInfo, logWarn } from './log'
 
 export type Action =
   | 'up' | 'down' | 'left' | 'right'
@@ -189,11 +189,21 @@ export async function createInput(
     const offset = await syncClock()
     const unlisten = await listen<RustInputEvent>('input', (ev) => {
       const p = ev.payload
+      // Arriving at all is the proof; it is recorded before anything else so
+      // the webview can see it and stand down on its next frame.
+      const wasFirst = !nativeDelivered
       nativeDelivered = true
-      // Whichever path is driving, only one of them dispatches. Without this
-      // the webview taking over would double every press on the pads gilrs
-      // *can* read, and a doubled A launches a game twice.
-      if (webPad && !nativeHandlesEverything()) return
+
+      // Exactly one path dispatches at any moment. If the webview is driving
+      // it owns this press too -- including the very first native event, which
+      // it has already handled. Dispatching here as well would double it, and
+      // a doubled A launches a game twice.
+      if (webPad?.armed()) {
+        if (wasFirst) {
+          logInfo('input', 'the native path delivered; handing the pad back to it')
+        }
+        return
+      }
       dispatch({
         action: p.action,
         repeat: p.repeat,
@@ -227,8 +237,21 @@ export async function createInput(
    */
   let nativePads = (await padStatus()).connected
 
+  /**
+   * Only a delivered event proves the native path works.
+   *
+   * `connected > 0` is a claim, not evidence, and on Windows it can be both
+   * true and useless at once. From a real report: gilrs raised a Connected
+   * event so the count read 1, enumerated no devices at all, and never sent a
+   * single button. Counting that as coverage stood the webview down -- which
+   * could see the controller perfectly -- and left nothing driving a pad that
+   * works fine in Steam on the same machine.
+   *
+   * So the count only decides *how much* the native path covers. Whether it
+   * works at all is answered by whether anything has arrived from it.
+   */
   const nativeHandlesEverything = () =>
-    (nativeDelivered || nativePads > 0) && nativePads >= (webPad?.usable() ?? 0)
+    nativeDelivered && nativePads >= (webPad?.usable() ?? 0)
 
   // The count changes whenever a pad is plugged in, wakes up or goes to sleep,
   // and a snapshot taken at startup is exactly what made the old version wrong.

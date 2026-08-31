@@ -89,6 +89,50 @@ describe('arming', () => {
 })
 
 describe('choosing which path drives', () => {
+  it('drives when the native path claims a pad but never sends anything', () => {
+    // Straight from a Windows debug report:
+    //
+    //   connected: 1
+    //   Windows.Gaming.Input enumerated: (nothing)
+    //   the webview sees: Xbox 360 Controller — standard mapping
+    //
+    // gilrs raised a Connected event so the count read 1, enumerated no
+    // devices, and never delivered a button. Treating that count as coverage
+    // stood this path down and left nothing at all driving a controller that
+    // works in Steam on the same machine. A count is a claim; only an event
+    // that arrived is evidence.
+    const nativeDelivered = false
+    const nativePads = 1
+    const usable = () => pads.filter((p) => (p as Gamepad | null)?.mapping === 'standard').length
+    const w = createWebPad(
+      (e) => events.push(e),
+      () => nativeDelivered && nativePads >= usable(),
+      2500,
+    )
+    pads = [fakePad({ id: 'Xbox 360 Controller' })]
+    vi.advanceTimersByTime(2600)
+    pads = [press(fakePad({ id: 'Xbox 360 Controller' }), 0)]
+    tick()
+    expect(events.map((e) => e.action), 'a claimed-but-silent native pad must not win')
+      .toEqual(['a'])
+    w.stop()
+  })
+
+  it('reports whether it is the one driving', () => {
+    // The native listener asks this to avoid dispatching the same press twice
+    // during handover.
+    let delivered = false
+    const w = createWebPad((e) => events.push(e), () => delivered, 2500)
+    expect(w.armed(), 'not during the settle period').toBe(false)
+    pads = [fakePad()]
+    vi.advanceTimersByTime(2600); tick()
+    expect(w.armed(), 'driving once native has shown nothing').toBe(true)
+    delivered = true
+    tick()
+    expect(w.armed(), 'stood down once native delivered').toBe(false)
+    w.stop()
+  })
+
   it('arms later if the native path looked fine at first and then did not', () => {
     // Reported from Windows: "Windows.Gaming.Input sees: (nothing enumerated),
     // the webview sees: xbox 360 controller - standard mapping", and nothing
