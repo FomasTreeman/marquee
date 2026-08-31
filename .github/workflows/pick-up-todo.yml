@@ -1,0 +1,131 @@
+# Todo had no consumer, so it was not a queue. This is the consumer.
+#
+# An issue reaches Todo only when it is open, unblocked, has no pull request
+# and carries no `claude-working` -- and the sole thing that sets
+# `claude-working` is a claude.yml run, which starts on a label *event* or an
+# `@claude` comment and nothing else. So an issue sitting in Todo has by
+# definition already spent its only trigger. Nothing was ever going to fire
+# again. The card said "queued", the code comment promised an agent "about to
+# take" it, and four issues sat there for hours while both were untrue.
+#
+# The safety net framing is board.yml's, deliberately. That file sweeps hourly
+# because an event can be missed and a missed event should cost a delay rather
+# than a permanently wrong board. This is the same argument one step further
+# on: a missed handover should cost a delay, not a permanently stalled issue.
+#
+# ---------------------------------------------------------------------------
+# The failure mode of a workflow that starts agent runs is starting forty of
+# them, and each one is a full run of subscription usage. Three things bound
+# it, and none of them should be removed without replacing it with something:
+#
+#   * ONE issue per sweep, oldest first. A backlog drains at one an hour
+#     rather than all at once.
+#   * a six-hour cooldown per issue, from a marker in the handover comment. An
+#     issue whose run fails, or whose pull request is closed unmerged, returns
+#     to Todo -- without this it would be offered again every hour, forever.
+#   * the rule itself is `shouldPickUp` in board.mjs, which is pure and tested
+#     without a network, so what counts as "waiting" cannot drift from what
+#     the board shows.
+#
+# It hands over by commenting rather than by toggling the label. A comment is
+# a record of why a run started and when; a label removed and re-added leaves
+# nothing behind to read.
+# ---------------------------------------------------------------------------
+
+name: Pick up Todo
+
+on:
+  schedule:
+    # Offset from board.yml's :17 so the board has settled before this reads it.
+    - cron: '43 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: pick-up-todo
+  cancel-in-progress: false
+
+jobs:
+  pick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          HAS_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN != '' }}
+        with:
+          # The comment is the handover, so it goes through the token that can
+          # trigger a workflow. GitHub will not run a workflow off an event
+          # GITHUB_TOKEN caused, so a comment written with it would sit there
+          # being read by nobody -- which is the failure this file exists to
+          # end, reintroduced one layer down.
+          github-token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || github.token }}
+          script: |
+            const { factsFor, shouldPickUp } = await import(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/board.mjs`)
+            const { owner, repo } = context.repo
+            const MARKER = '<!-- handed-over -->'
+
+            if (process.env.HAS_TOKEN !== 'true') {
+              core.setFailed(
+                'CLAUDE_WORKFLOW_TOKEN is not set, so a comment posted here would start '
+                + 'nothing — GitHub suppresses events caused by GITHUB_TOKEN. Refusing to '
+                + 'post a handover that cannot hand anything over.')
+              return
+            }
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', per_page: 100,
+            })
+            // listForRepo returns pull requests too, and they are not cards.
+            // Oldest first, so a backlog drains in the order it arrived.
+            const issues = open.filter((i) => !i.pull_request).sort((a, b) => a.number - b.number)
+
+            for (const issue of issues) {
+              const facts = await factsFor(github, owner, repo, issue.number)
+              if (!facts) continue
+
+              // When it was last offered, from the marker this workflow leaves.
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: issue.number, per_page: 100,
+              })
+              const last = comments.filter((c) => (c.body || '').includes(MARKER)).pop()
+              const hours = last
+                ? (Date.now() - new Date(last.created_at)) / 3600000
+                : undefined
+
+              if (!shouldPickUp(facts, hours)) continue
+
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: issue.number,
+                body: [
+                  MARKER,
+                  '@claude this has been sitting in Todo with nothing working on it, so'
+                  + ' picking it up now.',
+                  '',
+                  'Read `CLAUDE.md` and `.github/claude-instructions.md` first. Put'
+                  + ' `Closes #' + issue.number + '` in the pull request body.',
+                  '',
+                  '**Open the pull request yourself** — a comment describing one is not the'
+                  + ' deliverable. If the fix needs a decision that is not yours, say what you'
+                  + ' found, ask the one question you need answered, label it `needs-decision`'
+                  + ' and stop. Guessing costs more to review than stopping does.',
+                ].join('\n'),
+              })
+              core.notice(
+                `Handed #${issue.number} to Claude` +
+                (hours === undefined ? ' (first offer)' : ` (last offered ${hours.toFixed(1)}h ago)`))
+              // One per sweep. A backlog drains at one an hour rather than
+              // starting a run for everything at once.
+              return
+            }
+
+            core.info('Nothing in Todo is waiting on an agent.')

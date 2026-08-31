@@ -79,11 +79,56 @@ export function statusFor(facts) {
 
   if (has(labels.working)) return status.inProgress
 
-  // Nobody has picked it up. Which queue it sits in depends on who is meant
-  // to: an issue marked for a person should not sit in the same column as one
-  // the agent is about to take, or the agent's queue reads as a to-do list
-  // nobody is working through.
-  return has(labels.human) ? status.todoHuman : status.todo
+  // An agent has been at this and there is still nothing to review.
+  //
+  // This is the transition that was wrong. `claude-working` comes off when the
+  // run ends, and with no pull request the answer fell straight through to
+  // Todo -- so a card went *backwards*, from In Progress to the queue it
+  // started in, and a run that had failed looked exactly like an issue nobody
+  // had ever touched. Three of those in a row is not a queue position, it is a
+  // question for a person, and three is the same count ci-repair.yml stops at
+  // for the same reason: an agent that has not managed it in three goes is not
+  // going to manage it on the ninth.
+  //
+  // Below three it stays in Todo on purpose, because Todo is drained by
+  // pick-up-todo.yml now. It is a queue with a consumer rather than a place
+  // things go to rest.
+  // Whose queue this is, asked before how the agent got on, because they are
+  // different questions. Needs Decision means the agent is stuck and wants an
+  // answer; an issue marked for a person was never the agent's to be stuck on,
+  // so stray attempts on one do not turn it into a question.
+  if (has(labels.human)) return status.todoHuman
+
+  if (facts.attempts >= 3) return status.needsDecision
+
+  return status.todo
+}
+
+/**
+ * Is this issue waiting for an agent that is not coming?
+ *
+ * `Todo` was a dead end, and it read as a queue. An issue reaches it only when
+ * it is open, unblocked, has no pull request and carries no `claude-working`
+ * -- and the sole thing that sets `claude-working` is a claude.yml run, which
+ * starts on a label *event* or an `@claude` comment and nothing else. So an
+ * issue sitting in Todo has by definition already spent its only trigger.
+ * Nothing was ever going to fire again, and the card said "queued" while the
+ * comment above promised an agent that was "about to take" it.
+ *
+ * Four issues sat like that for hours. The board was not lying about the facts
+ * -- there really was no pull request and nothing really was running -- it was
+ * describing a queue with no consumer at the far end.
+ *
+ * The cooldown is what keeps this from becoming one. An issue whose run fails,
+ * or whose pull request is closed unmerged, returns to Todo and would
+ * otherwise be picked up again on the next sweep, forever, at a full run of
+ * subscription usage each time.
+ */
+export function shouldPickUp(facts, hoursSinceHandover, cooldownHours = 6) {
+  if (statusFor(facts) !== CONFIG.status.todo) return false
+  // Never handed over, so this is the first offer.
+  if (hoursSinceHandover === undefined || hoursSinceHandover === null) return true
+  return hoursSinceHandover >= cooldownHours
 }
 
 /**
@@ -207,10 +252,11 @@ export async function factsFor(github, owner, repo, number) {
          issue(number: $number) {
            id state
            labels(first: 50) { nodes { name } }
-           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT]) {
+           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT, LABELED_EVENT]) {
              nodes {
                ... on CrossReferencedEvent { source { ...pr } }
                ... on ConnectedEvent { subject { ...pr } }
+               ... on LabeledEvent { label { name } }
              }
            }
          }
@@ -243,6 +289,14 @@ export async function factsFor(github, owner, repo, number) {
     // Only a definite failure counts. Checks still running are not a failure,
     // and treating them as one would flap the card on every push.
     prFailing: rollup === 'FAILURE' || rollup === 'ERROR',
+
+    // How many times an agent has actually started on this, counted from the
+    // `claude-working` label going on rather than from anything self-reported.
+    // Without it a run that ended with nothing to show is indistinguishable
+    // from an issue nobody has ever touched, which is how a card went
+    // backwards from In Progress to Todo.
+    attempts: issue.timelineItems.nodes
+      .filter((n) => n?.label?.name === CONFIG.labels.working).length,
   }
 }
 

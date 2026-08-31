@@ -9,7 +9,7 @@
  * used to leave a card lying about a thing nobody was doing.
  */
 import { readFileSync } from 'node:fs'
-import { CONFIG, statusFor, labelsFor, factsFor, reconcile } from './board.mjs'
+import { CONFIG, statusFor, labelsFor, factsFor, reconcile, shouldPickUp } from './board.mjs'
 
 const S = CONFIG.status
 let failed = 0
@@ -20,7 +20,7 @@ function check(name, got, want) {
   console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${name}${ok ? '' : `\n         got ${JSON.stringify(got)}\n        want ${JSON.stringify(want)}`}`)
 }
 
-const issue = (over = {}) => ({ state: 'OPEN', labels: [], openPr: undefined, prFailing: false, ...over })
+const issue = (over = {}) => ({ state: 'OPEN', labels: [], openPr: undefined, prFailing: false, attempts: 0, ...over })
 
 console.log('\nwhere an issue belongs')
 check('filed, for the agent', statusFor(issue({ labels: ['claude'] })), S.todo)
@@ -40,6 +40,42 @@ check('a red pull request is not review-ready even while working',
   statusFor(issue({ openPr: 7, prFailing: true, labels: ['claude-working'] })), S.inProgress)
 check('a pull request outranks a stale working label',
   statusFor(issue({ openPr: 7, labels: ['claude-working'] })), S.inReview)
+
+console.log('\nthe card never goes backwards')
+// `claude-working` comes off when a run ends. With no pull request the answer
+// used to fall through to Todo, so a card went from In Progress back to the
+// queue it started in and a failed run looked like an untouched issue.
+check('one attempt, nothing to show, still queued',
+  statusFor(issue({ labels: ['claude'], attempts: 1 })), S.todo)
+check('two attempts, still queued',
+  statusFor(issue({ labels: ['claude'], attempts: 2 })), S.todo)
+check('three attempts is a question for a person',
+  statusFor(issue({ labels: ['claude'], attempts: 3 })), S.needsDecision)
+check('attempts do not outrank a pull request',
+  statusFor(issue({ openPr: 7, attempts: 5 })), S.inReview)
+check('attempts do not outrank a run in flight',
+  statusFor(issue({ labels: ['claude-working'], attempts: 5 })), S.inProgress)
+check('attempts do not outrank closed',
+  statusFor(issue({ state: 'CLOSED', attempts: 5 })), S.done)
+check('a human queue is not pushed to Needs Decision',
+  statusFor(issue({ labels: ['no-ai'], attempts: 3 })), S.todoHuman)
+
+console.log('\nwho gets picked up out of Todo')
+check('queued for the agent, never offered', shouldPickUp(issue({ labels: ['claude'] })), true)
+check('queued for a person is not ours', shouldPickUp(issue({ labels: ['no-ai'] })), false)
+check('already running', shouldPickUp(issue({ labels: ['claude-working'] })), false)
+check('waiting on a person', shouldPickUp(issue({ labels: ['needs-decision'] })), false)
+check('a pull request is already open', shouldPickUp(issue({ openPr: 7 })), false)
+check('a red pull request is still not ours', shouldPickUp(issue({ openPr: 7, prFailing: true })), false)
+check('closed', shouldPickUp(issue({ state: 'CLOSED' })), false)
+
+// The cooldown is the whole safety of this. An issue whose run failed, or
+// whose pull request was closed unmerged, lands back in Todo and would
+// otherwise be offered again every sweep, forever, at a full run each time.
+check('offered an hour ago, so not again yet', shouldPickUp(issue({ labels: ['claude'] }), 1), false)
+check('offered six hours ago, so try again', shouldPickUp(issue({ labels: ['claude'] }), 6), true)
+check('exactly at the boundary counts', shouldPickUp(issue({ labels: ['claude'] }), 6, 6), true)
+check('a longer cooldown holds it back', shouldPickUp(issue({ labels: ['claude'] }), 6, 12), false)
 
 console.log('\nlabels follow the same facts')
 check('a green pull request earns in-review',
