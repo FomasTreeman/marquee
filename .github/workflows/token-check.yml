@@ -34,8 +34,8 @@ jobs:
               catch (e) { results.push(['MISS', what, `${need} — ${e.message.split('\n')[0]}`]) }
             }
 
-            core.info('PROJECT_TOKEN')
-            await try_('read the project', 'Account permissions -> Projects: Read and write', async () => {
+            core.info('PROJECT_TOKEN (classic, `project` scope)')
+            await try_('read the project', 'a CLASSIC token with `project` scope — fine-grained tokens cannot see a user-owned board', async () => {
               const q = await github.graphql(
                 `query($o: String!, $n: Int!) { user(login: $o) { projectV2(number: $n) { id } } }`,
                 { o: owner, n: Number(process.env.PROJECT_NUMBER || 8) })
@@ -45,7 +45,11 @@ jobs:
               github.rest.issues.listForRepo({ owner, repo, per_page: 1 }))
             await try_('read a pull request', 'Repository permissions -> Pull requests: Read', () =>
               github.rest.pulls.list({ owner, repo, state: 'all', per_page: 1 }))
-            await try_('write a label', 'Repository permissions -> Issues: Read and write', async () => {
+            // Checked against GITHUB_TOKEN's own permissions, not the classic
+            // token: labels are written by the workflow itself now, so the
+            // board token needs no repository access whatsoever.
+            await try_('write a label (as the workflow, not PROJECT_TOKEN)',
+                       'the `issues: write` line in the workflow permissions block', async () => {
               const [issue] = (await github.rest.issues.listForRepo({
                 owner, repo, state: 'all', per_page: 1 })).data
               if (!issue) return
