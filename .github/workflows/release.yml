@@ -352,8 +352,17 @@ jobs:
       # install was told it was up to date, indefinitely, with the update
       # sitting right there.
       #
-      # Four targets in sequence costs about fifteen minutes rather than five.
-      # A release nobody receives costs more.
+      # Four targets in sequence cost twenty-five minutes on v0.2.20, against
+      # about twelve if they ran together: 4.0 and 4.3 for the two macOS
+      # targets, 5.1 for Windows, and 11.8 for Linux, which builds an AppImage,
+      # a .deb and a .rpm where the others build one bundle each. Twenty-nine
+      # minutes for the whole run.
+      #
+      # That is worth writing down rather than estimating, because the figure
+      # is what a future reader will weigh against going parallel again. It
+      # used to say fifteen minutes, which was a guess and was wrong by half.
+      #
+      # A release nobody receives still costs more.
       max-parallel: 1
       matrix:
         include:
@@ -502,9 +511,9 @@ jobs:
           # tauri-action publishes as it goes, so the release went live the
           # moment the *first* target finished -- and `/releases/latest`
           # started answering with a manifest listing one platform. On Windows,
-          # which builds slowest and runs last, that meant "you are up to date"
-          # for the fifteen minutes the rest of the matrix was still going, with
-          # the update sitting on the page.
+          # which runs last, that meant "you are up to date" for the twenty-five
+          # minutes the rest of the matrix was still going, with the update
+          # sitting on the page. Measured on v0.2.20; see the matrix above.
           #
           # A draft is invisible to `/releases/latest`, which is exactly what is
           # wanted here: nobody is told anything until the release is whole.
