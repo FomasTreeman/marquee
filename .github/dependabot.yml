@@ -1,0 +1,35 @@
+# The other half of pinning actions to commit SHAs.
+#
+# A pin that nobody updates is not safety, it is a version of the action frozen
+# at whatever was known about it the day it was pinned -- including whatever
+# was not yet known. Pinning without this file trades one silent risk for
+# another and feels more secure while doing it.
+#
+# Dependabot understands the `# v1.2.3` comment beside each SHA and rewrites
+# both together, so the pins stay readable as well as current.
+
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # Bumping an action changes nothing a user could download, so a release
+    # for one would be a version number people fetch for no reason. The
+    # Release workflow reads this label and does nothing -- see release.yml.
+    labels:
+      - no-release
+      - dependencies
+    commit-message:
+      prefix: ""
+    open-pull-requests-limit: 5
+
+# Deliberately not here: cargo and npm. docs/PLAN.md §3 keeps the dependency
+# list short on purpose and CLAUDE.md asks for a reason in the commit message
+# before anything joins it, neither of which survives a weekly stream of
+# version bumps nobody asked for. Security fixes for those two are worth
+# having, but they come from Dependabot security updates -- a repository
+# setting, not this file -- which only opens a pull request when there is an
+# advisory rather than when there is a release.

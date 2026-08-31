@@ -84,16 +84,18 @@ fn button_action(b: Button) -> Option<Action> {
         Button::East => Action::B,
         Button::West => Action::X,
         Button::North => Action::Y,
-        // Both the bumper and the trigger page the library.
+        // The bumpers page the library. gilrs names them confusingly:
+        // LeftTrigger is the *bumper* (L1, LB); LeftTrigger2 is the analogue
+        // trigger (L2, LT).
         //
-        // gilrs names these confusingly: LeftTrigger is the *bumper* (L1, LB)
-        // and LeftTrigger2 is the analogue trigger (L2, LT). Only the bumpers
-        // were mapped, so pulling a trigger did nothing at all -- and "the
-        // triggers do not work" is indistinguishable from "the controller does
-        // not work" when you are the one holding it. Accepting both costs
-        // nothing and removes a whole class of confusion.
-        Button::LeftTrigger | Button::LeftTrigger2 => Action::Lb,
-        Button::RightTrigger | Button::RightTrigger2 => Action::Rb,
+        // The triggers deliberately do not page. Mapping both to one action
+        // sounded forgiving and was not: on Windows the analogue triggers are
+        // reported as axes as well as buttons, so they emit constantly, and
+        // sharing an action with the bumpers made the two interfere. A control
+        // that is sometimes a page and sometimes nothing is worse than one
+        // that does nothing at all.
+        Button::LeftTrigger => Action::Lb,
+        Button::RightTrigger => Action::Rb,
         Button::LeftThumb => Action::Sort,
         Button::RightThumb => Action::Filter,
         Button::Start => Action::Menu,
@@ -109,6 +111,154 @@ fn button_action(b: Button) -> Option<Action> {
 /// for -- so the dominant axis wins.
 struct AxisState {
     held: Option<Action>,
+}
+
+/// A button that is not being pressed by anybody.
+///
+/// Found on a DualSense over Bluetooth on macOS: gilrs reports BUTTON(5) and
+/// BUTTON(6) -- the two bumpers -- pressing and releasing about seven times a
+/// second, forever, with the controller sitting untouched on a desk. Clean
+/// digital pairs, exactly 1.000 then 0.000, not analogue jitter.
+///
+/// The symptom is not "the bumpers misbehave". The two alternate, one pages
+/// the library forward and the other back, so the grid ends where it started
+/// and the bumpers appear to *do nothing at all* -- while a real press is one
+/// event lost in a stream of noise. That took four rounds to find because
+/// every layer above it was working perfectly.
+///
+/// Whatever the cause, a control that reports faster than a person can move it
+/// is not reporting input. This mutes it, says so, and lets it back the moment
+/// it goes quiet -- so a fast human tapping is muted for a moment at worst,
+/// while a genuinely broken button stays out of the way.
+struct Noise {
+    /// Per *pad* and action: when the current burst started, when it was last
+    /// seen, and how many presses are in it.
+    ///
+    /// Keyed by the pad as well as the action, which the first version was not
+    /// -- and with two controllers plugged in that is the difference between
+    /// ignoring one broken button and switching off somebody's other
+    /// controller. A DualSense that spams its bumpers should cost the Xbox pad
+    /// beside it nothing at all.
+    seen: Vec<(usize, Action, Instant, Instant, u32)>,
+}
+
+/// A rate no hand sustains. Someone tapping hard manages six or seven presses
+/// a second in a burst; nobody holds five a second for seconds on end.
+const NOISE_RATE: f64 = 5.0;
+/// Enough presses to be sure of the rate rather than reacting to a flurry.
+const NOISE_PRESSES: u32 = 20;
+/// Silence long enough to conclude whatever it was has stopped.
+const NOISE_QUIET: Duration = Duration::from_secs(2);
+
+impl Noise {
+    fn new() -> Self {
+        Noise { seen: Vec::new() }
+    }
+
+    /// True if this press should be ignored.
+    ///
+    /// Judged on rate rather than on a count in a fixed window. A window that
+    /// resets on its own boundary lets a button hammering continuously slip
+    /// through every time the boundary passes, which is exactly what the first
+    /// version of this did.
+    fn muted(&mut self, pad: usize, action: Action, now: Instant) -> bool {
+        let existing = self
+            .seen
+            .iter_mut()
+            .find(|(p, a, ..)| *p == pad && *a == action);
+        let Some(slot) = existing else {
+            self.seen.push((pad, action, now, now, 1));
+            return false;
+        };
+        let (_, _, first, last, count) = slot;
+
+        // A gap a person would leave means the burst is over, whatever it was.
+        if now.duration_since(*last) > NOISE_QUIET {
+            *first = now;
+            *last = now;
+            *count = 1;
+            return false;
+        }
+        *last = now;
+        *count += 1;
+
+        if *count < NOISE_PRESSES {
+            return false;
+        }
+        let elapsed = now.duration_since(*first).as_secs_f64();
+        elapsed > 0.0 && f64::from(*count) / elapsed > NOISE_RATE
+    }
+
+    /// Whether this press is the one that crosses the line, so the warning is
+    /// written once rather than several times a second.
+    fn just_crossed(&self, pad: usize, action: Action) -> bool {
+        self.seen
+            .iter()
+            .any(|(p, a, _, _, c)| *p == pad && *a == action && *c == NOISE_PRESSES)
+    }
+
+    /// What is currently being ignored, for the diagnostics in Settings.
+    /// A control that has been switched off should say so somewhere a person
+    /// can find without reading a log file.
+    fn silenced(&self, now: Instant) -> Vec<Action> {
+        let mut out: Vec<Action> = self
+            .seen
+            .iter()
+            .filter(|(_, _, first, last, c)| {
+                *c >= NOISE_PRESSES
+                    && now.duration_since(*last) <= NOISE_QUIET
+                    && f64::from(*c) / now.duration_since(*first).as_secs_f64().max(0.001)
+                        > NOISE_RATE
+            })
+            .map(|(_, a, ..)| *a)
+            .collect();
+        out.dedup();
+        out
+    }
+}
+
+/// What is auto-repeating, and what started it.
+///
+/// The origin is the whole point. Repeat used to be a bare
+/// `Option<(Action, Instant)>` cleared by *any* axis settling back to centre
+/// -- and on Windows the analogue triggers are axes as well as buttons, so
+/// they emit constantly even at rest. Holding a bumper to page through the
+/// library therefore stopped repeating the moment a trigger twitched, which
+/// from the sofa is a shoulder button that works intermittently for no
+/// visible reason.
+///
+/// A stick's repeat is cancelled by the stick going quiet. A button's repeat
+/// is cancelled by the button coming up, and by nothing else.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Repeat {
+    action: Action,
+    due: Instant,
+    from_stick: bool,
+}
+
+impl Repeat {
+    fn from_button(action: Action, now: Instant) -> Self {
+        Repeat {
+            action,
+            due: now + REPEAT_DELAY,
+            from_stick: false,
+        }
+    }
+    fn from_stick(action: Action, now: Instant) -> Self {
+        Repeat {
+            action,
+            due: now + REPEAT_DELAY,
+            from_stick: true,
+        }
+    }
+    /// Whether the sticks going quiet should end this.
+    fn ends_with_the_sticks(&self) -> bool {
+        self.from_stick
+    }
+    /// Whether releasing `action` should end this.
+    fn ends_with_button(&self, action: Action) -> bool {
+        !self.from_stick && self.action == action
+    }
 }
 
 impl AxisState {
@@ -148,6 +298,10 @@ pub struct Status {
     pub devices: Mutex<Vec<String>>,
     /// Why there is no input, when there is a reason worth repeating.
     pub failure: Mutex<Option<String>>,
+    /// Controls currently being ignored for reporting faster than a hand can
+    /// move them. Switching a control off silently is the same class of
+    /// mistake as the bug it was added to fix.
+    pub silenced: Mutex<Vec<String>>,
 }
 
 impl Status {
@@ -186,6 +340,7 @@ pub struct PadStatus {
     /// the backend is running and this machine genuinely has no pad attached.
     pub devices: Vec<String>,
     pub failure: Option<String>,
+    pub silenced: Vec<String>,
 }
 
 #[tauri::command]
@@ -196,6 +351,11 @@ pub fn pad_status(status: tauri::State<'_, Arc<Status>>) -> PadStatus {
         backend: BACKEND,
         devices: status.devices.lock().map(|d| d.clone()).unwrap_or_default(),
         failure: status.failure.lock().ok().and_then(|f| f.clone()),
+        silenced: status
+            .silenced
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_default(),
     }
 }
 
@@ -285,7 +445,9 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
         let decide_at = Instant::now() + Duration::from_secs(3);
         let mut reported = false;
 
-        let mut held: Option<(Action, Instant)> = None;
+        let mut held: Option<Repeat> = None;
+        let mut noise = Noise::new();
+        let mut last_published = Instant::now();
         let mut xs = AxisState { held: None };
         let mut ys = AxisState { held: None };
 
@@ -305,9 +467,28 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
                 match ev.event {
                     EventType::ButtonPressed(b, code) => {
                         if let Some(a) = button_action(b) {
+                            let now = Instant::now();
+                            let pad = usize::from(ev.id);
+                            if noise.muted(pad, a, now) {
+                                if noise.just_crossed(pad, a) {
+                                    crate::log_warn!(
+                                        "input",
+                                        "{b:?} is reporting faster than anyone can press it \
+                                         and is being ignored until it stops"
+                                    );
+                                }
+                                continue;
+                            }
+                            // Every press, at debug. Unmapped buttons were
+                            // already logged, which answers "did anything
+                            // arrive" but not "did the *bumper* arrive" -- the
+                            // question that cost four rounds of guessing.
+                            // Repeats are excluded, so this is bounded by how
+                            // fast a person can press.
+                            crate::log_debug!("input", "{b:?} -> {a:?}");
                             emit(a, false);
                             if a.repeats() {
-                                held = Some((a, Instant::now() + REPEAT_DELAY));
+                                held = Some(Repeat::from_button(a, now));
                             }
                         } else {
                             // A pad that sends buttons we do not understand
@@ -321,7 +502,7 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
                     }
                     EventType::ButtonReleased(b, _) => {
                         if let Some(a) = button_action(b) {
-                            if matches!(held, Some((h, _)) if h == a) {
+                            if matches!(held, Some(h) if h.ends_with_button(a)) {
                                 held = None;
                             }
                         }
@@ -334,15 +515,18 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
                         };
                         match changed {
                             Some(a) => {
+                                crate::log_debug!("input", "{axis:?} -> {a:?}");
                                 emit(a, false);
-                                held = Some((a, Instant::now() + REPEAT_DELAY));
+                                held = Some(Repeat::from_stick(a, Instant::now()));
                             }
                             None => {
-                                // Released back inside the deadzone: stop any
-                                // repeat this stick owned.
+                                // Both sticks back inside the deadzone ends a
+                                // repeat a stick started -- and only that. A
+                                // bumper being held is none of this branch's
+                                // business, which is what it used to get wrong.
                                 if xs.held.is_none()
                                     && ys.held.is_none()
-                                    && matches!(held, Some((h, _)) if h.repeats())
+                                    && matches!(held, Some(h) if h.ends_with_the_sticks())
                                 {
                                     held = None;
                                 }
@@ -384,15 +568,278 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
                 }
             }
 
-            if let Some((action, due)) = held {
+            if let Some(r) = held {
                 let now = Instant::now();
-                if now >= due {
-                    emit(action, true);
-                    held = Some((action, now + REPEAT_RATE));
+                if now >= r.due {
+                    emit(r.action, true);
+                    held = Some(Repeat {
+                        due: now + REPEAT_RATE,
+                        ..r
+                    });
+                }
+            }
+
+            // Publish what is being ignored, about once a second. Cheap, and
+            // it means a control that has been switched off can be seen in
+            // Settings rather than only in a log line that scrolled past.
+            if last_published.elapsed() >= Duration::from_secs(1) {
+                last_published = Instant::now();
+                let now = Instant::now();
+                let names: Vec<String> = noise
+                    .silenced(now)
+                    .iter()
+                    .map(|a| format!("{a:?}"))
+                    .collect();
+                if let Ok(mut slot) = shared.silenced.lock() {
+                    if *slot != names {
+                        *slot = names;
+                    }
                 }
             }
 
             std::thread::sleep(POLL);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stand-in for a controller. GamepadId cannot be built outside gilrs,
+    /// so the filter keys on the usize it converts into.
+    const PAD: usize = 0;
+    const OTHER_PAD: usize = 1;
+
+    /// Captured from a real DualSense over Bluetooth on macOS, sitting
+    /// untouched on a desk: gilrs reported both bumpers pressing and
+    /// releasing about seven times a second, forever, as clean digital pairs.
+    ///
+    /// One tab forward, one tab back, alternating -- so the interface ended
+    /// where it started and the bumpers appeared to do nothing whatsoever.
+    #[test]
+    fn a_button_reporting_faster_than_a_hand_is_muted() {
+        let mut n = Noise::new();
+        let t0 = Instant::now();
+        let mut muted_after = None;
+        for i in 0..60u32 {
+            // ~7 a second, which is what the log showed.
+            let at = t0 + Duration::from_millis(140 * i as u64);
+            if n.muted(PAD, Action::Lb, at) && muted_after.is_none() {
+                muted_after = Some(i);
+            }
+        }
+        let at = muted_after.expect("a button doing this must eventually be ignored");
+        assert!(at <= NOISE_PRESSES + 1, "took {at} presses to notice");
+    }
+
+    /// Muting a real hand would be far worse than the bug. Someone paging
+    /// through a long library taps hard and fast, and must never be ignored.
+    #[test]
+    fn a_person_pressing_normally_is_never_muted() {
+        let mut n = Noise::new();
+        let t0 = Instant::now();
+        for i in 0..40u32 {
+            // Three a second, sustained for thirteen seconds. Brisk, human.
+            let at = t0 + Duration::from_millis(330 * i as u64);
+            assert!(!n.muted(PAD, Action::Lb, at), "muted a hand at press {i}");
+        }
+    }
+
+    #[test]
+    fn a_muted_button_is_let_back_once_it_goes_quiet() {
+        let mut n = Noise::new();
+        let t0 = Instant::now();
+        for i in 0..40u32 {
+            n.muted(PAD, Action::Lb, t0 + Duration::from_millis(140 * i as u64));
+        }
+        assert!(
+            n.muted(PAD, Action::Lb, t0 + Duration::from_millis(140 * 40)),
+            "still noisy"
+        );
+        // Unplugged, swapped, or simply stopped.
+        let later = t0 + Duration::from_secs(30);
+        assert!(
+            !n.muted(PAD, Action::Lb, later),
+            "a button that stopped must work again"
+        );
+    }
+
+    /// The report this exists for: "ds5 perfect, xbox randomly stopped and now
+    /// will not work at all".
+    ///
+    /// The DualSense spams its bumpers continuously. The first version of this
+    /// filter keyed on the action alone, so the DualSense's noise switched
+    /// those controls off for *every* pad plugged in -- ignoring one broken
+    /// button by breaking somebody's other controller.
+    #[test]
+    fn a_noisy_pad_does_not_silence_the_one_next_to_it() {
+        let mut n = Noise::new();
+        let t0 = Instant::now();
+        // The DualSense, doing what the log showed: seven a second, forever.
+        for i in 0..60u32 {
+            n.muted(PAD, Action::Lb, t0 + Duration::from_millis(140 * i as u64));
+        }
+        let now = t0 + Duration::from_millis(140 * 60);
+        assert!(
+            n.muted(PAD, Action::Lb, now),
+            "the noisy pad should be ignored"
+        );
+        assert!(
+            !n.muted(OTHER_PAD, Action::Lb, now),
+            "the other controller must be untouched"
+        );
+        // And it keeps working for every press after that.
+        for i in 1..10u32 {
+            let at = now + Duration::from_millis(400 * i as u64);
+            assert!(
+                !n.muted(OTHER_PAD, Action::Lb, at),
+                "press {i} on the other pad"
+            );
+        }
+    }
+
+    #[test]
+    fn muting_one_button_does_not_mute_another() {
+        // The noise was on both bumpers, but A must keep working throughout --
+        // an unusable pad is a worse outcome than a noisy one.
+        let mut n = Noise::new();
+        let t0 = Instant::now();
+        for i in 0..40u32 {
+            n.muted(PAD, Action::Lb, t0 + Duration::from_millis(140 * i as u64));
+        }
+        assert!(!n.muted(PAD, Action::A, t0 + Duration::from_millis(140 * 40)));
+        assert!(!n.muted(PAD, Action::Up, t0 + Duration::from_millis(140 * 41)));
+    }
+
+    /// The bug this type exists for.
+    ///
+    /// Repeat used to be a bare tuple, cleared whenever the sticks settled
+    /// back to centre. On Windows the analogue triggers are reported as axes
+    /// as well as buttons, so they emit continuously even at rest -- which
+    /// meant holding a bumper to page through the library stopped repeating
+    /// the moment a trigger twitched. From the sofa that is a shoulder button
+    /// that works intermittently for no visible reason.
+    #[test]
+    fn a_stick_going_quiet_does_not_cancel_a_held_bumper() {
+        let held = Repeat::from_button(Action::Lb, Instant::now());
+        assert!(
+            !held.ends_with_the_sticks(),
+            "a bumper's repeat is not the sticks' business"
+        );
+    }
+
+    #[test]
+    fn a_stick_going_quiet_does_cancel_a_held_direction() {
+        let held = Repeat::from_stick(Action::Down, Instant::now());
+        assert!(held.ends_with_the_sticks());
+    }
+
+    #[test]
+    fn releasing_the_button_ends_its_own_repeat_and_no_other() {
+        let held = Repeat::from_button(Action::Lb, Instant::now());
+        assert!(held.ends_with_button(Action::Lb));
+        assert!(
+            !held.ends_with_button(Action::Rb),
+            "the other bumper is unrelated"
+        );
+        assert!(!held.ends_with_button(Action::A));
+    }
+
+    #[test]
+    fn releasing_a_button_never_ends_a_sticks_repeat() {
+        // A stick pushed down while a face button is tapped must keep moving.
+        let held = Repeat::from_stick(Action::Down, Instant::now());
+        assert!(!held.ends_with_button(Action::Down));
+        assert!(!held.ends_with_button(Action::A));
+    }
+
+    /// Only the things you can hold down should repeat. A repeating confirm
+    /// launches the game under the cursor over and over.
+    #[test]
+    fn only_navigation_repeats() {
+        for a in [
+            Action::Up,
+            Action::Down,
+            Action::Left,
+            Action::Right,
+            Action::Lb,
+            Action::Rb,
+        ] {
+            assert!(a.repeats(), "{a:?} should repeat");
+        }
+        for a in [
+            Action::A,
+            Action::B,
+            Action::X,
+            Action::Y,
+            Action::Menu,
+            Action::Add,
+            Action::Sort,
+            Action::Filter,
+        ] {
+            assert!(!a.repeats(), "{a:?} must not repeat");
+        }
+    }
+
+    /// The bumpers page. The triggers do not, deliberately: on Windows they
+    /// arrive as axes as well as buttons, and sharing an action with the
+    /// bumpers made the two interfere.
+    #[test]
+    fn the_bumpers_page_and_the_triggers_are_left_alone() {
+        assert_eq!(button_action(Button::LeftTrigger), Some(Action::Lb));
+        assert_eq!(button_action(Button::RightTrigger), Some(Action::Rb));
+        assert_eq!(button_action(Button::LeftTrigger2), None);
+        assert_eq!(button_action(Button::RightTrigger2), None);
+    }
+
+    #[test]
+    fn every_face_button_and_menu_control_is_mapped() {
+        for (b, a) in [
+            (Button::South, Action::A),
+            (Button::East, Action::B),
+            (Button::West, Action::X),
+            (Button::North, Action::Y),
+            (Button::Start, Action::Menu),
+            (Button::Select, Action::Add),
+            (Button::LeftThumb, Action::Sort),
+            (Button::RightThumb, Action::Filter),
+            (Button::DPadUp, Action::Up),
+            (Button::DPadDown, Action::Down),
+            (Button::DPadLeft, Action::Left),
+            (Button::DPadRight, Action::Right),
+        ] {
+            assert_eq!(button_action(b), Some(a), "{b:?}");
+        }
+    }
+
+    /// A stick pushed diagonally must not fire two directions at once -- on a
+    /// grid that reads as a diagonal jump nobody asked for.
+    #[test]
+    fn an_axis_reports_only_when_it_crosses_the_deadzone() {
+        let mut ax = AxisState { held: None };
+        assert_eq!(
+            ax.update(0.2, Action::Left, Action::Right),
+            None,
+            "inside the deadzone"
+        );
+        assert_eq!(
+            ax.update(0.9, Action::Left, Action::Right),
+            Some(Action::Right)
+        );
+        assert_eq!(
+            ax.update(0.95, Action::Left, Action::Right),
+            None,
+            "already held"
+        );
+        assert_eq!(
+            ax.update(0.0, Action::Left, Action::Right),
+            None,
+            "released"
+        );
+        assert_eq!(
+            ax.update(-0.9, Action::Left, Action::Right),
+            Some(Action::Left)
+        );
     }
 }

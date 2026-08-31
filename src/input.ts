@@ -12,7 +12,7 @@
 import { listen } from '@tauri-apps/api/event'
 import { call, inApp } from './host'
 import { createWebPad, type WebPad } from './webpad'
-import { logWarn } from './log'
+import { logInfo, logWarn } from './log'
 
 export type Action =
   | 'up' | 'down' | 'left' | 'right'
@@ -120,11 +120,16 @@ export interface PadStatus {
   devices: string[]
   /** Why there is no input, when there is a reason worth repeating. */
   failure: string | null
+  /** Controls being ignored for reporting faster than a hand can move them. */
+  silenced: string[]
 }
 
 export async function padStatus(): Promise<PadStatus> {
   if (!inApp) {
-    return { supported: false, connected: 0, backend: 'browser', devices: [], failure: null }
+    return {
+      supported: false, connected: 0, backend: 'browser',
+      devices: [], failure: null, silenced: [],
+    }
   }
   return call<PadStatus>('pad_status')
 }
@@ -184,7 +189,21 @@ export async function createInput(
     const offset = await syncClock()
     const unlisten = await listen<RustInputEvent>('input', (ev) => {
       const p = ev.payload
+      // Arriving at all is the proof; it is recorded before anything else so
+      // the webview can see it and stand down on its next frame.
+      const wasFirst = !nativeDelivered
       nativeDelivered = true
+
+      // Exactly one path dispatches at any moment. If the webview is driving
+      // it owns this press too -- including the very first native event, which
+      // it has already handled. Dispatching here as well would double it, and
+      // a doubled A launches a game twice.
+      if (webPad?.armed()) {
+        if (wasFirst) {
+          logInfo('input', 'the native path delivered; handing the pad back to it')
+        }
+        return
+      }
       dispatch({
         action: p.action,
         repeat: p.repeat,
@@ -197,17 +216,59 @@ export async function createInput(
     disposers.push(unlisten)
   }
 
-  // The fallback. It arms itself only if the native path has neither delivered
-  // an event nor found a pad, so in the normal case it costs one timer and
-  // never dispatches anything. See webpad.ts for why it exists at all.
-  const status = await padStatus()
+  /**
+   * Exactly one path drives, and it is whichever knows about more hardware.
+   *
+   * The native path is preferred: lower latency, repeat that survives a busy
+   * webview, and it still works when a game takes focus. But preferring it
+   * unconditionally was wrong in a way that took a while to see. Standing the
+   * webview down as soon as *one* pad delivered natively left every pad gilrs
+   * could not read with nothing driving it at all -- so a DualSense working
+   * perfectly was the reason an Xbox controller plugged in beside it was not
+   * recognised in the slightest.
+   *
+   * The two see different hardware because they are genuinely different code:
+   * gilrs reads Windows.Gaming.Input, while the webview is Chromium reading
+   * XInput, raw HID and DirectInput. Either can see something the other cannot.
+   *
+   * So: count. If the webview can drive more pads than the native path has
+   * found, it takes over completely -- completely, because running both is how
+   * every press ends up happening twice.
+   */
+  let nativePads = (await padStatus()).connected
+
+  /**
+   * Only a delivered event proves the native path works.
+   *
+   * `connected > 0` is a claim, not evidence, and on Windows it can be both
+   * true and useless at once. From a real report: gilrs raised a Connected
+   * event so the count read 1, enumerated no devices at all, and never sent a
+   * single button. Counting that as coverage stood the webview down -- which
+   * could see the controller perfectly -- and left nothing driving a pad that
+   * works fine in Steam on the same machine.
+   *
+   * So the count only decides *how much* the native path covers. Whether it
+   * works at all is answered by whether anything has arrived from it.
+   */
+  const nativeHandlesEverything = () =>
+    nativeDelivered && nativePads >= (webPad?.usable() ?? 0)
+
+  // The count changes whenever a pad is plugged in, wakes up or goes to sleep,
+  // and a snapshot taken at startup is exactly what made the old version wrong.
+  const recount = window.setInterval(() => {
+    void padStatus()
+      .then((s) => { nativePads = s.connected })
+      .catch(() => { /* a count we cannot read is not worth a message */ })
+  }, 3000)
+  disposers.push(() => window.clearInterval(recount))
+
   webPad = createWebPad(
     (e) => {
       dispatch(e)
       tap(e.action, 'pad')
       note('pad')
     },
-    () => nativeDelivered || status.connected > 0,
+    nativeHandlesEverything,
   )
   disposers.push(() => webPad?.stop())
 

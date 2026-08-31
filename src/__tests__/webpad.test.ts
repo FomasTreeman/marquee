@@ -88,6 +88,179 @@ describe('arming', () => {
   })
 })
 
+describe('choosing which path drives', () => {
+  it('drives when the native path claims a pad but never sends anything', () => {
+    // Straight from a Windows debug report:
+    //
+    //   connected: 1
+    //   Windows.Gaming.Input enumerated: (nothing)
+    //   the webview sees: Xbox 360 Controller — standard mapping
+    //
+    // gilrs raised a Connected event so the count read 1, enumerated no
+    // devices, and never delivered a button. Treating that count as coverage
+    // stood this path down and left nothing at all driving a controller that
+    // works in Steam on the same machine. A count is a claim; only an event
+    // that arrived is evidence.
+    const nativeDelivered = false
+    const nativePads = 1
+    const usable = () => pads.filter((p) => (p as Gamepad | null)?.mapping === 'standard').length
+    const w = createWebPad(
+      (e) => events.push(e),
+      () => nativeDelivered && nativePads >= usable(),
+      2500,
+    )
+    pads = [fakePad({ id: 'Xbox 360 Controller' })]
+    vi.advanceTimersByTime(2600)
+    pads = [press(fakePad({ id: 'Xbox 360 Controller' }), 0)]
+    tick()
+    expect(events.map((e) => e.action), 'a claimed-but-silent native pad must not win')
+      .toEqual(['a'])
+    w.stop()
+  })
+
+  it('reports whether it is the one driving', () => {
+    // The native listener asks this to avoid dispatching the same press twice
+    // during handover.
+    let delivered = false
+    const w = createWebPad((e) => events.push(e), () => delivered, 2500)
+    expect(w.armed(), 'not during the settle period').toBe(false)
+    pads = [fakePad()]
+    vi.advanceTimersByTime(2600); tick()
+    expect(w.armed(), 'driving once native has shown nothing').toBe(true)
+    delivered = true
+    tick()
+    expect(w.armed(), 'stood down once native delivered').toBe(false)
+    w.stop()
+  })
+
+  it('arms later if the native path looked fine at first and then did not', () => {
+    // Reported from Windows: "Windows.Gaming.Input sees: (nothing enumerated),
+    // the webview sees: xbox 360 controller - standard mapping", and nothing
+    // happened. Arming was a single check 2.5s after startup; standing down
+    // was continuous. If native looked fine at that one instant -- a pad still
+    // waking, a transient count -- it never armed again, and a machine whose
+    // native backend enumerates nothing was left with neither path driving.
+    let nativePads = 1
+    const w = createWebPad((e) => events.push(e), () => nativePads > 0, 2500)
+    pads = [fakePad()]
+    vi.advanceTimersByTime(2600)
+    tick()
+    expect(events, 'native looked fine, so nothing yet').toEqual([])
+
+    nativePads = 0            // gilrs turns out to see nothing at all
+    pads = [press(fakePad(), 0)]
+    tick(); tick()
+    expect(events.map((e) => e.action), 'must take over when native falls away')
+      .toContain('a')
+    w.stop()
+  })
+
+  it('does nothing at all during the settle period', () => {
+    // The native path still gets first refusal; that is the whole reason for
+    // the delay. It just is not a one-shot decision any more.
+    const w = createWebPad((e) => events.push(e), () => false, 2500)
+    pads = [press(fakePad(), 0)]
+    tick(); tick()
+    expect(events).toEqual([])
+    w.stop()
+  })
+
+  it('takes over when it can see hardware the native path cannot', () => {
+    // The reported case: a DualSense works natively, an Xbox controller
+    // plugged in beside it is not recognised at all. Standing down because
+    // *one* pad delivered natively left every pad gilrs could not read with
+    // nothing driving it.
+    let nativePads = 1
+    const usable = () => pads.filter((p) => (p as Gamepad | null)?.mapping === 'standard').length
+    const w = createWebPad(
+      (e) => events.push(e),
+      () => nativePads >= usable(),
+      2500,
+    )
+    pads = [fakePad({ id: 'DualSense' }), fakePad({ id: 'Xbox' })]
+    vi.advanceTimersByTime(2600)
+
+    pads = [fakePad({ id: 'DualSense' }), press(fakePad({ id: 'Xbox' }), 0)]
+    tick()
+    expect(events.map((e) => e.action), 'the pad gilrs cannot see must still work')
+      .toEqual(['a'])
+    w.stop()
+  })
+
+  it('stands aside once the native path covers everything', () => {
+    let nativePads = 1
+    const usable = () => pads.filter((p) => (p as Gamepad | null)?.mapping === 'standard').length
+    const w = createWebPad((e) => events.push(e), () => nativePads >= usable(), 2500)
+    pads = [fakePad(), fakePad()]
+    vi.advanceTimersByTime(2600)
+    pads = [press(fakePad(), 0), fakePad()]
+    tick()
+    expect(events).toHaveLength(1)
+
+    events = []
+    nativePads = 2          // the second pad wakes up natively
+    pads = [fakePad(), fakePad()]; tick()
+    pads = [press(fakePad(), 0), fakePad()]; tick(); tick()
+    expect(events, 'must not double what the native path is already sending').toEqual([])
+    w.stop()
+  })
+
+  it('does not count a pad it could never drive', () => {
+    // A vJoy virtual controller reports a non-standard mapping. Counting it
+    // would keep the webview driving forever on a machine where the native
+    // path is handling every real pad perfectly well.
+    let nativePads = 1
+    const usable = () => pads.filter((p) => (p as Gamepad | null)?.mapping === 'standard').length
+    const w = createWebPad((e) => events.push(e), () => nativePads >= usable(), 2500)
+    pads = [fakePad({ id: 'Real' }), fakePad({ id: 'vJoy', mapping: '' as GamepadMappingType })]
+    vi.advanceTimersByTime(2600)
+    pads = [press(fakePad({ id: 'Real' }), 0), fakePad({ id: 'vJoy', mapping: '' as GamepadMappingType })]
+    tick(); tick()
+    expect(events, 'one real pad, handled natively, so nothing here').toEqual([])
+    w.stop()
+  })
+})
+
+describe('standing down', () => {
+  it('stops the moment the native path wakes up', () => {
+    // The sequence from a real log: the app starts with nothing plugged in,
+    // this arms after 2.5s, and the controller connects half a minute later.
+    // Asking `nativeIsAlive` only at arming time left both paths delivering
+    // for the rest of the session -- every press twice, a doubled A launching
+    // a game twice.
+    let alive = false
+    const w = createWebPad((e) => events.push(e), () => alive, 2500)
+    vi.advanceTimersByTime(2600)
+
+    pads = [press(fakePad(), 0)]
+    tick()
+    expect(events.map((e) => e.action), 'armed while nothing else was').toEqual(['a'])
+
+    alive = true          // the pad connects; gilrs starts delivering
+    events = []
+    pads = [fakePad()]; tick()
+    pads = [press(fakePad(), 0)]; tick(); tick()
+    expect(events, 'must not double the native path').toEqual([])
+    w.stop()
+  })
+
+  it('forgets what was held when it stands down', () => {
+    // Otherwise the press it was holding at the moment it stood down is
+    // remembered, and reappears as a phantom release later.
+    let alive = false
+    const w = createWebPad((e) => events.push(e), () => alive, 2500)
+    vi.advanceTimersByTime(2600)
+    pads = [press(fakePad(), 13)]
+    tick()
+    alive = true
+    tick()
+    events = []
+    for (let i = 0; i < 20; i++) tick(50)
+    expect(events).toEqual([])
+    w.stop()
+  })
+})
+
 describe('once armed', () => {
   let w: ReturnType<typeof createWebPad>
   beforeEach(() => { w = start(false); vi.advanceTimersByTime(2600) })
@@ -111,26 +284,24 @@ describe('once armed', () => {
     }
   })
 
-  it('pages on the triggers as well as the bumpers', () => {
-    // Indices 6 and 7 are the analogue triggers. Leaving them unmapped meant
-    // pulling a trigger did nothing, and "the triggers do not work" is
-    // indistinguishable from "the controller does not work" when you are the
-    // one holding it.
-    pads = [press(fakePad(), 6)]
+  it('pages on the bumpers', () => {
+    pads = [press(fakePad(), 4)]
     tick()
     expect(events.map((e) => e.action)).toEqual(['lb'])
     events = []
     pads = [fakePad()]; tick()
-    pads = [press(fakePad(), 7)]; tick()
+    pads = [press(fakePad(), 5)]; tick()
     expect(events.map((e) => e.action)).toEqual(['rb'])
   })
 
-  it('does not fire a trigger twice when the bumper is held too', () => {
-    // Both map to the same action, and the pressed set is a Set, so holding
-    // L1 and L2 together is one press rather than two.
-    pads = [press(fakePad(), 4, 6)]
-    tick()
-    expect(events.filter((e) => e.action === 'lb')).toHaveLength(1)
+  it('leaves the analogue triggers alone', () => {
+    // Indices 6 and 7. They rest at a non-zero value on some pads and are
+    // reported as axes as well as buttons, so giving them the bumpers' action
+    // made the two interfere -- a page that sometimes happened and sometimes
+    // did not, for no reason visible from the sofa.
+    pads = [press(fakePad(), 6, 7)]
+    tick(); tick()
+    expect(events).toEqual([])
   })
 
   it('ignores a pad with no standard mapping rather than guessing', () => {

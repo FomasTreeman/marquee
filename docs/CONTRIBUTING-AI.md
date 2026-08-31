@@ -40,7 +40,51 @@ the reason the loop ends in a pull request you read rather than a push to
 Actions to create and approve pull requests"*. Without it the run does the work
 and then fails at the last step, which is a confusing way to find out.
 
-**3. The signing key, if you have not already.** `docs/UPDATES.md`. Nothing
+**3. A token that can write workflow files, if you want Claude to fix CI.**
+
+Optional, and only for changes under `.github/workflows/`. GitHub will not let
+`GITHUB_TOKEN` write a workflow file at all — there is no permission to grant,
+and the push fails naming `workflows permission`, which reads like a bug in the
+action. That is how issue #1 ended: a correct set of CI fixes posted as a
+comment for somebody to retype, because the branch could not be pushed.
+
+**Settings → Developer settings → Personal access tokens → Fine-grained.**
+Scope it to this repository alone, and grant exactly:
+
+| | |
+|---|---|
+| Contents | read and write |
+| Pull requests | read and write |
+| Issues | read and write |
+| Workflows | read and write |
+| Actions | read |
+
+Store it as `CLAUDE_WORKFLOW_TOKEN`.
+
+The workflow takes the first of `CLAUDE_WORKFLOW_TOKEN`, `PROJECT_TOKEN` and
+`GITHUB_TOKEN` that exists, so the token the board automation already uses will
+do the job if it carries `workflow` — but two things make a dedicated
+fine-grained token the better one, which is why it is checked first:
+
+- **`workflow` on its own cannot push.** Writing a workflow file still needs
+  `repo`, or `public_repo` on a public repository. Without one of those the
+  push fails exactly as it did with `GITHUB_TOKEN`, and the message still talks
+  about workflow permission.
+- **A classic token reaches too far.** `repo` covers every repository the
+  account can see and `project` every board. That is a wide reach to hand a run
+  whose brief is issue text written by anyone on the internet. A fine-grained
+  token stops at this repository.
+
+Actions stays **read** deliberately. It is what lets Claude open the run that
+failed and see which step died and how long it sat there — the reading that
+fixing a workflow actually consists of. Write would also let it start runs, and
+`gh workflow run release.yml` cuts a release. A CI fix is tested by opening the
+pull request and letting CI run on it.
+
+Without the secret everything works as before; with it, pull requests come from
+your account rather than `github-actions[bot]`, and the pushes trigger CI.
+
+**4. The signing key, if you have not already.** `docs/UPDATES.md`. Nothing
 below produces a usable release without it.
 
 ## Filing an issue Claude can act on
@@ -75,6 +119,18 @@ Progress is ticked off in the issue thread as it goes.
 You can keep talking to it. `@claude` in a review comment on the PR, and it
 picks up from there with the review as context.
 
+**If CI goes red on that pull request, it fixes it without being asked.**
+`.github/workflows/ci-repair.yml` watches CI finish, and on a failing run for a
+`claude/` branch with an open pull request it starts a run whose brief is the
+failing log. Three attempts, each announced in a comment on the pull request;
+after the third it says so, labels the pull request `needs-decision` and stops,
+because an agent that has not fixed something in three goes will not find it on
+the ninth.
+
+It skips a failure whose commit has already been superseded, and it does not
+touch pull requests from forks — that restriction is load-bearing, and the
+header of the file explains why.
+
 ## Reviewing
 
 CI runs on all three platforms with warnings as errors, plus the silence check,
@@ -92,7 +148,10 @@ order they have actually gone wrong here:
 
 ## Releasing
 
-Nothing to do. Merging is the release.
+Nothing to do. Merging is the release — once CI is green on the merge commit.
+The Release workflow waits for it and publishes nothing without it, because the
+bundler only compiles and would happily sign and ship a commit whose tests
+fail.
 
 The Release workflow reads the labels on the pull request that was merged --
 `breaking` for a major, `enhancement` for a minor, anything else a patch,

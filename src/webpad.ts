@@ -38,7 +38,7 @@ const DEADZONE = 0.55
 const BUTTONS: Array<Action | undefined> = [
   'a', 'b', 'x', 'y',       // 0-3   face
   'lb', 'rb',               // 4-5   bumpers
-  'lb', 'rb',               // 6-7   triggers: page as well, see input.rs
+  undefined, undefined,     // 6-7   triggers: see input.rs, they do not page
   'add', 'menu',            // 8-9   Select/Back, Start
   'sort', 'filter',         // 10-11 stick clicks
   'up', 'down', 'left', 'right', // 12-15 d-pad
@@ -56,16 +56,28 @@ function livePads(): Gamepad[] {
 export interface WebPad {
   /** Names of the pads the webview can see, for the diagnostics screen. */
   seen(): string[]
+  /** Whether this path is currently the one dispatching. */
+  armed(): boolean
+  /** How many of those this path could actually drive. A pad with no standard
+   *  mapping is visible but unusable, so it does not count towards deciding
+   *  which path knows about more hardware. */
+  usable(): number
   stop(): void
 }
 
 /**
  * Watch for pads, and take over only if nothing else has.
  *
- * `nativeIsAlive` is asked once, after a delay. Running both at once would
- * fire every press twice -- and a doubled A launches a game twice -- so the
- * native path gets first refusal and this only arms when it has visibly not
- * taken it.
+ * `nativeIsAlive` is asked after a delay, and then again on every frame while
+ * armed. Both matter. Running the two at once fires every press twice -- a
+ * doubled A launches a game twice, a doubled bumper pages six rows instead of
+ * three -- so the native path gets first refusal, and gets it back the moment
+ * it wakes up.
+ *
+ * Asking only once was not enough, and the sequence that proved it is the
+ * ordinary one: start the app with no controller plugged in, this arms after
+ * two and a half seconds, then the controller connects half a minute later and
+ * both paths deliver for the rest of the session.
  */
 export function createWebPad(
   dispatch: (e: ActionEvent) => void,
@@ -86,6 +98,28 @@ export function createWebPad(
   function poll(): void {
     if (stopped) return
     raf = requestAnimationFrame(poll)
+    if (performance.now() < settleUntil) return
+
+    // Asked on every frame, in both directions.
+    //
+    // Standing down was already continuous; arming was a single check two and
+    // a half seconds after startup, and if the answer happened to be "the
+    // native path is fine" at that one instant it never armed again. So a
+    // machine where Windows.Gaming.Input enumerates nothing at all, and the
+    // webview can see the controller perfectly, ended up with neither path
+    // driving it -- which is exactly as dead as no controller.
+    const nativeCovers = nativeIsAlive()
+    if (armed && nativeCovers) {
+      armed = false
+      was = new Set()
+      repeatAt.clear()
+      logInfo('input', 'the native gamepad path is delivering; the webview is standing down')
+      return
+    }
+    if (!armed && !nativeCovers && livePads().length) {
+      armed = true
+      logInfo('input', 'the native path is not covering every pad; the webview is driving')
+    }
     if (!armed) return
 
     const now = performance.now()
@@ -147,22 +181,19 @@ export function createWebPad(
   }
   window.addEventListener('gamepadconnected', onConnect)
 
-  const timer = window.setTimeout(() => {
-    if (nativeIsAlive()) return
-    armed = true
-    logInfo(
-      'input',
-      'native gamepad path reported nothing; the webview is driving the pad instead',
-    )
-  }, armAfterMs)
+  // Nothing at all for the first moments, so the native path gets first
+  // refusal before this starts looking. Not a one-shot decision any more --
+  // just a quiet period, after which `poll` decides continuously.
+  const settleUntil = performance.now() + armAfterMs
 
   raf = requestAnimationFrame(poll)
 
   return {
     seen: () => livePads().map((p) => `${p.id} — ${p.mapping || 'non-standard'} mapping`),
+    armed: () => armed,
+    usable: () => livePads().filter((p) => p.mapping === 'standard').length,
     stop() {
       stopped = true
-      window.clearTimeout(timer)
       cancelAnimationFrame(raf)
       window.removeEventListener('gamepadconnected', onConnect)
     },

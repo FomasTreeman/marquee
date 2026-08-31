@@ -161,6 +161,12 @@ labels on the pull request that was merged and decides the version from them:
 | anything else | patch | `1.4.3` |
 | `no-release` | — | nothing happens |
 
+First it waits for CI to be green on that exact commit, and releases nothing
+without it. The bundler only compiles -- it runs no tests -- so before this a
+merge that built and broke the suite was signed and published to every
+installed copy's updater, and the first sign of trouble was somebody's launcher
+behaving oddly.
+
 Then it writes that version into `tauri.conf.json`, `package.json` and
 `Cargo.toml`, commits, tags, builds and signs installers for Apple silicon,
 Intel Mac, Linux and Windows, writes the `latest.json` manifest, and
