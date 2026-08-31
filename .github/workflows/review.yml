@@ -30,16 +30,22 @@ concurrency:
 jobs:
   review:
     # Drafts are work in progress by definition, and `no-ai` opts out.
+    #
+    # Dependabot is excluded by name rather than by being a bot: Claude's own
+    # pull requests arrive as a bot too, and reviewing those is the point --
+    # see the header. What is not the point is spending a run of subscription
+    # usage reading a one-line SHA bump every Monday.
     if: |
       !github.event.pull_request.draft &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
       !contains(github.event.pull_request.labels.*.name, 'no-ai')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
 
-      - uses: anthropics/claude-code-action@v1
+      - uses: anthropics/claude-code-action@a874e9ecd7bb36efdad65429c6b35815f5a08f10 # v1.0.210
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
