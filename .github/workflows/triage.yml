@@ -1,0 +1,59 @@
+# Route an issue the moment it is filed.
+#
+# The template asks who should fix it; this turns that answer into the label
+# the rest of the automation runs on. Without it somebody has to remember to
+# add a label by hand, and an issue arriving with neither sits in a queue
+# nobody is working through -- which is how a to-do list becomes a graveyard.
+#
+# Separate from board.yml because it runs once, at the start, and answers a
+# different question: not "where does this belong" but "whose is it".
+
+name: Triage
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const body = context.payload.issue.body || ''
+            const labels = context.payload.issue.labels.map((l) => l.name)
+
+            // Already routed -- by hand, or by the template's own labels.
+            if (labels.includes('claude') || labels.includes('no-ai')) {
+              core.info('already routed')
+              return
+            }
+
+            // The template's dropdown, read from the rendered body. A
+            // free-form issue has no such line and gets the safe answer.
+            const wantsClaude = /Who should fix this[\s\S]{0,120}?Claude/i.test(body)
+            const label = wantsClaude ? 'claude' : 'no-ai'
+
+            await github.rest.issues.addLabels({
+              ...context.repo,
+              issue_number: context.payload.issue.number,
+              labels: [label],
+            })
+            core.info(`#${context.payload.issue.number} -> ${label}`)
+
+            // Say so when the safe answer was a guess. Silently deciding that
+            // nobody will work on something is worse than asking.
+            if (!wantsClaude) {
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: context.payload.issue.number,
+                body:
+                  'Filed without saying who should fix it, so it is labelled ' +
+                  '`no-ai` and will wait for a person. Swap that for `claude` ' +
+                  'to hand it over.',
+              })
+            }

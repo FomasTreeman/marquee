@@ -16,6 +16,17 @@ on:
     branches: [main]
   pull_request:
 
+# Explicit, and read-only, because CI builds and tests and writes nothing.
+#
+# Every workflow here declares what it needs, so the repository-wide default is
+# only ever a ceiling. That matters more than it looks: with the default set to
+# read, a `permissions:` block asking for write is *ignored* rather than
+# honoured -- the setting is a cap, not a starting point -- and the symptom is
+# "Resource not accessible by integration" from a workflow that plainly asked
+# for the permission it was denied.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -97,6 +108,12 @@ jobs:
       # named after the file path, in zero seconds, which reads like a rename
       # rather than a break. Releases stopped for three merges before anyone
       # noticed.
+      # The rules that decide what a person sees when they come back to a pile
+      # of work. Pure, so they cost nothing to check.
+      - name: Board rules
+        shell: bash
+        run: node .github/scripts/board.test.mjs
+
       - name: Workflows GitHub will accept
         shell: bash
         run: python3 tools/check-workflows.py
