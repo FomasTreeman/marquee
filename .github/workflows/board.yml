@@ -67,6 +67,24 @@ jobs:
     # is the long case and it is seconds, not minutes.
     timeout-minutes: 10
     steps:
+      # No `ref:`, and that omission is load-bearing.
+      #
+      # This workflow runs on `pull_request_target`, which it needs to: a card
+      # has to move for a pull request from a fork, and `pull_request` gives a
+      # fork no secrets and no write access. The price is that
+      # pull_request_target runs from the default branch with PROJECT_TOKEN in
+      # the environment, whoever opened the pull request.
+      #
+      # Leaving `ref:` off means the checkout resolves to the base branch, so
+      # the only code on disk beside that token is code that is already
+      # reviewed and merged. Adding
+      # `ref: ${{ github.event.pull_request.head.sha }}` -- the obvious edit
+      # for anyone who wants the script to see the branch it is reconciling --
+      # would put an unreviewed .github/scripts/board.mjs from any fork one
+      # `await import` away from a classic token that can reach every board on
+      # the account. Nothing about that would look wrong in a diff.
+      #
+      # The script does not need the branch. It reads facts through the API.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           sparse-checkout: .github/scripts

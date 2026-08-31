@@ -13,10 +13,21 @@
 # and a classic token with `repo` can write to every repository on the account.
 #
 # Read-only, apart from one label added and immediately removed.
+#
+# Weekly, as well as on demand. Running this only when somebody remembered to
+# meant it could not catch the thing it is best placed to catch: a classic
+# token has an expiry date, and the day it passes nothing announces itself --
+# the board simply stops moving, which looks like a bug in the board. A run
+# that fails on a Monday morning is the announcement.
 
 name: Token check
 
 on:
+  schedule:
+    # Monday, before anything else runs. Dependabot opens its pull requests the
+    # same morning, so a token that expired over the weekend is found before it
+    # is blamed for those.
+    - cron: '13 7 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -63,6 +74,22 @@ jobs:
               catch (e) { rows.push(['MISSING', what, `${need} — ${e.message.split('\n')[0]}`]) }
             }
 
+            // GitHub returns a personal access token's expiry on every
+            // authenticated response. Nothing was reading it, so the first
+            // sign of an expired token was the automation quietly stopping.
+            const expiry = async () => {
+              const res = await fetch('https://api.github.com/rate_limit',
+                { headers: { authorization: `bearer ${token}` } })
+              const when = res.headers.get('github-authentication-token-expiration')
+              if (!when) { rows.push(['ok', 'it does not expire', 'no expiry set on this token']); return }
+              const days = Math.floor((new Date(when) - Date.now()) / 86400000)
+              rows.push([days <= 14 ? 'MISSING' : 'note', `it expires in ${days} days`, when])
+              if (days <= 14) {
+                core.warning(`PROJECT_TOKEN expires in ${days} days (${when}). `
+                  + 'When it does the board stops moving and nothing says why.')
+              }
+            }
+
             let project
             await try_('see the board', 'a CLASSIC token with the `project` scope', async () => {
               const q = await gql(
@@ -98,6 +125,8 @@ jobs:
               ? ['note', 'it can also read this repository',
                  'it carries `repo` as well — narrow it to `project` alone when convenient']
               : ['ok', 'it cannot reach the repository', 'which is correct'])
+
+            await expiry()
 
             core.summary.addHeading('PROJECT_TOKEN — classic, `project` scope', 3)
             core.summary.addTable([[{ data: '', header: true }, { data: 'can it', header: true },
@@ -189,9 +218,64 @@ jobs:
             await try_('see workflow files', 'Workflows: Read and write', () =>
               github.rest.repos.getContent({ owner, repo, path: '.github/workflows/ci.yml' }))
 
+            // Same as PROJECT_TOKEN: the expiry is in the response headers and
+            // nothing was looking at it. A fine-grained token expires by
+            // default, so this one is the more likely of the two to lapse.
+            if (process.env.HAS_TOKEN === 'true') {
+              const res = await github.request('GET /rate_limit')
+              const when = res.headers['github-authentication-token-expiration']
+              if (!when) {
+                rows.push(['ok', 'it does not expire', 'no expiry set on this token'])
+              } else {
+                const days = Math.floor((new Date(when) - Date.now()) / 86400000)
+                rows.push([days <= 14 ? 'MISSING' : 'note', `it expires in ${days} days`, when])
+                if (days <= 14) {
+                  core.warning(`CLAUDE_WORKFLOW_TOKEN expires in ${days} days (${when}). `
+                    + 'When it does, pull requests stop being opened and nothing says why.')
+                }
+              }
+            }
+
             core.summary.addHeading('CLAUDE_WORKFLOW_TOKEN — fine-grained', 3)
             core.summary.addTable([[{ data: '', header: true }, { data: 'can it', header: true },
                                     { data: 'note', header: true }], ...rows])
             await core.summary.write()
             for (const [s, w, n] of rows) core.info(`  ${s.padEnd(8)} ${w} ${n}`)
             if (rows.some(([s]) => s === 'MISSING')) core.setFailed('The agent token is short a permission.')
+
+  agent-subscription:
+    name: CLAUDE_CODE_OAUTH_TOKEN is present
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+        with:
+          script: |
+            // Presence only, deliberately. The token is a credential for a
+            // Claude subscription rather than for GitHub, so there is nothing
+            // here that can test it without spending a run of usage -- and the
+            // three workflows that use it will each say plainly if it is
+            // wrong. What they cannot say is anything at all when it is
+            // *missing*, which is the case this covers: claude.yml, review.yml
+            // and ci-repair.yml would each start, install a full toolchain,
+            // and fail at the last step.
+            //
+            // TAURI_SIGNING_PRIVATE_KEY is not checked here on purpose. It
+            // lives in the `release` environment rather than in repository
+            // secrets, and release.yml's `key` job already proves it decodes
+            // before every release rather than weekly.
+            if (process.env.HAS_TOKEN !== 'true') {
+              core.setFailed(
+                'CLAUDE_CODE_OAUTH_TOKEN is not set. Every Claude workflow will start, '
+                + 'install a toolchain, and fail at the last step. Generate one with '
+                + '`claude setup-token` and add it under Settings -> Secrets and '
+                + 'variables -> Actions. See the header of .github/workflows/claude.yml.')
+              return
+            }
+            core.info('CLAUDE_CODE_OAUTH_TOKEN is set.')
+            core.summary.addHeading('CLAUDE_CODE_OAUTH_TOKEN', 3)
+            core.summary.addRaw('Present. Whether it still authorises is not testable '
+              + 'without spending a run of subscription usage.')
+            await core.summary.write()
