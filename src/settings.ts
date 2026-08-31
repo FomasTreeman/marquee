@@ -23,6 +23,21 @@ import { checkForUpdate } from './update'
 import { logInfo, logWarn } from './log'
 import { toast } from './toast'
 
+/**
+ * The scroll delta a direction should apply to the settings body, or
+ * `undefined` for actions that are not a scroll.
+ *
+ * `handle` used to swallow `up`/`down` along with everything else while the
+ * overlay was open, so the left stick moved nothing -- there was no focused
+ * element for the browser's own scroll-into-view to chase, unlike a keyboard
+ * `Tab`. Exported so the mapping is checkable without a DOM.
+ */
+export function settingsScrollDelta(action: string): number | undefined {
+  if (action === 'up') return -220
+  if (action === 'down') return 220
+  return undefined
+}
+
 export interface SettingsView {
   readonly isOpen: boolean
   readonly field: HTMLInputElement
@@ -446,6 +461,10 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
       if (!open) return false
       if (action === 'b') close()
       else if (action === 'a') void commitKey()
+      else {
+        const delta = settingsScrollDelta(action)
+        if (delta !== undefined) body.scrollBy({ top: delta, behavior: 'smooth' })
+      }
       return true
     },
   }
