@@ -25,6 +25,25 @@
 #
 # Never paste that token into an issue, a commit, or a chat. It is a
 # credential for your Claude account.
+#
+# ---------------------------------------------------------------------------
+# Optional, and only needed for changes under `.github/workflows/`.
+#
+# GitHub refuses to let GITHUB_TOKEN write a workflow file, whatever is in the
+# `permissions:` block below -- there is no `workflows: write` to grant. The
+# push fails with "refusing to allow a GitHub App to create or update workflow
+# ... without workflows permission", which reads like a bug in the action and
+# is not one. What happened in practice is worse than a failure: the run gave
+# up on the pull request and left its findings as a comment, so a correct fix
+# to this very file arrived as prose for somebody to retype.
+#
+# A personal access token with the `workflow` scope (classic) or Workflows:
+# write (fine-grained), stored as CLAUDE_WORKFLOW_TOKEN, lifts it. Without the
+# secret everything below behaves exactly as before.
+#
+# Two things change when it is set, both wanted: pull requests and comments
+# come from your account rather than github-actions[bot], and pushes made with
+# it do trigger CI, which GITHUB_TOKEN deliberately does not.
 # ---------------------------------------------------------------------------
 
 name: Claude
@@ -156,7 +175,10 @@ jobs:
         id: claude
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Falls back to GITHUB_TOKEN when the secret is absent, which is the
+          # whole of the previous behaviour. See the header for what the extra
+          # token buys and why a workflow file cannot be pushed without one.
+          github_token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
           # Ticked-off progress in the issue thread, so a long run is legible
           # rather than a spinner.
           track_progress: true

@@ -71,8 +71,16 @@ before — a reader in six months needs the reasoning, not the diff, which git
 already has. Subject line in the imperative, no prefix tags, no trailing full
 stop.
 
-Do not commit or push unless asked. Never commit anything matching `*.key`:
-the update signing key must not enter the repository. See `docs/UPDATES.md`.
+**Finished work ends in a pull request, not in the working tree.** When a
+change is done and `pnpm test` and clippy have passed, branch it, commit it and
+open the PR without being asked. Leaving it uncommitted is not the cautious
+option: more than one agent works in this checkout, and a session that ran
+`git commit -a` once swept another's unrelated, unreviewed changes into its own
+commit and onto main under a commit message about something else.
+
+Never commit to `main` — a ruleset refuses it. Never commit anything matching
+`*.key`: the update signing key must not enter the repository. See
+`docs/UPDATES.md`.
 
 ## Where things are
 
