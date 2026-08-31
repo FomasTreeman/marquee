@@ -113,6 +113,15 @@ fn launch_game(
             })
         }
         Ok(run::Launch::Process { program, .. }) => {
+            // Steam learns "last played" from localconfig.vdf on its own next
+            // scan. A manual game has no such file anywhere, so this is the
+            // only moment that timestamp is ever knowable -- it was "never
+            // played" forever without it, no matter how often it ran.
+            if let Some(row_id) = id.strip_prefix("manual:").and_then(|s| s.parse().ok()) {
+                if let Err(e) = store.record_manual_play(row_id) {
+                    log_warn!("run", "could not record last-played for {id}: {e}");
+                }
+            }
             if minimise {
                 let _ = window.minimize();
             }
