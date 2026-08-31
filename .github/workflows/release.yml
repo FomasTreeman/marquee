@@ -29,6 +29,21 @@ name: Release
 on:
   push:
     branches: [main]
+    # A version number is a thing every installed copy downloads, so it should
+    # correspond to something they could not already do. A change to these
+    # paths ships nothing a user can run: prose, the workflows that build the
+    # thing, and the token source the build regenerates from.
+    #
+    # Only a commit touching *nothing else* is skipped. A change that edits
+    # docs alongside code releases exactly as before, so this cannot quietly
+    # withhold a fix. `no-release` remains the way to skip one that does touch
+    # code.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**'
+      - 'design/**'
+      - LICENSE
   workflow_dispatch:
     inputs:
       bump:

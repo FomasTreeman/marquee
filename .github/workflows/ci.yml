@@ -95,7 +95,21 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # ---------------------------------------------------------------------
+      # Everything from here to the Rust step reads files and runs pure
+      # functions, so all three runners were computing the same answer. Three
+      # copies of it bought three identical failures to read and, on Windows,
+      # the slowest copy of each. Only cargo genuinely needs the matrix.
+      #
+      # They stay inside this job rather than moving to one of their own
+      # because the branch ruleset requires `build (ubuntu-latest)`,
+      # `build (windows-latest)` and `build (macos-latest)` by name. A new job
+      # would not be in that list, so a lint failure would stop blocking a
+      # merge -- and it would stop quietly, which is the failure this
+      # repository is worst at seeing.
+      # ---------------------------------------------------------------------
       - name: Design tokens are in step with their source
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           python3 tools/build-tokens.py
@@ -105,28 +119,38 @@ jobs:
       # A discarded failure with no log call and no comment saying why. Cheap,
       # and it runs before the slow steps so it fails fast.
       - name: No unexplained discarded failures
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: tools/check-silence.sh
+
+      # The rules that decide what a person sees when they come back to a pile
+      # of work. Pure, so they cost nothing to check.
+      - name: Board rules
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: node .github/scripts/board.test.mjs
 
       # A schema-invalid workflow does not fail loudly -- it fails as a run
       # named after the file path, in zero seconds, which reads like a rename
       # rather than a break. Releases stopped for three merges before anyone
       # noticed.
-      # The rules that decide what a person sees when they come back to a pile
-      # of work. Pure, so they cost nothing to check.
-      - name: Board rules
-        shell: bash
-        run: node .github/scripts/board.test.mjs
-
       - name: Workflows GitHub will accept
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: python3 tools/check-workflows.py
 
-      - run: pnpm exec tsc --noEmit
+      - if: matrix.os == 'ubuntu-latest'
+        run: pnpm exec tsc --noEmit
 
       - name: Frontend tests
+        if: matrix.os == 'ubuntu-latest'
         run: pnpm exec vitest run
 
+      # Not ubuntu-only, and this one is not optional anywhere:
+      # `generate_context!` embeds the built frontend, so without dist/ the
+      # crate does not compile at all -- "the `frontendDist` configuration is
+      # set to `../dist` but this path doesn't exist", from a proc macro, which
+      # reads like a broken toolchain rather than a missing build step.
       - run: pnpm exec vite build
 
       # Warnings are errors here but not locally: a warning that blocks the
