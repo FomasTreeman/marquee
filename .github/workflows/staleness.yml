@@ -40,27 +40,83 @@ jobs:
         env:
           BASE: ${{ github.event.pull_request.base.ref }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Rule 1 below refuses a change that mostly deletes, and the comment
+          # over it always conceded the case it could not tell apart: a removal
+          # that is the point of the pull request. There was no way past it
+          # short of editing this file, so the label is the way past it.
+          OVERRIDE: ${{ contains(github.event.pull_request.labels.*.name, 'deliberate-deletion') }}
         run: |
           set -euo pipefail
           git fetch -q origin "$BASE"
           base="origin/$BASE"
+          mb=$(git merge-base "$base" "$HEAD_SHA")
 
           behind=$(git rev-list --count "$HEAD_SHA..$base")
           ahead=$(git rev-list --count "$base..$HEAD_SHA")
           echo "This branch is $behind commits behind $BASE and $ahead ahead."
 
-          # What merging it would actually do to the current tree.
-          added=$(git diff --numstat "$base...$HEAD_SHA" | awk '{a+=$1} END {print a+0}')
-          removed=$(git diff --numstat "$base...$HEAD_SHA" | awk '{r+=$2} END {print r+0}')
-          echo "Against today's $BASE it adds $added lines and removes $removed."
+          # Two ranges, two questions, and conflating them is what made this
+          # check unable to fire.
+          #
+          # `git diff A...B` is `git diff $(git merge-base A B) B`: the branch's
+          # own work, with everything $BASE gained since the cut deliberately
+          # excluded. `git diff A..B` compares the two trees, so $BASE's newer
+          # work shows up as deletions. The step printed "against today's $BASE"
+          # and computed it with three dots, which is the one form guaranteed
+          # not to see a stale branch -- measured here against a branch eight
+          # commits behind, three dots said +0/-0 while two said +376/-961.
+          own_a=$(git diff --numstat "$base...$HEAD_SHA" | awk '{a+=$1} END {print a+0}')
+          own_r=$(git diff --numstat "$base...$HEAD_SHA" | awk '{r+=$2} END {print r+0}')
+          tree_a=$(git diff --numstat "$base..$HEAD_SHA" | awk '{a+=$1} END {print a+0}')
+          tree_r=$(git diff --numstat "$base..$HEAD_SHA" | awk '{r+=$2} END {print r+0}')
+          echo "Its own change adds $own_a lines and removes $own_r."
+          echo "Against today's $BASE the trees differ by +$tree_a/-$tree_r."
 
-          # A change that deletes a great deal more than it adds is either a
-          # deliberate removal -- rare, and worth a human looking anyway -- or
-          # a branch old enough to be undoing other people's work.
-          if [ "$removed" -gt 200 ] && [ "$removed" -gt $((added * 3)) ]; then
-            echo "::error::This removes $removed lines and adds $added. If that is not"
-            echo "::error::deliberate, the branch is probably cut from an old $BASE and"
-            echo "::error::merging it would undo work. Rebase or merge $BASE into it first."
+          # 1. A branch that deletes far more than it adds. Read from its own
+          #    change, because that is whose intent is in question.
+          #
+          #    The label excuses this rule and only this rule. "I meant to
+          #    delete it" is an answer to the question of intent; it is not an
+          #    answer to being cut from a stale $BASE, and rule 2 below still
+          #    applies to a deletion pull request that is also out of date.
+          if [ "$OVERRIDE" != "true" ] \
+             && [ "$own_r" -gt 200 ] && [ "$own_r" -gt $((own_a * 3)) ]; then
+            echo "::error::This removes $own_r lines and adds $own_a, which is a removal"
+            echo "::error::rather than a change. If that is the point of the pull request,"
+            echo "::error::label it deliberate-deletion and this rule will stand aside."
+            echo "::error::If it is not, something has gone wrong in the branch."
+            exit 1
+          fi
+
+          # 2. A branch old enough to be undoing somebody else's work. The line
+          #    counts above cannot answer this: in the two-dot diff every line
+          #    $BASE gained is a deletion and every line it lost is an addition,
+          #    so the ratio in rule 1 washes out -- the eight-commits-behind
+          #    branch scored -961/+376 and sailed through it.
+          #
+          #    What actually decides the risk is overlap. A stale branch that
+          #    touches nothing $BASE has touched merges cleanly whatever its
+          #    age; one that edits the same files is where work disappears. So
+          #    the question is how much $BASE changed in the files this branch
+          #    also changed.
+          git diff --name-only "$base...$HEAD_SHA" | sort > /tmp/ours.txt
+          git diff --name-only "$mb..$base" | sort > /tmp/theirs.txt
+          comm -12 /tmp/ours.txt /tmp/theirs.txt > /tmp/overlap.txt
+          overlap=$(wc -l < /tmp/overlap.txt | tr -d ' ')
+
+          at_risk=0
+          if [ "$overlap" -gt 0 ]; then
+            at_risk=$(git diff --numstat "$mb..$base" -- $(tr '\n' ' ' < /tmp/overlap.txt) \
+                        | awk '{n+=$1+$2} END {print n+0}')
+          fi
+          echo "$overlap file(s) changed on both sides, $at_risk lines of $BASE at risk."
+
+          if [ "$behind" -gt 0 ] && [ "$at_risk" -gt 200 ]; then
+            echo "::error::This branch is $behind commits behind $BASE and edits $overlap file(s)"
+            echo "::error::that $BASE has changed by $at_risk lines since the branch was cut."
+            echo "::error::Merging it as-is is how that work gets quietly reverted. Rebase, or"
+            echo "::error::merge $BASE into the branch, then look at the diff again:"
+            sed 's/^/::error::  /' /tmp/overlap.txt
             exit 1
           fi
 
