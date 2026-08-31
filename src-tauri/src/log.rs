@@ -239,6 +239,20 @@ pub fn log_path() -> String {
     path().display().to_string()
 }
 
+/// The tail of the log, for the diagnostic report in Settings.
+///
+/// Bounded rather than whole: the point is something a person can paste into
+/// an issue, and a four-megabyte file is not that. The end is what matters --
+/// whatever just went wrong is at the bottom.
+pub fn tail(lines: usize) -> String {
+    let Ok(text) = std::fs::read_to_string(path()) else {
+        return String::from("(no log file yet)");
+    };
+    let all: Vec<&str> = text.lines().collect();
+    let from = all.len().saturating_sub(lines);
+    all[from..].join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

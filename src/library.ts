@@ -229,6 +229,16 @@ export async function setProfileFolder(folder: string): Promise<void> {
 
 /** Quit, minimise, restart or shut down. The last two end the whole session,
  *  so the interface arms them with a second press first. */
+/**
+ * Everything worth knowing about this machine, as one block of text.
+ *
+ * For pasting into an issue. Nothing here leaves the machine on its own.
+ */
+export async function diagnosticReport(): Promise<string> {
+  if (!inApp) return 'Not running in the app.'
+  return call<string>('diagnostic_report')
+}
+
 export async function systemAction(action: string): Promise<void> {
   if (!inApp) throw new Error('that needs the app, not a browser tab')
   return call<void>('system_action', { action })

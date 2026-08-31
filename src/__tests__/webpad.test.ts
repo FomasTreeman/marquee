@@ -89,6 +89,38 @@ describe('arming', () => {
 })
 
 describe('choosing which path drives', () => {
+  it('arms later if the native path looked fine at first and then did not', () => {
+    // Reported from Windows: "Windows.Gaming.Input sees: (nothing enumerated),
+    // the webview sees: xbox 360 controller - standard mapping", and nothing
+    // happened. Arming was a single check 2.5s after startup; standing down
+    // was continuous. If native looked fine at that one instant -- a pad still
+    // waking, a transient count -- it never armed again, and a machine whose
+    // native backend enumerates nothing was left with neither path driving.
+    let nativePads = 1
+    const w = createWebPad((e) => events.push(e), () => nativePads > 0, 2500)
+    pads = [fakePad()]
+    vi.advanceTimersByTime(2600)
+    tick()
+    expect(events, 'native looked fine, so nothing yet').toEqual([])
+
+    nativePads = 0            // gilrs turns out to see nothing at all
+    pads = [press(fakePad(), 0)]
+    tick(); tick()
+    expect(events.map((e) => e.action), 'must take over when native falls away')
+      .toContain('a')
+    w.stop()
+  })
+
+  it('does nothing at all during the settle period', () => {
+    // The native path still gets first refusal; that is the whole reason for
+    // the delay. It just is not a one-shot decision any more.
+    const w = createWebPad((e) => events.push(e), () => false, 2500)
+    pads = [press(fakePad(), 0)]
+    tick(); tick()
+    expect(events).toEqual([])
+    w.stop()
+  })
+
   it('takes over when it can see hardware the native path cannot', () => {
     // The reported case: a DualSense works natively, an Xbox controller
     // plugged in beside it is not recognised at all. Standing down because

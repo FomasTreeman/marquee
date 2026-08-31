@@ -246,6 +246,69 @@ async fn search_artwork(
     Ok(search::merge(from_sgdb, steam))
 }
 
+/// Everything worth knowing about this machine, as one block of text.
+///
+/// Built because debugging a controller across two operating systems by asking
+/// someone to read numbers off a screen is slow and lossy -- three rounds of
+/// it turned on a distinction between two lists that was there on screen the
+/// whole time. A report you can paste is worth more than a description of one.
+///
+/// Deliberately not automatic: nothing here leaves the machine unless someone
+/// copies it and chooses where to put it.
+#[tauri::command]
+fn diagnostic_report(
+    app: tauri::AppHandle,
+    status: tauri::State<'_, std::sync::Arc<input::Status>>,
+) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let pad = input::pad_status(status);
+
+    let _ = writeln!(out, "Marquee {}", app.package_info().version);
+    let _ = writeln!(
+        out,
+        "{} {} · {}",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        }
+    );
+    let _ = writeln!(out);
+
+    let _ = writeln!(out, "-- controller --");
+    let _ = writeln!(out, "backend: {}", pad.backend);
+    let _ = writeln!(
+        out,
+        "supported: {}  connected: {}",
+        pad.supported, pad.connected
+    );
+    if let Some(f) = &pad.failure {
+        let _ = writeln!(out, "failure: {f}");
+    }
+    let _ = writeln!(out, "{} enumerated:", pad.backend);
+    if pad.devices.is_empty() {
+        let _ = writeln!(out, "  (nothing)");
+    }
+    for d in &pad.devices {
+        let _ = writeln!(out, "  {d}");
+    }
+    if !pad.silenced.is_empty() {
+        let _ = writeln!(
+            out,
+            "ignored for reporting too fast: {}",
+            pad.silenced.join(", ")
+        );
+    }
+    let _ = writeln!(out);
+
+    let _ = writeln!(out, "-- log, last 120 lines --");
+    let _ = writeln!(out, "{}", log::tail(120));
+    out
+}
+
 /// Toggle fullscreen, returning the new state.
 ///
 /// Remembered, so the app comes back the way it was left. A launcher used on a
@@ -704,6 +767,7 @@ pub fn run() {
             meta::request_meta,
             launch_game,
             search::search_games,
+            diagnostic_report,
             art_url_base,
             add_manual_game,
             set_manual_executable,

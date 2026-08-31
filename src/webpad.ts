@@ -96,17 +96,29 @@ export function createWebPad(
   function poll(): void {
     if (stopped) return
     raf = requestAnimationFrame(poll)
-    if (!armed) return
+    if (performance.now() < settleUntil) return
 
-    // The native path may have woken up since we armed -- a pad plugged in
-    // after startup does exactly that. Stand down rather than doubling it.
-    if (nativeIsAlive()) {
+    // Asked on every frame, in both directions.
+    //
+    // Standing down was already continuous; arming was a single check two and
+    // a half seconds after startup, and if the answer happened to be "the
+    // native path is fine" at that one instant it never armed again. So a
+    // machine where Windows.Gaming.Input enumerates nothing at all, and the
+    // webview can see the controller perfectly, ended up with neither path
+    // driving it -- which is exactly as dead as no controller.
+    const nativeCovers = nativeIsAlive()
+    if (armed && nativeCovers) {
       armed = false
       was = new Set()
       repeatAt.clear()
       logInfo('input', 'the native gamepad path is delivering; the webview is standing down')
       return
     }
+    if (!armed && !nativeCovers && livePads().length) {
+      armed = true
+      logInfo('input', 'the native path is not covering every pad; the webview is driving')
+    }
+    if (!armed) return
 
     const now = performance.now()
     const down = new Set<Action>()
@@ -167,14 +179,10 @@ export function createWebPad(
   }
   window.addEventListener('gamepadconnected', onConnect)
 
-  const timer = window.setTimeout(() => {
-    if (nativeIsAlive()) return
-    armed = true
-    logInfo(
-      'input',
-      'native gamepad path reported nothing; the webview is driving the pad instead',
-    )
-  }, armAfterMs)
+  // Nothing at all for the first moments, so the native path gets first
+  // refusal before this starts looking. Not a one-shot decision any more --
+  // just a quiet period, after which `poll` decides continuously.
+  const settleUntil = performance.now() + armAfterMs
 
   raf = requestAnimationFrame(poll)
 
@@ -183,7 +191,6 @@ export function createWebPad(
     usable: () => livePads().filter((p) => p.mapping === 'standard').length,
     stop() {
       stopped = true
-      window.clearTimeout(timer)
       cancelAnimationFrame(raf)
       window.removeEventListener('gamepadconnected', onConnect)
     },
