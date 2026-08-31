@@ -88,6 +88,46 @@ describe('arming', () => {
   })
 })
 
+describe('standing down', () => {
+  it('stops the moment the native path wakes up', () => {
+    // The sequence from a real log: the app starts with nothing plugged in,
+    // this arms after 2.5s, and the controller connects half a minute later.
+    // Asking `nativeIsAlive` only at arming time left both paths delivering
+    // for the rest of the session -- every press twice, a doubled A launching
+    // a game twice.
+    let alive = false
+    const w = createWebPad((e) => events.push(e), () => alive, 2500)
+    vi.advanceTimersByTime(2600)
+
+    pads = [press(fakePad(), 0)]
+    tick()
+    expect(events.map((e) => e.action), 'armed while nothing else was').toEqual(['a'])
+
+    alive = true          // the pad connects; gilrs starts delivering
+    events = []
+    pads = [fakePad()]; tick()
+    pads = [press(fakePad(), 0)]; tick(); tick()
+    expect(events, 'must not double the native path').toEqual([])
+    w.stop()
+  })
+
+  it('forgets what was held when it stands down', () => {
+    // Otherwise the press it was holding at the moment it stood down is
+    // remembered, and reappears as a phantom release later.
+    let alive = false
+    const w = createWebPad((e) => events.push(e), () => alive, 2500)
+    vi.advanceTimersByTime(2600)
+    pads = [press(fakePad(), 13)]
+    tick()
+    alive = true
+    tick()
+    events = []
+    for (let i = 0; i < 20; i++) tick(50)
+    expect(events).toEqual([])
+    w.stop()
+  })
+})
+
 describe('once armed', () => {
   let w: ReturnType<typeof createWebPad>
   beforeEach(() => { w = start(false); vi.advanceTimersByTime(2600) })

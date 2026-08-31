@@ -62,10 +62,16 @@ export interface WebPad {
 /**
  * Watch for pads, and take over only if nothing else has.
  *
- * `nativeIsAlive` is asked once, after a delay. Running both at once would
- * fire every press twice -- and a doubled A launches a game twice -- so the
- * native path gets first refusal and this only arms when it has visibly not
- * taken it.
+ * `nativeIsAlive` is asked after a delay, and then again on every frame while
+ * armed. Both matter. Running the two at once fires every press twice -- a
+ * doubled A launches a game twice, a doubled bumper pages six rows instead of
+ * three -- so the native path gets first refusal, and gets it back the moment
+ * it wakes up.
+ *
+ * Asking only once was not enough, and the sequence that proved it is the
+ * ordinary one: start the app with no controller plugged in, this arms after
+ * two and a half seconds, then the controller connects half a minute later and
+ * both paths deliver for the rest of the session.
  */
 export function createWebPad(
   dispatch: (e: ActionEvent) => void,
@@ -87,6 +93,16 @@ export function createWebPad(
     if (stopped) return
     raf = requestAnimationFrame(poll)
     if (!armed) return
+
+    // The native path may have woken up since we armed -- a pad plugged in
+    // after startup does exactly that. Stand down rather than doubling it.
+    if (nativeIsAlive()) {
+      armed = false
+      was = new Set()
+      repeatAt.clear()
+      logInfo('input', 'the native gamepad path is delivering; the webview is standing down')
+      return
+    }
 
     const now = performance.now()
     const down = new Set<Action>()
