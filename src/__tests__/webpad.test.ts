@@ -95,7 +95,7 @@ describe('choosing which path drives', () => {
     // *one* pad delivered natively left every pad gilrs could not read with
     // nothing driving it.
     let nativePads = 1
-    const usable = () => pads.filter((p: Gamepad | null) => p?.mapping === 'standard').length
+    const usable = () => pads.filter((p) => (p as Gamepad | null)?.mapping === 'standard').length
     const w = createWebPad(
       (e) => events.push(e),
       () => nativePads >= usable(),
@@ -113,7 +113,7 @@ describe('choosing which path drives', () => {
 
   it('stands aside once the native path covers everything', () => {
     let nativePads = 1
-    const usable = () => pads.filter((p: Gamepad | null) => p?.mapping === 'standard').length
+    const usable = () => pads.filter((p) => (p as Gamepad | null)?.mapping === 'standard').length
     const w = createWebPad((e) => events.push(e), () => nativePads >= usable(), 2500)
     pads = [fakePad(), fakePad()]
     vi.advanceTimersByTime(2600)
@@ -134,7 +134,7 @@ describe('choosing which path drives', () => {
     // would keep the webview driving forever on a machine where the native
     // path is handling every real pad perfectly well.
     let nativePads = 1
-    const usable = () => pads.filter((p: Gamepad | null) => p?.mapping === 'standard').length
+    const usable = () => pads.filter((p) => (p as Gamepad | null)?.mapping === 'standard').length
     const w = createWebPad((e) => events.push(e), () => nativePads >= usable(), 2500)
     pads = [fakePad({ id: 'Real' }), fakePad({ id: 'vJoy', mapping: '' as GamepadMappingType })]
     vi.advanceTimersByTime(2600)
