@@ -462,7 +462,19 @@ jobs:
           # something than a release page. A draft here would also mean the
           # updater never sees it, since /releases/latest ignores drafts --
           # which is the shape of the bug this file just replaced.
-          releaseDraft: false
+          # A draft until every platform is in.
+          #
+          # tauri-action publishes as it goes, so the release went live the
+          # moment the *first* target finished -- and `/releases/latest`
+          # started answering with a manifest listing one platform. On Windows,
+          # which builds slowest and runs last, that meant "you are up to date"
+          # for the fifteen minutes the rest of the matrix was still going, with
+          # the update sitting on the page.
+          #
+          # A draft is invisible to `/releases/latest`, which is exactly what is
+          # wanted here: nobody is told anything until the release is whole.
+          # The verify job below checks it and publishes it.
+          releaseDraft: true
           prerelease: false
           # Writes latest.json, which is the file the updater actually reads.
           # Without it the release is just installers nobody's app will find.
@@ -477,7 +489,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Every platform is in the manifest
+      - name: Every platform is in the manifest, then publish
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.decide.outputs.version }}
@@ -508,3 +520,17 @@ jobs:
             }
             console.log("Every platform present and signed.");
           '
+
+      - name: Publish it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.decide.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Only now does anything reach an installed copy. Until this line the
+          # release is a draft and `/releases/latest` still answers with the
+          # previous version, which is the honest answer while this one is
+          # half-built.
+          gh release edit "v$VERSION" --repo "${{ github.repository }}" --draft=false
+          echo "v$VERSION is live."
+
