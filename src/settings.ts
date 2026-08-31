@@ -15,7 +15,7 @@
  */
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import {
-  getSettings, setSteamGridDbKey, exportProfile, importProfile, setProfileFolder, setSetting,
+  diagnosticReport, exportProfile, getSettings, importProfile, setProfileFolder, setSetting, setSteamGridDbKey,
 } from './library'
 import { onAnyInput, padStatus, webviewPads } from './input'
 import { hostInfo } from './host'
@@ -242,6 +242,35 @@ export function createSettings(onChanged: () => void): SettingsView {
   testButton.textContent = 'Test a controller'
   const testOut = el('pre', 'settings-diagnostic', pad.root)
   testOut.hidden = true
+
+  /**
+   * A report you can paste, rather than one you have to read out.
+   *
+   * Three rounds of this project's controller debugging turned on a
+   * distinction between two device lists that was on screen the whole time.
+   * Asking somebody to transcribe a diagnosis is a poor way to get one.
+   */
+  const reportButton = el('button', 'action', pad.controls)
+  reportButton.textContent = 'Copy a debug report'
+  reportButton.onclick = () => {
+    void diagnosticReport()
+      .then(async (report) => {
+        // The webview's own view of the hardware is not visible to Rust, and
+        // it is half the answer whenever the two disagree.
+        const web = webviewPads()
+        const full =
+          `${report}\n-- the webview sees --\n` +
+          (web.length ? web.map((d) => `  ${d}`).join('\n') : '  (nothing)') +
+          '\n'
+        await navigator.clipboard.writeText(full)
+        toast('Debug report copied. Paste it into an issue.', 'info', 6000)
+        logInfo('diag', 'debug report copied')
+      })
+      .catch((e) => {
+        logWarn('diag', 'could not build the report', e)
+        toast(`Could not copy that. ${String(e)}`, 'error', 6000)
+      })
+  }
 
   let testing = false
   let seen: string[] = []
