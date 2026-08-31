@@ -110,11 +110,26 @@ jobs:
 
       # Warnings are errors here but not locally: a warning that blocks the
       # inner loop gets silenced, and a warning nothing checks accumulates.
+      #
+      # `--lib` because every test is in the library. Plain `cargo test` also
+      # built the binary and a second test harness around it -- two whole-
+      # application links, on Windows the slowest thing in the run by a wide
+      # margin -- to find out that main.rs is six lines and holds no tests.
+      # It counted 128 tests before and counts the same 128 now. clippy still
+      # compiles main.rs, and release.yml links the real binary on all four
+      # targets on every push to main, in the profile that actually ships, so
+      # this was never the only proof that the thing links.
+      #
+      # opt-level 0 applies to our crate alone: the `package."*"` override in
+      # Cargo.toml pins the dependencies at 3 regardless, so this changes no
+      # dependency fingerprint and leaves the rust-cache valid. Tests that
+      # finish in under a second do not need optimising first.
       - name: Rust
         working-directory: src-tauri
         env:
           RUSTFLAGS: -D warnings
+          CARGO_PROFILE_TEST_OPT_LEVEL: 0
         run: |
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
-          cargo test
+          cargo test --lib

@@ -186,6 +186,22 @@ jobs:
     if: needs.decide.outputs.skip != 'true'
     strategy:
       fail-fast: false
+      # One at a time, and this is not a preference.
+      #
+      # Every job writes `latest.json` -- the file the updater actually reads --
+      # by downloading it, adding its own platform and uploading it again. Run
+      # four of those at once and it is a read-modify-write race: whoever
+      # finishes last wins and the others' entries are gone.
+      #
+      # v0.2.9 shipped that way. The release page looked perfect, the .exe and
+      # its signature were both attached, and `latest.json` had eight platform
+      # entries instead of eleven -- none of them Windows. Every Windows
+      # install was told it was up to date, indefinitely, with the update
+      # sitting right there.
+      #
+      # Four targets in sequence costs about fifteen minutes rather than five.
+      # A release nobody receives costs more.
+      max-parallel: 1
       matrix:
         include:
           # Apple silicon and Intel are separate bundles; the updater picks by
@@ -302,6 +318,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - uses: tauri-apps/tauri-action@v0
+        id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -325,3 +342,43 @@ jobs:
           # Writes latest.json, which is the file the updater actually reads.
           # Without it the release is just installers nobody's app will find.
           includeUpdaterJson: true
+
+  # The release page can look perfect while the one file that matters is
+  # incomplete. Nothing noticed that until a Windows user was told they were up
+  # to date for the third day running, so it is checked here instead.
+  verify:
+    needs: [decide, build]
+    if: needs.decide.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every platform is in the manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.decide.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release download "v$VERSION" --repo "${{ github.repository }}" \
+            --pattern latest.json --output latest.json
+          node -e '
+            const m = JSON.parse(require("fs").readFileSync("latest.json", "utf8"));
+            const want = [
+              "darwin-aarch64", "darwin-x86_64",
+              "linux-x86_64",
+              "windows-x86_64",
+            ];
+            const have = Object.keys(m.platforms || {});
+            const missing = want.filter((p) => !have.includes(p));
+            const unsigned = have.filter((p) => !m.platforms[p].signature);
+            console.log("version  ", m.version);
+            console.log("platforms", have.join(", "));
+            if (missing.length) {
+              console.log(`::error::latest.json is missing ${missing.join(", ")} — ` +
+                          `those platforms will never be offered this update`);
+              process.exit(1);
+            }
+            if (unsigned.length) {
+              console.log(`::error::unsigned in latest.json: ${unsigned.join(", ")}`);
+              process.exit(1);
+            }
+            console.log("Every platform present and signed.");
+          '

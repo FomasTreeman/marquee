@@ -729,3 +729,78 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("failed to start Marquee");
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    fn rust_sources(dir: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                found.extend(rust_sources(&path));
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                found.push(path);
+            }
+        }
+        found
+    }
+
+    /// CI runs `cargo test --lib`, because linking the whole application a
+    /// second time to find out that main.rs holds no tests was the slowest
+    /// thing in the Windows job. That stays safe only while every test really
+    /// is in the library -- and a test that moved outside it would not fail
+    /// under `--lib`, it would go unmentioned, which is the shape every hard
+    /// bug in this project has had. So the library refuses to be the only
+    /// place anyone remembered to look.
+    #[test]
+    fn no_test_hides_where_cargo_test_lib_would_not_look() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+
+        let main = fs::read_to_string(root.join("src/main.rs")).unwrap();
+        assert!(
+            !main.contains("#[test]"),
+            "src/main.rs has a test; CI runs `cargo test --lib`, which never \
+             builds the binary's harness. Move it into the library."
+        );
+
+        let integration = rust_sources(&root.join("tests"));
+        assert!(
+            integration.is_empty(),
+            "integration tests CI would not run: {integration:?}. Move them \
+             into the library, or drop `--lib` from .github/workflows/ci.yml."
+        );
+
+        for path in rust_sources(&root.join("src")) {
+            let source = fs::read_to_string(&path).unwrap();
+            let mut open_fence: Option<String> = None;
+            for line in source.lines() {
+                let line = line.trim_start();
+                let Some(doc) = line
+                    .strip_prefix("///")
+                    .or_else(|| line.strip_prefix("//!"))
+                else {
+                    continue;
+                };
+                let Some(info) = doc.trim().strip_prefix("```") else {
+                    continue;
+                };
+                match open_fence.take() {
+                    Some(_) => {}
+                    // rustdoc runs a fenced block unless the info string names
+                    // it as something other than Rust, which is why the
+                    // ```text blocks in log.rs are not doc tests.
+                    None if info.is_empty() || info.contains("rust") => {
+                        panic!(
+                            "{} has a doc test, and `cargo test --lib` runs no doc tests",
+                            path.display()
+                        )
+                    }
+                    None => open_fence = Some(info.to_string()),
+                }
+            }
+        }
+    }
+}
