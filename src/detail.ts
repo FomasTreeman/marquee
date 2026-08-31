@@ -287,6 +287,14 @@ export function createDetail(hooks: DetailHooks): DetailView {
     dd.textContent = value
   }
 
+  function close(): void {
+    // Discard any half-finished edit rather than leaving the field primed to
+    // reappear over the next game that is opened.
+    endRename()
+    open = false
+    root.hidden = true
+  }
+
   return {
     get isOpen() { return open },
 
@@ -452,13 +460,7 @@ export function createDetail(hooks: DetailHooks): DetailView {
       addFact('Artwork', describeArtwork(provenance))
     },
 
-    close() {
-      // Discard any half-finished edit rather than leaving the field primed to
-      // reappear over the next game that is opened.
-      endRename()
-      open = false
-      root.hidden = true
-    },
+    close,
 
     handle(action) {
       if (!open) return false
@@ -473,7 +475,7 @@ export function createDetail(hooks: DetailHooks): DetailView {
       // Everything is swallowed while open, not just the actions understood.
       // Letting `left`/`right` fall through would move the grid selection
       // behind the overlay, so closing would land somewhere unexpected.
-      if (action === 'b' || action === 'y') this.close()
+      if (action === 'b' || action === 'y') close()
       else if (action === 'a') onPlay()
       else if (action === 'up') scroll.scrollBy({ top: -220, behavior: 'smooth' })
       else if (action === 'down') scroll.scrollBy({ top: 220, behavior: 'smooth' })

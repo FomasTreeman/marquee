@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest'
-import { renameIntent, revealThenFocus } from '../detail'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createDetail, renameIntent, revealThenFocus } from '../detail'
+import type { Game } from '../library'
+
+vi.mock('../library', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../library')>()
+  return { ...actual, setHidden: vi.fn(() => Promise.resolve()) }
+})
 
 /**
  * Renaming is the one place the user overrides metadata by hand, so the rule
@@ -66,5 +72,79 @@ describe('revealThenFocus', () => {
     expect(calls).toEqual(['reveal'])
     frame?.()
     expect(calls).toEqual(['reveal', 'focus'])
+  })
+})
+
+/**
+ * A stand-in for the DOM elements `createDetail` builds: this project has no
+ * jsdom, but `el()` only ever calls createElement/appendChild and sets a
+ * handful of properties, so a plain object with those covers it.
+ */
+function fakeElement(): Record<string, unknown> {
+  let text = ''
+  let kids: Record<string, unknown>[] = []
+  const node: Record<string, unknown> = {
+    className: '', hidden: false, style: {},
+    get children() { return kids },
+    classList: { add: () => {}, remove: () => {} },
+    get textContent() { return text },
+    set textContent(v: string) { text = v; kids = [] },
+    appendChild(child: Record<string, unknown>) { kids.push(child); return child },
+    addEventListener() {}, setAttribute() {}, scrollBy() {},
+    blur() {}, focus() {}, select() {}, remove() {},
+    scrollTop: 0,
+  }
+  return node
+}
+
+function findByText(
+  node: Record<string, unknown> | undefined, needle: string,
+): Record<string, unknown> | undefined {
+  if (!node) return undefined
+  if (typeof node.textContent === 'string' && node.textContent.includes(needle)) return node
+  for (const child of node.children as Record<string, unknown>[]) {
+    const found = findByText(child, needle)
+    if (found) return found
+  }
+  return undefined
+}
+
+/**
+ * The bug this guards against (issue #16): the hide button called a bare
+ * `close()`. `createDetail` never declared a local `function close()`, only a
+ * `close()` *method* on the returned view, so the bare call resolved to the
+ * global `Window.close()` -- which does not exist under Node and throws
+ * `ReferenceError: close is not defined`. That was thrown inside the
+ * `.then()`, so it was swallowed by the handler's own `.catch()` and turned
+ * into a toast; `onChanged()` was never reached and the overlay never closed,
+ * which is why hiding a game looked like the whole screen going blank rather
+ * than the library reloading without that game.
+ */
+describe('createDetail hide button', () => {
+  const game: Game = {
+    id: 'steam:220', provider: 'steam', providerId: '220', title: 'Half-Life 2',
+    installed: false, installDir: null, sizeBytes: 0, lastPlayed: null,
+    playtimeMinutes: 0, favourite: false, hidden: false, artAppId: null,
+  }
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('closes the overlay and reloads the library, rather than leaving the screen blank', async () => {
+    const doc = { createElement: () => fakeElement(), body: fakeElement() }
+    vi.stubGlobal('document', doc)
+    vi.stubGlobal('window', { setTimeout: (cb: () => void, ms: number) => setTimeout(cb, ms) })
+    vi.stubGlobal('requestAnimationFrame', () => 0)
+
+    const onChanged = vi.fn()
+    const view = createDetail({ onPlay: vi.fn(), onChanged, onFindArtwork: vi.fn() })
+    view.open(game, undefined, {})
+
+    const root = (doc.body.children as Record<string, unknown>[])[0]
+    const hide = findByText(root, 'Hide this game')
+    ;(hide?.onclick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(view.isOpen).toBe(false)
+    expect(onChanged).toHaveBeenCalledOnce()
   })
 })
