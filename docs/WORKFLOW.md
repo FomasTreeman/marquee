@@ -15,6 +15,12 @@ buttons.
   │        │  │              │  │ ← YOUR     │  │ ← YOUR TURN    │  │      │
   │        │  │              │  │    TURN    │  │                │  │      │
   └────────┘  └──────────────┘  └────────────┘  └────────────────┘  └──────┘
+
+  ┌────────────────┐
+  │  Todo (Human)  │  a no-ai issue nobody has picked up yet -- it still
+  ├────────────────┤  moves to In Review / Needs Decision / Done like any
+  │     no-ai      │  other, once a human is actually working it
+  └────────────────┘
 ```
 
 Two columns want you. Everything else runs on its own.
@@ -34,11 +40,12 @@ gh project create --owner FomasTreeman --title Marquee
 
 Or make it in the browser: **your profile → Projects → New project → Board**.
 
-**Add the two Status options the default board does not have.** Project →
+**Add the three Status options the default board does not have.** Project →
 Settings → Fields → Status. It ships with `Todo`, `In Progress` and `Done`;
-add **`In Review`** and **`Needs Decision`**. Capitals matter — the automation
-throws with the list of names your board actually has if one does not match, so
-a typo tells you what it is rather than quietly doing nothing.
+add **`In Review`**, **`Needs Decision`** and **`Todo (Human)`**. Capitals
+matter — the automation throws with the list of names your board actually has
+if one does not match, so a typo tells you what it is rather than quietly
+doing nothing.
 
 Then **⋯ → Settings → Workflows** and switch on the three built-in ones:
 
@@ -85,7 +92,9 @@ on, or to send one back round after a review:
 - write **`@claude`** in a comment, or in a pull request review
 
 And to keep it off one: the **`no-ai`** label. Some issues are notes to self,
-and a note to self does not need a patch.
+and a note to self does not need a patch. A `no-ai` issue sits in **Todo
+(Human)** rather than plain `Todo`, so a pass over the board doesn't read it
+as something waiting for Claude that just hasn't started yet.
 
 ## 3. Claude works
 
@@ -242,7 +251,7 @@ running, so a release that fails its signature check will not install.
 | `enhancement` | minor release on merge | — |
 | `breaking` | major release on merge | — |
 | `no-release` | merge without releasing | — |
-| `no-ai` | keep Claude off this issue | — |
+| `no-ai` | keep Claude off this issue | **yours** — sits in *Todo (Human)* |
 | `wont-fix-yet` | real, deliberately parked | — |
 
 ## Things worth knowing
@@ -278,5 +287,6 @@ mentions it or opens a separate issue, so nothing becomes un-revertable.
 | No release after a merge | the PR was labelled `no-release`, or the commit was the version bump itself |
 | Release has only source archives | the build job failed — open the run. The release is made by the build, not by the tag |
 | App never offers an update | no `latest.json` on the release, so either `createUpdaterArtifacts` is off or the build did not finish |
-| Cards never move | `PROJECT_TOKEN` missing, or `PROJECT_NUMBER` is not your board's number (check the URL) |
+| Cards never move at all | `PROJECT_TOKEN` missing, or `PROJECT_NUMBER` is not your board's number (check the URL) |
+| Cards reach Todo and Done but never In Progress, In Review or Needs Decision | `CLAUDE_WORKFLOW_TOKEN` is not set. Without it, `claude.yml` labels the issue with `secrets.GITHUB_TOKEN`, and GitHub's loop guard means a workflow run never fires off an event that `GITHUB_TOKEN` itself caused — so `project-automation.yml` never sees the label change. Every run still shows green, because nothing in that path actually fails |
 | Automation fails naming a Status | your board has no option with that exact name — the error lists the ones it does have |
