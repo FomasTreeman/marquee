@@ -38,6 +38,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # release.yml describes CI as "about two minutes of work" and refuses
+    # to release without it. Nothing enforced that number, so a wedged
+    # Windows link had six hours of default to sit in.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

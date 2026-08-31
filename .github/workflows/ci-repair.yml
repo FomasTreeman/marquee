@@ -47,6 +47,10 @@ jobs:
       (startsWith(github.event.workflow_run.head_branch, 'claude/') ||
        startsWith(github.event.workflow_run.head_branch, 'replay/'))
     runs-on: ubuntu-latest
+    # An agent run plus a full toolchain install. Generous, but bounded:
+    # the failure mode of an unattended loop is not one long run, it is a
+    # run nobody is watching that never ends.
+    timeout-minutes: 30
 
     permissions:
       contents: write

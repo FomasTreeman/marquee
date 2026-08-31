@@ -35,11 +35,20 @@ jobs:
     # pull requests arrive as a bot too, and reviewing those is the point --
     # see the header. What is not the point is spending a run of subscription
     # usage reading a one-line SHA bump every Monday.
+    #
+    # Forks are excluded because they cannot work, not because they are
+    # unwelcome. A `pull_request` from a fork carries no secrets, so
+    # `claude_code_oauth_token` arrives empty and the action fails -- attributed
+    # to somebody's first contribution, for a reason that has nothing to do with
+    # it. ci-repair.yml already draws this line; the repository is public now
+    # and this one had not caught up.
     if: |
       !github.event.pull_request.draft &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.user.login != 'dependabot[bot]' &&
       !contains(github.event.pull_request.labels.*.name, 'no-ai')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -78,5 +87,9 @@ jobs:
 
             Do not approve, do not request changes, do not push commits. A
             comment is the whole job.
+
+            You have `git` and nothing else. This job is a checkout with no
+            toolchain, so read the diff and the history -- do not try to run the
+            suite, and do not claim a change passes or fails as though you had.
           claude_args: |
-            --allowed-tools "Bash(git:*),Bash(pnpm:*),Bash(cargo:*),Bash(python3:*),Bash(tools/:*)"
+            --allowed-tools "Bash(git:*)"
