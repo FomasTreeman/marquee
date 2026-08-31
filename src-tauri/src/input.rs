@@ -515,7 +515,14 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
                         };
                         match changed {
                             Some(a) => {
-                                crate::log_debug!("input", "{axis:?} -> {a:?}");
+                                // Deliberately not logged. A stick crossing
+                                // the deadzone fires on every direction change
+                                // while navigating, which is several a second
+                                // for as long as someone is using the app --
+                                // and a debug report drowned in those is the
+                                // mistake `will retry 0` already made once.
+                                // Buttons are logged; they are bounded by how
+                                // fast a person can press.
                                 emit(a, false);
                                 held = Some(Repeat::from_stick(a, Instant::now()));
                             }
