@@ -88,6 +88,63 @@ describe('arming', () => {
   })
 })
 
+describe('choosing which path drives', () => {
+  it('takes over when it can see hardware the native path cannot', () => {
+    // The reported case: a DualSense works natively, an Xbox controller
+    // plugged in beside it is not recognised at all. Standing down because
+    // *one* pad delivered natively left every pad gilrs could not read with
+    // nothing driving it.
+    let nativePads = 1
+    const usable = () => pads.filter((p: Gamepad | null) => p?.mapping === 'standard').length
+    const w = createWebPad(
+      (e) => events.push(e),
+      () => nativePads >= usable(),
+      2500,
+    )
+    pads = [fakePad({ id: 'DualSense' }), fakePad({ id: 'Xbox' })]
+    vi.advanceTimersByTime(2600)
+
+    pads = [fakePad({ id: 'DualSense' }), press(fakePad({ id: 'Xbox' }), 0)]
+    tick()
+    expect(events.map((e) => e.action), 'the pad gilrs cannot see must still work')
+      .toEqual(['a'])
+    w.stop()
+  })
+
+  it('stands aside once the native path covers everything', () => {
+    let nativePads = 1
+    const usable = () => pads.filter((p: Gamepad | null) => p?.mapping === 'standard').length
+    const w = createWebPad((e) => events.push(e), () => nativePads >= usable(), 2500)
+    pads = [fakePad(), fakePad()]
+    vi.advanceTimersByTime(2600)
+    pads = [press(fakePad(), 0), fakePad()]
+    tick()
+    expect(events).toHaveLength(1)
+
+    events = []
+    nativePads = 2          // the second pad wakes up natively
+    pads = [fakePad(), fakePad()]; tick()
+    pads = [press(fakePad(), 0), fakePad()]; tick(); tick()
+    expect(events, 'must not double what the native path is already sending').toEqual([])
+    w.stop()
+  })
+
+  it('does not count a pad it could never drive', () => {
+    // A vJoy virtual controller reports a non-standard mapping. Counting it
+    // would keep the webview driving forever on a machine where the native
+    // path is handling every real pad perfectly well.
+    let nativePads = 1
+    const usable = () => pads.filter((p: Gamepad | null) => p?.mapping === 'standard').length
+    const w = createWebPad((e) => events.push(e), () => nativePads >= usable(), 2500)
+    pads = [fakePad({ id: 'Real' }), fakePad({ id: 'vJoy', mapping: '' as GamepadMappingType })]
+    vi.advanceTimersByTime(2600)
+    pads = [press(fakePad({ id: 'Real' }), 0), fakePad({ id: 'vJoy', mapping: '' as GamepadMappingType })]
+    tick(); tick()
+    expect(events, 'one real pad, handled natively, so nothing here').toEqual([])
+    w.stop()
+  })
+})
+
 describe('standing down', () => {
   it('stops the moment the native path wakes up', () => {
     // The sequence from a real log: the app starts with nothing plugged in,

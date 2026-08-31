@@ -198,7 +198,9 @@ export function createSettings(onChanged: () => void): SettingsView {
           'a wireless pad is invisible until it has something to say.'
       }
 
-      const lines = [`backend: ${status.backend}`]
+      const driving = web.length && status.connected < web.length
+        ? 'the webview' : status.backend
+      const lines = [`driving: ${driving}`, `${status.backend} sees:`]
       if (status.silenced.length) {
         // A control that has been switched off must say so somewhere findable.
         // Doing it silently is the same class of mistake as the fault it was
@@ -207,9 +209,13 @@ export function createSettings(onChanged: () => void): SettingsView {
       }
       for (const d of status.devices) lines.push(`  ${d}`)
       if (!status.devices.length) lines.push('  (nothing enumerated)')
-      if (web.length) {
-        lines.push('webview:')
-        for (const d of web) lines.push(`  ${d}`)
+      lines.push('the webview sees:')
+      for (const d of web) lines.push(`  ${d}`)
+      if (!web.length) lines.push('  (nothing)')
+      // The two read genuinely different APIs, so either can see a pad the
+      // other cannot. Which is the whole reason both exist.
+      if (web.length !== status.connected) {
+        lines.push(`(the two disagree: ${status.connected} native, ${web.length} in the webview)`)
       }
       padDetail.textContent = lines.join('\n')
       padDetail.hidden = false
