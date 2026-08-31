@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { KEYMAP, PAD_ACTIONS, type Action } from '../input'
+import { KEYMAP, PAD_ACTIONS, wantsOsk, type Action } from '../input'
 
 /**
  * "Controller first, keyboard second" only holds if second still means fully.
@@ -42,5 +42,24 @@ describe('the map itself', () => {
     for (const a of ['up', 'down', 'left', 'right', 'a', 'b'] as Action[]) {
       expect(routes(a)).toBeGreaterThanOrEqual(2)
     }
+  })
+})
+
+/**
+ * The on-screen keyboard used to be offered whenever a pad was plugged in at
+ * all, so it sat on screen for someone typing on a real keyboard just because
+ * a pad was connected on the sofa. It has to follow what is actually held.
+ */
+describe('offering the on-screen keyboard', () => {
+  it('is wanted while a pad is what is being held', () => {
+    expect(wantsOsk('pad')).toBe(true)
+  })
+
+  it('is not wanted once a real keyboard is picked up', () => {
+    expect(wantsOsk('keyboard')).toBe(false)
+  })
+
+  it('is not wanted while a mouse is what is being held', () => {
+    expect(wantsOsk('mouse')).toBe(false)
   })
 })

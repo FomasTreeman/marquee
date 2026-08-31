@@ -35,6 +35,19 @@ export type Action =
 /** What the person is actually holding. */
 export type Device = 'pad' | 'keyboard' | 'mouse'
 
+/**
+ * Whether the on-screen keyboard should be offered for whatever is currently
+ * held.
+ *
+ * It used to be offered whenever a pad was plugged in at all, which put a
+ * keyboard on screen for someone typing on a real one two feet away just
+ * because a pad sat connected on the sofa. The legend already tracks what is
+ * actually being held via `note()` below -- this follows the same signal.
+ */
+export function wantsOsk(device: Device): boolean {
+  return device === 'pad'
+}
+
 export interface ActionEvent {
   action: Action
   /** From auto-repeat rather than a fresh press. */
