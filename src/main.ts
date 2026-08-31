@@ -217,6 +217,32 @@ async function main(): Promise<void> {
     shell.gridViewport.appendChild(box)
   }
 
+  /**
+   * Move to the next or previous tab, wrapping.
+   *
+   * Wrapping because five tabs on a shoulder button is a ring, not a line --
+   * stopping at Hidden and making someone press the other shoulder four times
+   * to get back to All is the sort of thing that reads as the control being
+   * broken.
+   */
+  function choosePreset(step: number): void {
+    const at = PRESETS.findIndex((p) => p.id === preset)
+    const next = PRESETS[(at + step + PRESETS.length) % PRESETS.length]
+    if (!next) return
+    selectPreset(next.id)
+  }
+
+  function selectPreset(id: Preset): void {
+    preset = id
+    // A search is scoped to the tab it was typed in, so moving tab clears it
+    // rather than silently filtering the new one by an old query.
+    query = ''
+    shell.query.hidden = true
+    shell.query.value = ''
+    grid.focus(0)
+    applyView()
+  }
+
   function paintPresets(): void {
     shell.presets.textContent = ''
     for (const p of PRESETS) {
@@ -229,14 +255,7 @@ async function main(): Promise<void> {
       pill.textContent = p.label
       // Clickable, because a mouse user has no stick to press and the pills
       // already look like controls.
-      pill.onclick = () => {
-        preset = p.id
-        query = ''
-        shell.query.hidden = true
-        shell.query.value = ''
-        grid.focus(0)
-        applyView()
-      }
+      pill.onclick = () => selectPreset(p.id)
       shell.presets.appendChild(pill)
     }
   }
@@ -763,10 +782,15 @@ async function main(): Promise<void> {
       }
       if (e.action === 'sort') { openSort(); return }
     }
-    // Shoulder buttons page through a long library. They repeat, so they are
-    // handled outside the no-repeat block.
+    // The shoulders move between the tabs along the top -- All, Favourites,
+    // Installed, Never played, Hidden -- which is what a console does with
+    // them and what they look like they should do.
+    //
+    // They used to scroll the grid three rows at a time, which was a worse
+    // idea twice over: the sticks already scroll, and a second thing that
+    // scrolls slightly differently is just a surprise.
     if (e.action === 'lb' || e.action === 'rb') {
-      grid.move(0, e.action === 'rb' ? 3 : -3)
+      choosePreset(e.action === 'rb' ? 1 : -1)
       return
     }
 
