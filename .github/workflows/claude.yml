@@ -10,6 +10,23 @@
 # review is the point. See docs/CONTRIBUTING-AI.md for the whole loop.
 #
 # ---------------------------------------------------------------------------
+# **Starting an issue that already carries the `claude` label.**
+#
+# Comment `@claude` on it, or take the label off and put it back.
+#
+# The trigger is the label *event*, not the label's presence, and the two look
+# identical on the issue. So an issue that was labelled before this workflow
+# reached its current shape -- or whose run failed, or was cancelled -- keeps a
+# `claude` label that will never start anything again, and reads exactly like
+# one that is queued. Four issues sat like that when the label handover landed.
+#
+# Reading the presence instead is not the fix; that was the old behaviour and
+# it raced triage.yml on every newly opened issue, which is the bug the label
+# event exists to close. But it does mean a `claude` label on its own is not
+# evidence that anything is coming, and nothing on the issue says so.
+# ---------------------------------------------------------------------------
+#
+# ---------------------------------------------------------------------------
 # Setup, once. Requires ONE secret, and no Anthropic API billing:
 #
 #   1. On your machine:            claude setup-token
