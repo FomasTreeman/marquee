@@ -106,6 +106,27 @@ export function renameIntent(
   return { kind: 'set', title: next }
 }
 
+/**
+ * Reveal the rename field, then focus it a frame later.
+ *
+ * WebKit will not honour `.focus()` on an element that is still
+ * `display: none` at the moment the call runs, and clearing `hidden` does not
+ * repaint until the next frame -- so focusing in the same tick as revealing
+ * silently does nothing. picker.ts and settings.ts already learned this and
+ * defer with `requestAnimationFrame`; rename skipped it, so the field opened
+ * looking focused while a physical keyboard typed into nothing.
+ *
+ * Pure so the ordering can be tested; a real frame cannot be.
+ */
+export function revealThenFocus(
+  reveal: () => void,
+  focus: () => void,
+  schedule: (cb: () => void) => number = requestAnimationFrame,
+): void {
+  reveal()
+  schedule(focus)
+}
+
 export interface DetailHooks {
   onPlay(): void
   onChanged(): void
@@ -217,14 +238,15 @@ export function createDetail(hooks: DetailHooks): DetailView {
     // standing in for the heading, not sitting next to it.
     logo.hidden = true
     title.hidden = true
-    rename.hidden = false
     renameField.value = current.title || ''
     // Both vocabularies, because the legend is not on screen behind an
     // overlay and this is the only place the bindings are stated.
     renameHint.textContent =
       'A or Enter saves · B or Esc cancels · leave it empty to restore the original name'
-    renameField.focus()
-    renameField.select()
+    revealThenFocus(
+      () => { rename.hidden = false },
+      () => { renameField.focus(); renameField.select() },
+    )
     // A pad needs somewhere to type. main.ts owns the on-screen keyboard
     // because the input chain must consume for it before anything else.
     onTextField?.(renameField)

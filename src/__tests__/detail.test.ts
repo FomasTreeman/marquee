@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { renameIntent } from '../detail'
+import { renameIntent, revealThenFocus } from '../detail'
 
 /**
  * Renaming is the one place the user overrides metadata by hand, so the rule
@@ -43,5 +43,28 @@ describe('renameIntent', () => {
 
   it('is case sensitive, because capitalisation is the usual reason to rename', () => {
     expect(renameIntent('ELDEN RING', 'Elden Ring')).toEqual({ kind: 'set', title: 'Elden Ring' })
+  })
+})
+
+/**
+ * The bug this guards against: `beginRename` used to unhide the field and
+ * call `.focus()` in the same synchronous tick. WebKit ignores a focus() on
+ * an element that is still `display: none` at the moment it runs, so the
+ * field opened looking focused and a physical keyboard typed into nothing.
+ * picker.ts and settings.ts already defer with `requestAnimationFrame`; this
+ * proves rename does the same rather than calling focus straight away.
+ */
+describe('revealThenFocus', () => {
+  it('does not focus until the scheduled frame runs', () => {
+    const calls: string[] = []
+    let frame: (() => void) | undefined
+    revealThenFocus(
+      () => calls.push('reveal'),
+      () => calls.push('focus'),
+      (cb) => { frame = cb; return 0 },
+    )
+    expect(calls).toEqual(['reveal'])
+    frame?.()
+    expect(calls).toEqual(['reveal', 'focus'])
   })
 })
