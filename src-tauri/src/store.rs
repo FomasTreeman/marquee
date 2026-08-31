@@ -67,6 +67,12 @@ const MIGRATIONS: &[&str] = &[
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
      );",
+    // v5. Steam learns "last played" from localconfig.vdf on every rescan, but
+    // a hand-added game has no such file anywhere -- nothing ever wrote the
+    // timestamp, so it read as "never played" forever regardless of how often
+    // it was launched. Recorded here instead, at the moment we spawn it
+    // ourselves, since a manual game is the one case where we own the launch.
+    "ALTER TABLE manual_game ADD COLUMN last_played INTEGER;",
 ];
 
 pub struct Store(Mutex<Connection>);
@@ -141,13 +147,17 @@ pub struct ManualGame {
     pub steam_app_id: Option<String>,
     pub executable: Option<String>,
     pub args: String,
+    /// Unix seconds this was last launched through us. `None` until the first
+    /// successful launch -- there is no scanner that could ever learn this from
+    /// elsewhere, unlike Steam's `localconfig.vdf`.
+    pub last_played: Option<i64>,
 }
 
 impl Store {
     pub fn manual_games(&self) -> Result<Vec<ManualGame>, String> {
         self.with(|c| {
             let mut stmt = c.prepare(
-                "SELECT id, title, steam_app_id, executable, args FROM manual_game ORDER BY id",
+                "SELECT id, title, steam_app_id, executable, args, last_played FROM manual_game ORDER BY id",
             )?;
             let rows = stmt.query_map([], |r| {
                 Ok(ManualGame {
@@ -156,9 +166,24 @@ impl Store {
                     steam_app_id: r.get(2)?,
                     executable: r.get(3)?,
                     args: r.get(4)?,
+                    last_played: r.get(5)?,
                 })
             })?;
             rows.collect()
+        })
+    }
+
+    /// Record that a hand-added game was just launched.
+    ///
+    /// Called when we spawn its process ourselves -- the one moment a manual
+    /// game's "last played" can be learned, since nothing external tracks it.
+    pub fn record_manual_play(&self, id: i64) -> Result<(), String> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE manual_game SET last_played = strftime('%s','now') WHERE id = ?1",
+                params![id],
+            )?;
+            Ok(())
         })
     }
 
@@ -459,6 +484,23 @@ mod tests {
         assert_eq!(games[0].title, "Hollow Knight");
         assert_eq!(games[0].steam_app_id.as_deref(), Some("367520"));
         assert_eq!(games[0].executable.as_deref(), Some("/games/hk/hk.exe"));
+    }
+
+    /// A hand-added game has no `localconfig.vdf` for anything to learn its
+    /// last-played time from, so before `record_manual_play` existed the
+    /// column stayed NULL forever and the game showed "never played" no
+    /// matter how many times it had actually run.
+    #[test]
+    fn a_manual_game_remembers_when_it_was_last_played() {
+        let s = memory();
+        let id = s.add_manual_game("Hollow Knight", None).unwrap();
+        assert_eq!(s.manual_games().unwrap()[0].last_played, None);
+
+        s.record_manual_play(id).unwrap();
+
+        let played = s.manual_games().unwrap()[0].last_played;
+        assert!(played.is_some(), "last_played should be set after a play");
+        assert!(played.unwrap() > 0);
     }
 
     #[test]

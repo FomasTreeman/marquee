@@ -44,7 +44,7 @@ impl LibraryProvider for Manual<'_> {
                 installed: m.executable.is_some(),
                 install_dir: m.executable.map(PathBuf::from),
                 size_bytes: 0,
-                last_played: None,
+                last_played: m.last_played.and_then(|t| u64::try_from(t).ok()),
                 playtime_minutes: 0,
                 favourite: false,
                 hidden: false,
