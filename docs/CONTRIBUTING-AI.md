@@ -40,7 +40,20 @@ the reason the loop ends in a pull request you read rather than a push to
 Actions to create and approve pull requests"*. Without it the run does the work
 and then fails at the last step, which is a confusing way to find out.
 
-**3. The signing key, if you have not already.** `docs/UPDATES.md`. Nothing
+**3. A token that can write workflow files, if you want Claude to fix CI.**
+
+Optional, and only for changes under `.github/workflows/`. GitHub will not let
+`GITHUB_TOKEN` write a workflow file at all — there is no permission to grant,
+and the push fails naming `workflows permission`, which reads like a bug in the
+action. That is how issue #1 ended: a correct set of CI fixes posted as a
+comment for somebody to retype, because the branch could not be pushed.
+
+Make a personal access token with the `workflow` scope (classic) or Workflows:
+write (fine-grained) and store it as `CLAUDE_WORKFLOW_TOKEN`. Without the
+secret everything works as before; with it, pull requests come from your
+account rather than `github-actions[bot]`, and the pushes trigger CI.
+
+**4. The signing key, if you have not already.** `docs/UPDATES.md`. Nothing
 below produces a usable release without it.
 
 ## Filing an issue Claude can act on
