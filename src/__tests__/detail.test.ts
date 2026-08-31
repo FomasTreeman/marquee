@@ -1,5 +1,17 @@
-import { describe, expect, it } from 'vitest'
-import { renameIntent, revealThenFocus } from '../detail'
+import { describe, expect, it, vi } from 'vitest'
+import { renameIntent, revealThenFocus, createDetail } from '../detail'
+import { setHidden } from '../library'
+import type { Game } from '../library'
+
+vi.mock('../toast', () => ({ toast: vi.fn() }))
+vi.mock('../library', () => ({
+  setHidden: vi.fn(() => Promise.resolve()),
+  setManualExecutable: vi.fn(),
+  removeManualGame: vi.fn(),
+  findExecutable: vi.fn(),
+  uninstallGame: vi.fn(),
+  setCustomTitle: vi.fn(),
+}))
 
 /**
  * Renaming is the one place the user overrides metadata by hand, so the rule
@@ -66,5 +78,89 @@ describe('revealThenFocus', () => {
     expect(calls).toEqual(['reveal'])
     frame?.()
     expect(calls).toEqual(['reveal', 'focus'])
+  })
+})
+
+/**
+ * A stand-in for just enough of the DOM to build the overlay, since there is
+ * no jsdom in this project. Element identity and children don't matter here;
+ * only that every call `createDetail` makes on a node during setup and during
+ * a button click has somewhere to land.
+ */
+class FakeElement {
+  children: FakeElement[] = []
+  hidden = false
+  textContent = ''
+  className = ''
+  value = ''
+  src = ''
+  alt = ''
+  scrollTop = 0
+  onclick: (() => void) | null = null
+  onerror: (() => void) | null = null
+  classList = { add: () => {}, remove: () => {}, contains: () => false }
+  private attrs = new Map<string, string>()
+
+  appendChild(child: FakeElement): FakeElement { this.children.push(child); return child }
+  setAttribute(name: string, value: string): void { this.attrs.set(name, value) }
+  getAttribute(name: string): string | null { return this.attrs.get(name) ?? null }
+  addEventListener(): void {}
+  scrollBy(): void {}
+  blur(): void {}
+  focus(): void {}
+  select(): void {}
+  remove(): void {}
+}
+
+/** Depth-first search for the button carrying this label, wherever setup put it. */
+function findByText(node: FakeElement, text: string): FakeElement | undefined {
+  if (node.textContent === text) return node
+  for (const child of node.children) {
+    const found = findByText(child, text)
+    if (found) return found
+  }
+  return undefined
+}
+
+function fakeGame(): Game {
+  return {
+    id: 'steam:220', provider: 'steam', providerId: '220', title: 'Half-Life 2',
+    installed: true, installDir: null, sizeBytes: 0, lastPlayed: null,
+    playtimeMinutes: 0, favourite: false, hidden: false, artAppId: null,
+  }
+}
+
+/**
+ * The bug this guards against: the hide and uninstall handlers called a bare
+ * `close()`. `createDetail` never declared a local `function close()`, only a
+ * `close()` *method* on the returned object, so that bare call resolved to
+ * the global `Window.close()` -- which `tsc` cannot flag, since the global
+ * has the same `(): void` signature. In a real Tauri window that closes the
+ * app (the reported black screen); under this test's node environment there
+ * is no global `close` at all, so the same bug throws `ReferenceError: close
+ * is not defined` before `onChanged` ever runs.
+ */
+describe('createDetail hide button', () => {
+  it('closes the overlay and reloads the library once hiding succeeds', async () => {
+    const body = new FakeElement()
+    vi.stubGlobal('document', { createElement: () => new FakeElement(), body })
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => { cb(0); return 0 })
+
+    const onChanged = vi.fn()
+    const view = createDetail({ onPlay: () => {}, onChanged, onFindArtwork: () => {} })
+    const game = fakeGame()
+    view.open(game, undefined, {})
+
+    const hideButton = findByText(body, 'Hide this game')
+    if (!hideButton) throw new Error('hide button not found in the fake DOM tree')
+    hideButton.onclick?.()
+    // setHidden resolves asynchronously; flush the microtask queue for its .then().
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(setHidden).toHaveBeenCalledWith(game.id, true)
+    expect(view.isOpen).toBe(false)
+    expect(onChanged).toHaveBeenCalledTimes(1)
+
+    vi.unstubAllGlobals()
   })
 })
