@@ -199,6 +199,12 @@ export function createSettings(onChanged: () => void): SettingsView {
       }
 
       const lines = [`backend: ${status.backend}`]
+      if (status.silenced.length) {
+        // A control that has been switched off must say so somewhere findable.
+        // Doing it silently is the same class of mistake as the fault it was
+        // added to work around.
+        lines.push(`ignoring: ${status.silenced.join(', ')} — reporting faster than a hand can`)
+      }
       for (const d of status.devices) lines.push(`  ${d}`)
       if (!status.devices.length) lines.push('  (nothing enumerated)')
       if (web.length) {

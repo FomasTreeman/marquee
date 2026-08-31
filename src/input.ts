@@ -120,11 +120,16 @@ export interface PadStatus {
   devices: string[]
   /** Why there is no input, when there is a reason worth repeating. */
   failure: string | null
+  /** Controls being ignored for reporting faster than a hand can move them. */
+  silenced: string[]
 }
 
 export async function padStatus(): Promise<PadStatus> {
   if (!inApp) {
-    return { supported: false, connected: 0, backend: 'browser', devices: [], failure: null }
+    return {
+      supported: false, connected: 0, backend: 'browser',
+      devices: [], failure: null, silenced: [],
+    }
   }
   return call<PadStatus>('pad_status')
 }
