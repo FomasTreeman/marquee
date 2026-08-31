@@ -13,12 +13,20 @@
 # Two conditions in the `if:` below close that:
 #
 #     head_repository.full_name == github.repository    not a fork
-#     head_branch starts with claude/                   a branch only something
-#                                                       with write access could
-#                                                       have pushed
 #
-# Neither is decoration. Take either one out and this file becomes the standard
+# That one is not decoration. Take it out and this file becomes the standard
 # workflow_run escalation, and it will not look any different while it is one.
+# A branch in this repository can only have been pushed by somebody with write
+# access, which is the property being relied on.
+#
+# It used to also require the branch to be named `claude/` or `replay/`, and
+# that was scope rather than security -- the fork check above already carries
+# the whole of the guarantee. What the prefix bought was a promise that the
+# agent only ever pushed to branches it had made itself, and what it cost was
+# the case this exists for: a pull request goes red, and because the branch is
+# named after a person nothing picks it up. The guard below still requires an
+# open, non-draft pull request and still stops after three attempts, so the
+# blast radius is a branch somebody is actively asking for review on.
 #
 # The other thing to know: **a workflow_run workflow only fires once it is on
 # the default branch.** This file does nothing on the pull request that adds
@@ -44,8 +52,7 @@ jobs:
       github.event.workflow_run.conclusion == 'failure' &&
       github.event.workflow_run.event == 'pull_request' &&
       github.event.workflow_run.head_repository.full_name == github.repository &&
-      (startsWith(github.event.workflow_run.head_branch, 'claude/') ||
-       startsWith(github.event.workflow_run.head_branch, 'replay/'))
+      github.event.workflow_run.head_branch != 'main'
     runs-on: ubuntu-latest
     # An agent run plus a full toolchain install. Generous, but bounded:
     # the failure mode of an unattended loop is not one long run, it is a
@@ -209,6 +216,10 @@ jobs:
 
             - **Push the fix to this branch.** A pull request is already open.
               Do not open another, and do not open one against `main`.
+            - **This branch may not be yours.** It is whoever's pull request
+              went red, so push the smallest thing that makes CI green and
+              leave the rest of their work alone. Do not tidy, rename or
+              refactor anything the failure did not require.
             - **A failure on one platform only is a finding, not a flake.**
               Windows and macOS diverge from Linux here more than anywhere
               else, and roughly a tenth of the Rust never compiles on the

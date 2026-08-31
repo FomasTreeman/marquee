@@ -1,0 +1,113 @@
+# The automation itself goes red. Somebody has to be told, and it should not
+# have to be a person who happened to look at the Actions tab.
+#
+# ci-repair.yml covers a pull request whose CI failed: there is a branch, a
+# diff and an open pull request, so the fix has somewhere to go. Nothing
+# covered the other shape. Board failed on `main` on every run for half an
+# hour -- one unused GraphQL variable, a one-line fix -- and the only sign was
+# a cross on a tab nobody had open. There is no branch to push to and no pull
+# request to comment on, so there was nowhere for a repair to happen.
+#
+# So this turns it into the thing this repository already knows how to work
+# through: an issue, with `@claude` in the body, which claude.yml picks up and
+# turns into a pull request against main.
+#
+# ---------------------------------------------------------------------------
+# The failure mode of a workflow that files issues is filing forty of them.
+# Board runs hourly, so a break that lasts a day is twenty-four chances to spam
+# the tracker. Two things stop that:
+#
+#   * one open issue per workflow, found by a marker in the body and updated
+#     rather than duplicated
+#   * main only -- a failure on a branch belongs to that branch's pull request
+#
+# It files the issue with CLAUDE_WORKFLOW_TOKEN when that exists, for the same
+# reason everything else here does: an issue opened by GITHUB_TOKEN wakes
+# nothing, so the `@claude` in its body would sit there being read by nobody.
+# Without the secret the issue is still filed and still correct, and says
+# plainly that it needs a person to start it.
+# ---------------------------------------------------------------------------
+
+name: Automation broken
+
+on:
+  workflow_run:
+    workflows: [Board, Release, Token check]
+    types: [completed]
+
+permissions:
+  issues: write
+
+concurrency:
+  # Serialised, so two workflows failing at once cannot both decide no issue
+  # exists yet and both file one.
+  group: automation-broken
+  cancel-in-progress: false
+
+jobs:
+  report:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_branch == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          HAS_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN != '' }}
+        with:
+          github-token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || github.token }}
+          script: |
+            const { owner, repo } = context.repo
+            const run = context.payload.workflow_run
+            // The marker is per workflow, so Board breaking does not silence a
+            // later Release break.
+            const marker = `<!-- automation-broken:${run.name} -->`
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner, repo, state: 'open', labels: 'claude', per_page: 100,
+            })
+            const existing = open.find((i) => !i.pull_request && (i.body || '').includes(marker))
+
+            const body = [
+              marker,
+              `**${run.name} failed on \`${run.head_branch}\`.**`,
+              '',
+              `Failed run: ${run.html_url}`,
+              `Commit: ${run.head_sha}`,
+              '',
+              '@claude read the failed run first — `gh run view ' + run.id +
+                ' --log-failed` — and fix the cause rather than the symptom.',
+              'This is the automation itself, so the fix goes to `main` as a pull request.',
+              'If the cause is a token or a repository setting rather than code, say so',
+              'and stop: that needs a person, not a patch.',
+            ].join('\n')
+
+            if (existing) {
+              // Updated, not duplicated. Board runs hourly; a break that lasts
+              // a day would otherwise be twenty-four identical issues.
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: existing.number,
+                body: `${run.name} failed again: ${run.html_url}`,
+              })
+              core.info(`#${existing.number} already open for ${run.name}; commented.`)
+              return
+            }
+
+            const { data: issue } = await github.rest.issues.create({
+              owner, repo,
+              title: `${run.name} is failing on ${run.head_branch}`,
+              body,
+              labels: ['claude'],
+            })
+            core.warning(`Filed #${issue.number} for a failing ${run.name}.`)
+
+            if (process.env.HAS_TOKEN !== 'true') {
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: issue.number,
+                body:
+                  'Filed by `GITHUB_TOKEN`, so nothing has started — GitHub suppresses ' +
+                  'events caused by it. Comment `@claude` here to pick it up, or add ' +
+                  '`CLAUDE_WORKFLOW_TOKEN` to the repository secrets.',
+              })
+            }
