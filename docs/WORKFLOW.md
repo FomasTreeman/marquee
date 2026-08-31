@@ -60,6 +60,52 @@ land on it automatically.
 
 The labels do the rest, and Claude maintains them itself — see below.
 
+### The two tokens, and exactly what each needs
+
+Both are **fine-grained** personal access tokens. A classic token would work
+but grants `repo`, which is everything in every repository you can reach — far
+more authority than either of these jobs needs.
+
+**`PROJECT_TOKEN`** — moves cards and labels. Used by `board.yml`.
+
+| Where | Permission | Why |
+|---|---|---|
+| Account permissions | **Projects: Read and write** | a user-level board is an *account* resource, not a repository one |
+| Repository | **Issues: Read and write** | add and remove `in-review`, `ci-failing`, `claude-working` |
+| Repository | **Pull requests: Read** | reads a linked PR's state and check results |
+| Repository | Metadata: Read | forced on every fine-grained token |
+
+**`CLAUDE_WORKFLOW_TOKEN`** — what the agent acts as. Used by `claude.yml` and
+`ci-repair.yml`.
+
+| Where | Permission | Why |
+|---|---|---|
+| Repository | **Contents: Read and write** | push branches and commits |
+| Repository | **Pull requests: Read and write** | open PRs, comment, read diffs |
+| Repository | **Issues: Read and write** | comment, label, read the thread |
+| Repository | **Actions: Read** | read the failing run it is repairing |
+| Repository | **Workflows: Read and write** | *easy to miss* — a commit touching anything under `.github/workflows/` is rejected without it, and the agent has written workflow files more than once |
+
+Two things worth knowing about that second token:
+
+- **It is why anything happens at all after a label changes.** GitHub will not
+  run a workflow off an event `GITHUB_TOKEN` caused. Everything falls back to
+  `GITHUB_TOKEN` if this is unset, which mostly works and silently does not
+  cascade.
+- **Nothing needs to bypass the branch ruleset.** The agent pushes to branches
+  and opens pull requests; it never writes to `main`.
+
+### Proving it rather than guessing
+
+**Actions → Token check → Run workflow.**
+
+It tries each operation for real and prints a table saying which permission is
+missing when one fails. A token short of one permission does not fail loudly —
+the board moves cards but never touches a label, or the agent opens a pull
+request but cannot comment — and each of those looks like a different bug.
+
+Read-only except for one label added and immediately removed.
+
 ## 1. You file an issue
 
 **Issues → New issue → Bug.** The template asks for four things, and they are
