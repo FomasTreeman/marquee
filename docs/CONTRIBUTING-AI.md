@@ -48,10 +48,30 @@ and the push fails naming `workflows permission`, which reads like a bug in the
 action. That is how issue #1 ended: a correct set of CI fixes posted as a
 comment for somebody to retype, because the branch could not be pushed.
 
-Make a personal access token with the `workflow` scope (classic) or Workflows:
-write (fine-grained) and store it as `CLAUDE_WORKFLOW_TOKEN`. Without the
-secret everything works as before; with it, pull requests come from your
-account rather than `github-actions[bot]`, and the pushes trigger CI.
+**Settings → Developer settings → Personal access tokens → Fine-grained.**
+Scope it to this repository alone, and grant exactly:
+
+| | |
+|---|---|
+| Contents | read and write |
+| Pull requests | read and write |
+| Issues | read and write |
+| Workflows | read and write |
+| Actions | read |
+
+Store it as `CLAUDE_WORKFLOW_TOKEN`. Fine-grained, not classic: `workflow`
+scope on a classic token requires `repo` next to it, and `repo` reaches every
+repository the account can see. If the secret leaks, the damage should stop at
+this repository.
+
+Actions stays **read** deliberately. It is what lets Claude open the run that
+failed and see which step died and how long it sat there — the reading that
+fixing a workflow actually consists of. Write would also let it start runs, and
+`gh workflow run release.yml` cuts a release. A CI fix is tested by opening the
+pull request and letting CI run on it.
+
+Without the secret everything works as before; with it, pull requests come from
+your account rather than `github-actions[bot]`, and the pushes trigger CI.
 
 **4. The signing key, if you have not already.** `docs/UPDATES.md`. Nothing
 below produces a usable release without it.
