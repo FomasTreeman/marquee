@@ -37,8 +37,11 @@
 # up on the pull request and left its findings as a comment, so a correct fix
 # to this very file arrived as prose for somebody to retype.
 #
-# A personal access token stored as CLAUDE_WORKFLOW_TOKEN lifts it. Make it a
-# **fine-grained** token, scoped to this repository alone:
+# A personal access token lifts it. The step below takes the first of
+# CLAUDE_WORKFLOW_TOKEN, PROJECT_TOKEN and GITHUB_TOKEN that exists.
+#
+# The one to prefer is a **fine-grained** token as CLAUDE_WORKFLOW_TOKEN,
+# scoped to this repository alone:
 #
 #     Contents          read and write
 #     Pull requests     read and write
@@ -46,13 +49,20 @@
 #     Workflows         read and write     <- the one that matters here
 #     Actions           read               <- so it can see why a run failed
 #
-# Not a classic token. `workflow` scope on a classic token requires `repo`
-# alongside it, and `repo` reaches every repository the account can see. The
-# blast radius of a leaked secret should be this repository, not all of them.
-# Actions stays read: write would let `gh workflow run release.yml` cut a
-# release, and nothing here needs to start a run.
+# PROJECT_TOKEN is accepted because the board automation already needs a token,
+# and a classic one carrying `workflow` next to `repo` does this job too. Two
+# things to know before relying on that. `workflow` on its own cannot push:
+# writing a workflow file still needs `repo`, or `public_repo` on a public
+# repository, and without one of those the push fails exactly as it did with
+# GITHUB_TOKEN. And `repo` reaches every repository the account can see, while
+# `project` reaches every board -- which is a wide reach to hand a run whose
+# brief is issue text written by anyone. A fine-grained token stops at this
+# repository, which is why it takes precedence.
 #
-# Without the secret everything below behaves exactly as before.
+# Actions stays read either way: write would let `gh workflow run release.yml`
+# cut a release, and nothing here needs to start a run.
+#
+# With none of them set everything below behaves exactly as before.
 #
 # Two things change when it is set, both wanted: pull requests and comments
 # come from your account rather than github-actions[bot], and pushes made with
@@ -207,10 +217,13 @@ jobs:
         id: claude
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Falls back to GITHUB_TOKEN when the secret is absent, which is the
-          # whole of the previous behaviour. See the header for what the extra
-          # token buys and why a workflow file cannot be pushed without one.
-          github_token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
+          # First of these that exists, falling back to GITHUB_TOKEN, which is
+          # the whole of the previous behaviour. PROJECT_TOKEN is in the list
+          # because the board automation already needs a token and one that
+          # also carries `workflow` does this job too -- but see the header for
+          # what sharing it costs, and why a dedicated secret takes precedence
+          # the moment you add one.
+          github_token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
           # Ticked-off progress in the issue thread, so a long run is legible
           # rather than a spinner.
           track_progress: true

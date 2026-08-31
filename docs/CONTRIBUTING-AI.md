@@ -59,10 +59,21 @@ Scope it to this repository alone, and grant exactly:
 | Workflows | read and write |
 | Actions | read |
 
-Store it as `CLAUDE_WORKFLOW_TOKEN`. Fine-grained, not classic: `workflow`
-scope on a classic token requires `repo` next to it, and `repo` reaches every
-repository the account can see. If the secret leaks, the damage should stop at
-this repository.
+Store it as `CLAUDE_WORKFLOW_TOKEN`.
+
+The workflow takes the first of `CLAUDE_WORKFLOW_TOKEN`, `PROJECT_TOKEN` and
+`GITHUB_TOKEN` that exists, so the token the board automation already uses will
+do the job if it carries `workflow` — but two things make a dedicated
+fine-grained token the better one, which is why it is checked first:
+
+- **`workflow` on its own cannot push.** Writing a workflow file still needs
+  `repo`, or `public_repo` on a public repository. Without one of those the
+  push fails exactly as it did with `GITHUB_TOKEN`, and the message still talks
+  about workflow permission.
+- **A classic token reaches too far.** `repo` covers every repository the
+  account can see and `project` every board. That is a wide reach to hand a run
+  whose brief is issue text written by anyone on the internet. A fine-grained
+  token stops at this repository.
 
 Actions stays **read** deliberately. It is what lets Claude open the run that
 failed and see which step died and how long it sat there — the reading that
