@@ -200,14 +200,18 @@ export async function createInput(
   // The fallback. It arms itself only if the native path has neither delivered
   // an event nor found a pad, so in the normal case it costs one timer and
   // never dispatches anything. See webpad.ts for why it exists at all.
-  const status = await padStatus()
+  const atStartup = await padStatus()
   webPad = createWebPad(
     (e) => {
       dispatch(e)
       tap(e.action, 'pad')
       note('pad')
     },
-    () => nativeDelivered || status.connected > 0,
+    // Re-read on every frame, not captured once. `nativeDelivered` is the
+    // half that matters -- a pad connected after startup is not in the
+    // snapshot, and an event that actually arrived is the only real proof
+    // the native path works.
+    () => nativeDelivered || atStartup.connected > 0,
   )
   disposers.push(() => webPad?.stop())
 
