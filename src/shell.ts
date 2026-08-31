@@ -175,7 +175,7 @@ export function legendFor(device: Device, on: LegendActions): Hint[] {
         { key: '⧉', label: 'Add', onClick: on.add },
         // Search has no face button; it lives at the top of the filter menu,
         // which is where a console would put it.
-        { key: 'LB/RB', label: 'Page' },
+        { key: 'LB/RB', label: 'Tabs' },
       ]
     case 'keyboard':
       return [
