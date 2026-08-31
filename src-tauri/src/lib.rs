@@ -338,7 +338,12 @@ fn set_setting(
     // Allowlisted rather than open: a command that writes an arbitrary key is a
     // command the interface can use to store anything anywhere, and the key
     // space is small enough to name.
-    const ALLOWED: &[&str] = &["sort", "fullscreen", "minimise_on_launch", "background_style"];
+    const ALLOWED: &[&str] = &[
+        "sort",
+        "fullscreen",
+        "minimise_on_launch",
+        "background_style",
+    ];
     if !ALLOWED.contains(&key.as_str()) {
         return Err(format!("not a settable preference: {key}"));
     }
