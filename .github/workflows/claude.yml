@@ -37,11 +37,11 @@
 # up on the pull request and left its findings as a comment, so a correct fix
 # to this very file arrived as prose for somebody to retype.
 #
-# A personal access token lifts it. The step below takes the first of
-# CLAUDE_WORKFLOW_TOKEN, PROJECT_TOKEN and GITHUB_TOKEN that exists.
+# A personal access token lifts it. The step below takes CLAUDE_WORKFLOW_TOKEN
+# if it exists and GITHUB_TOKEN otherwise.
 #
-# The one to prefer is a **fine-grained** token as CLAUDE_WORKFLOW_TOKEN,
-# scoped to this repository alone:
+# It wants a **fine-grained** token as CLAUDE_WORKFLOW_TOKEN, scoped to this
+# repository alone:
 #
 #     Contents          read and write
 #     Pull requests     read and write
@@ -49,15 +49,18 @@
 #     Workflows         read and write     <- the one that matters here
 #     Actions           read               <- so it can see why a run failed
 #
-# PROJECT_TOKEN is accepted because the board automation already needs a token,
-# and a classic one carrying `workflow` next to `repo` does this job too. Two
-# things to know before relying on that. `workflow` on its own cannot push:
-# writing a workflow file still needs `repo`, or `public_repo` on a public
-# repository, and without one of those the push fails exactly as it did with
-# GITHUB_TOKEN. And `repo` reaches every repository the account can see, while
-# `project` reaches every board -- which is a wide reach to hand a run whose
-# brief is issue text written by anyone. A fine-grained token stops at this
-# repository, which is why it takes precedence.
+# PROJECT_TOKEN used to sit in that chain and no longer does. It is the board's
+# classic token, scoped to `project` alone -- board.yml's header specifies that
+# and token-check.yml asserts it, checking that the token *cannot* reach the
+# repository and warning when it can. So the better it was scoped the less of
+# this it could do, and being first in the chain it displaced the GITHUB_TOKEN
+# fallback that would have worked. A token that fails is not a fallback.
+#
+# Nothing is lost by dropping it. Even a classic token wide enough to work here
+# would need `repo` as well as `workflow` -- `workflow` alone cannot push -- and
+# `repo` reaches every repository the account can see, while `project` reaches
+# every board. That is a wide reach to hand a run whose brief is issue text
+# written by anyone. A fine-grained token stops at this repository.
 #
 # Actions stays read either way: write would let `gh workflow run release.yml`
 # cut a release, and nothing here needs to start a run.
@@ -89,7 +92,16 @@ concurrency:
 
 jobs:
   claude:
-    # A new issue is picked up on its own. Everything else still needs asking.
+    # An issue is picked up when it carries the `claude` label. triage.yml
+    # applies that from the template's dropdown, so a new issue still starts on
+    # its own -- but through one workflow rather than two.
+    #
+    # This used to wake on `issues: opened` as well, which raced triage.yml on
+    # the same event and beat it. The `no-ai` test below reads the labels in
+    # the event payload, and at open time those are only what the template
+    # applied, so the label triage was about to write was never visible and
+    # "Me -- do not touch it" bought nothing. Waiting for the label event means
+    # the labels are settled by the time they are read.
     #
     # `author_association` is the cheap half of the guard: OWNER for you, NONE
     # for a stranger, so a spam issue on a public repository does not even
@@ -97,13 +109,21 @@ jobs:
     # without write access, on every event type -- but that refusal costs a
     # minute of Actions time and this costs nothing.
     #
+    # `review.author_association` is in that list because a `pull_request_review`
+    # payload carries neither `issue` nor `comment`. Without it both sides
+    # resolved to the empty string, the membership test failed, and the
+    # `@claude` in a review body two lines down could never start anything --
+    # invisibly, because a job filtered out by `if:` leaves nothing in the
+    # Actions tab to notice.
+    #
     # `no-ai` keeps an issue off. Some issues are notes to self.
     if: |
       !contains(github.event.issue.labels.*.name, 'no-ai') &&
       contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-               github.event.issue.author_association || github.event.comment.author_association) &&
+               github.event.issue.author_association ||
+               github.event.comment.author_association ||
+               github.event.review.author_association) &&
       (
-        (github.event_name == 'issues' && github.event.action == 'opened') ||
         github.event.label.name == 'claude' ||
         contains(github.event.comment.body, '@claude') ||
         contains(github.event.review.body, '@claude') ||
@@ -111,6 +131,10 @@ jobs:
         contains(github.event.issue.title, '@claude')
       )
     runs-on: ubuntu-latest
+    # Long enough for a real fix with a test, short enough that a run
+    # which has stopped making progress stops spending subscription
+    # usage on it.
+    timeout-minutes: 30
 
     # Who can set this off, now that the repository is public.
     #
@@ -136,7 +160,7 @@ jobs:
       actions: read
 
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The full history, so it can read why a line is the way it is.
           # Most of the reasoning in this repository lives in commit messages.
@@ -149,13 +173,13 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 9
 
       # After pnpm: `cache: pnpm` asks pnpm where its store is, so the other
       # order caches nothing and says nothing about it.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
           cache: pnpm
@@ -173,22 +197,31 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # The board is moved by the workflow, not by Claude.
+      # The run owns exactly one label: "I am working on this".
       #
-      # Asking the agent to run `gh issue edit` was the wrong mechanism. It is
-      # an instruction competing with the actual task for attention, it is
-      # skipped silently when it loses, and a board that is only sometimes
-      # right is worse than one nobody expects to be right at all. These steps
-      # always run, in order, whatever happened inside.
+      # It is the only piece of state nothing else can know -- whether this
+      # process is still going -- so it is set here and cleared here. Every
+      # other label and the card itself belong to board.yml, which reads what
+      # is true rather than being told.
+      #
+      # Not PROJECT_TOKEN. That is a classic token scoped to `project` and
+      # nothing else -- board.yml's header says so and token-check.yml actively
+      # asserts it cannot reach the repository -- so the better it was scoped,
+      # the more reliably this label write was refused. `|| true` then ate the
+      # refusal, the card never showed In Progress, and the GITHUB_TOKEN
+      # fallback that would have worked was never reached because the first
+      # entry in the chain was set.
       - name: Mark it in progress
         if: github.event.issue.number
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
+          NUMBER: ${{ github.event.issue.number }}
         run: |
-          gh issue edit ${{ github.event.issue.number }} \
-            --add-label claude-working \
-            --remove-label needs-decision \
-            --remove-label in-review || true
+          # Not fatal -- a label is not worth losing the run over -- but not
+          # silent either. The board reads labels, so a failure here is a card
+          # that quietly stops matching what is happening.
+          gh issue edit "$NUMBER" --add-label claude-working --remove-label needs-decision \
+            || echo "::warning::could not set claude-working on #$NUMBER; the board will show it as untouched"
 
       # Appended, not replaced. `--system-prompt-file` would discard Claude
       # Code's own defaults along with the GitHub context this action installs,
@@ -217,13 +250,10 @@ jobs:
         id: claude
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # First of these that exists, falling back to GITHUB_TOKEN, which is
-          # the whole of the previous behaviour. PROJECT_TOKEN is in the list
-          # because the board automation already needs a token and one that
-          # also carries `workflow` does this job too -- but see the header for
-          # what sharing it costs, and why a dedicated secret takes precedence
-          # the moment you add one.
-          github_token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
+          # CLAUDE_WORKFLOW_TOKEN if it is set, GITHUB_TOKEN otherwise, which
+          # is the whole of the previous behaviour. See the header for what the
+          # PAT buys and why the board's token is not an alternative.
+          github_token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
           # Ticked-off progress in the issue thread, so a long run is legible
           # rather than a spinner.
           track_progress: true
@@ -232,10 +262,19 @@ jobs:
             --append-system-prompt-file .github/claude-instructions.md
 
       # `always()`, because the interesting case is the run that failed or was
-      # cancelled: leaving claude-working on an issue nobody is working on is
-      # exactly the stale label that makes a board untrustworthy.
+      # cancelled: an issue left marked in progress with nobody working on it
+      # is exactly the stale state that stops a board being believed.
+      #
+      # board.yml then decides where the card actually goes, on the labels and
+      # pull requests that exist once this has finished.
       - name: Stop marking it in progress
         if: always() && github.event.issue.number
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh issue edit ${{ github.event.issue.number }} --remove-label claude-working || true
+          GH_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          # Louder than the one above: a label left on says a run is still
+          # going when it is not, which is the stale state that stops a board
+          # being believed at all.
+          gh issue edit "$NUMBER" --remove-label claude-working \
+            || echo "::warning::could not clear claude-working on #$NUMBER; the board will show it as still running"

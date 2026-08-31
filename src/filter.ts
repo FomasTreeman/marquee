@@ -152,6 +152,14 @@ export function apply(
   return out
 }
 
+/** Label for the always-visible search entry in the top bar: the query when
+ *  one is active, so the entry doubles as an indicator of it, or an
+ *  invitation to type one when it is not. */
+export function searchLabel(query: string): string {
+  const q = query.trim()
+  return q ? `“${q}”` : 'Search'
+}
+
 export function describe(
   preset: Preset,
   query: string,

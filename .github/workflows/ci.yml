@@ -16,6 +16,17 @@ on:
     branches: [main]
   pull_request:
 
+# Explicit, and read-only, because CI builds and tests and writes nothing.
+#
+# Every workflow here declares what it needs, so the repository-wide default is
+# only ever a ceiling. That matters more than it looks: with the default set to
+# read, a `permissions:` block asking for write is *ignored* rather than
+# honoured -- the setting is a cap, not a starting point -- and the symptom is
+# "Resource not accessible by integration" from a workflow that plainly asked
+# for the permission it was denied.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -27,8 +38,12 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    # release.yml describes CI as "about two minutes of work" and refuses
+    # to release without it. Nothing enforced that number, so a wedged
+    # Windows link had six hours of default to sit in.
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # Defender scans every file cargo writes, and cargo writes tens of
       # thousands of them. It is the single biggest cause of a Windows job
@@ -62,14 +77,14 @@ jobs:
         with:
           components: clippy, rustfmt
 
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with:
           version: 9
 
       # After pnpm, not before. `cache: pnpm` asks pnpm where its store is,
       # so with the old order it found nothing and cached nothing -- silently,
       # which is the only kind of missing cache there is.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
           cache: pnpm
@@ -80,7 +95,21 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # ---------------------------------------------------------------------
+      # Everything from here to the Rust step reads files and runs pure
+      # functions, so all three runners were computing the same answer. Three
+      # copies of it bought three identical failures to read and, on Windows,
+      # the slowest copy of each. Only cargo genuinely needs the matrix.
+      #
+      # They stay inside this job rather than moving to one of their own
+      # because the branch ruleset requires `build (ubuntu-latest)`,
+      # `build (windows-latest)` and `build (macos-latest)` by name. A new job
+      # would not be in that list, so a lint failure would stop blocking a
+      # merge -- and it would stop quietly, which is the failure this
+      # repository is worst at seeing.
+      # ---------------------------------------------------------------------
       - name: Design tokens are in step with their source
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           python3 tools/build-tokens.py
@@ -90,22 +119,38 @@ jobs:
       # A discarded failure with no log call and no comment saying why. Cheap,
       # and it runs before the slow steps so it fails fast.
       - name: No unexplained discarded failures
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: tools/check-silence.sh
+
+      # The rules that decide what a person sees when they come back to a pile
+      # of work. Pure, so they cost nothing to check.
+      - name: Board rules
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: node .github/scripts/board.test.mjs
 
       # A schema-invalid workflow does not fail loudly -- it fails as a run
       # named after the file path, in zero seconds, which reads like a rename
       # rather than a break. Releases stopped for three merges before anyone
       # noticed.
       - name: Workflows GitHub will accept
+        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: python3 tools/check-workflows.py
 
-      - run: pnpm exec tsc --noEmit
+      - if: matrix.os == 'ubuntu-latest'
+        run: pnpm exec tsc --noEmit
 
       - name: Frontend tests
+        if: matrix.os == 'ubuntu-latest'
         run: pnpm exec vitest run
 
+      # Not ubuntu-only, and this one is not optional anywhere:
+      # `generate_context!` embeds the built frontend, so without dist/ the
+      # crate does not compile at all -- "the `frontendDist` configuration is
+      # set to `../dist` but this path doesn't exist", from a proc macro, which
+      # reads like a broken toolchain rather than a missing build step.
       - run: pnpm exec vite build
 
       # Warnings are errors here but not locally: a warning that blocks the

@@ -30,7 +30,7 @@ import { installErrorHandlers, logInfo, logWarn, logError, renderFatal, logPath 
 import { scheduleSelfCheck } from './selfcheck'
 import { declineUpdate, scheduleUpdateCheck, updateMenuItems } from './update'
 import {
-  apply as applyFilter, describe as describeFilter,
+  apply as applyFilter, describe as describeFilter, searchLabel,
   PRESETS, SORTS, type Preset, type Sort,
 } from './filter'
 
@@ -244,6 +244,12 @@ async function main(): Promise<void> {
   }
 
   function paintPresets(): void {
+    // The label doubles as the indicator: it names the query once one exists,
+    // rather than a fixed "Search" sitting there disconnected from the state
+    // the bar is otherwise reporting via the count next to the clock.
+    shell.searchButton.textContent = searchLabel(query)
+    shell.searchButton.dataset['active'] = query.trim() ? '1' : '0'
+
     shell.presets.textContent = ''
     for (const p of PRESETS) {
       const pill = document.createElement('span')
@@ -547,6 +553,8 @@ async function main(): Promise<void> {
     if (padConnected) osk.attach(shell.query)
   }
 
+  shell.searchButton.onclick = openSearch
+
   shell.query.addEventListener('input', () => {
     query = shell.query.value
     grid.focus(0)
@@ -563,7 +571,7 @@ async function main(): Promise<void> {
     if (e.key === 'Enter') shell.query.blur()
   })
 
-  const picker = createPicker()
+  const picker = createPicker(() => osk.close())
 
   /**
    * Re-run the invariants after a surface appears.
@@ -700,7 +708,7 @@ async function main(): Promise<void> {
     // library rebuilds them all with the same URLs, which the webview will now
     // re-request because the cache behind them is empty.
     void reloadLibrary()
-  })
+  }, () => osk.close())
 
   const detail = createDetail({
     onPlay: () => void play_(grid.focused),
@@ -711,6 +719,7 @@ async function main(): Promise<void> {
     // A closure rather than a conditional hook because padConnected is read
     // later in startup than this.
     onTextField: (field) => { if (padConnected) osk.attach(field) },
+    onTextFieldClosed: () => osk.close(),
   })
 
   // Steam writes playtime into localconfig itself, so returning to the window

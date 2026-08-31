@@ -315,6 +315,7 @@ mod tests {
                 steam_app_id: Some("1".into()),
                 executable: None,
                 args: String::new(),
+                last_played: None,
             }],
             roots: vec![],
         };

@@ -1,0 +1,145 @@
+# Refuse a pull request that would undo work rather than add to it.
+#
+# The failure this exists for is quiet and looks like a normal pull request.
+# A branch cut from an old `main` still shows a green tick -- its own tests
+# pass -- while its diff against today's `main` silently removes everything
+# merged since. Nothing in CI notices, because nothing in CI is looking at the
+# *shape* of the change.
+#
+# Five branches in this repository were one click from doing exactly that: work
+# written before a batch of controller and release fixes landed, each of which
+# would have read as a thousand deletions if opened as-is.
+#
+# `strict` status checks on the branch ruleset stop a stale branch *merging*,
+# which is the real guard. This says so early, on the pull request, where
+# somebody can act on it without waiting for a merge to be refused.
+
+name: Staleness
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+# Read only. This reports through `::error::` annotations on the run, which
+# need no write access at all -- the `pull-requests: write` that used to be
+# here was never spent on anything.
+permissions:
+  contents: read
+
+concurrency:
+  group: staleness-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: How far behind, and what would that undo
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # Rule 1 below refuses a change that mostly deletes, and the comment
+          # over it always conceded the case it could not tell apart: a removal
+          # that is the point of the pull request. There was no way past it
+          # short of editing this file, so the label is the way past it.
+          OVERRIDE: ${{ contains(github.event.pull_request.labels.*.name, 'deliberate-deletion') }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin "$BASE"
+          base="origin/$BASE"
+          mb=$(git merge-base "$base" "$HEAD_SHA")
+
+          behind=$(git rev-list --count "$HEAD_SHA..$base")
+          ahead=$(git rev-list --count "$base..$HEAD_SHA")
+          echo "This branch is $behind commits behind $BASE and $ahead ahead."
+
+          # Two ranges, two questions, and conflating them is what made this
+          # check unable to fire.
+          #
+          # `git diff A...B` is `git diff $(git merge-base A B) B`: the branch's
+          # own work, with everything $BASE gained since the cut deliberately
+          # excluded. `git diff A..B` compares the two trees, so $BASE's newer
+          # work shows up as deletions. The step printed "against today's $BASE"
+          # and computed it with three dots, which is the one form guaranteed
+          # not to see a stale branch -- measured here against a branch eight
+          # commits behind, three dots said +0/-0 while two said +376/-961.
+          own_a=$(git diff --numstat "$base...$HEAD_SHA" | awk '{a+=$1} END {print a+0}')
+          own_r=$(git diff --numstat "$base...$HEAD_SHA" | awk '{r+=$2} END {print r+0}')
+          tree_a=$(git diff --numstat "$base..$HEAD_SHA" | awk '{a+=$1} END {print a+0}')
+          tree_r=$(git diff --numstat "$base..$HEAD_SHA" | awk '{r+=$2} END {print r+0}')
+          echo "Its own change adds $own_a lines and removes $own_r."
+          echo "Against today's $BASE the trees differ by +$tree_a/-$tree_r."
+
+          # 1. A branch that deletes far more than it adds. Read from its own
+          #    change, because that is whose intent is in question.
+          #
+          #    The label excuses this rule and only this rule. "I meant to
+          #    delete it" is an answer to the question of intent; it is not an
+          #    answer to being cut from a stale $BASE, and rule 2 below still
+          #    applies to a deletion pull request that is also out of date.
+          if [ "$OVERRIDE" != "true" ] \
+             && [ "$own_r" -gt 200 ] && [ "$own_r" -gt $((own_a * 3)) ]; then
+            echo "::error::This removes $own_r lines and adds $own_a, which is a removal"
+            echo "::error::rather than a change. If that is the point of the pull request,"
+            echo "::error::label it deliberate-deletion and this rule will stand aside."
+            echo "::error::If it is not, something has gone wrong in the branch."
+            exit 1
+          fi
+
+          # 2. A branch old enough to be undoing somebody else's work, reported
+          #    rather than refused -- see below. The line
+          #    counts above cannot answer this: in the two-dot diff every line
+          #    $BASE gained is a deletion and every line it lost is an addition,
+          #    so the ratio in rule 1 washes out -- the eight-commits-behind
+          #    branch scored -961/+376 and sailed through it.
+          #
+          #    What actually decides the risk is overlap. A stale branch that
+          #    touches nothing $BASE has touched merges cleanly whatever its
+          #    age; one that edits the same files is where work disappears. So
+          #    the question is how much $BASE changed in the files this branch
+          #    also changed.
+          git diff --name-only "$base...$HEAD_SHA" | sort > /tmp/ours.txt
+          git diff --name-only "$mb..$base" | sort > /tmp/theirs.txt
+          comm -12 /tmp/ours.txt /tmp/theirs.txt > /tmp/overlap.txt
+          overlap=$(wc -l < /tmp/overlap.txt | tr -d ' ')
+
+          at_risk=0
+          if [ "$overlap" -gt 0 ]; then
+            at_risk=$(git diff --numstat "$mb..$base" -- $(tr '\n' ' ' < /tmp/overlap.txt) \
+                        | awk '{n+=$1+$2} END {print n+0}')
+          fi
+          echo "$overlap file(s) changed on both sides, $at_risk lines of $BASE at risk."
+
+          #    It says so rather than refusing, and that is deliberate. The
+          #    ruleset on this repository has strict required status checks --
+          #    `strict_required_status_checks_policy: true` -- so a branch that
+          #    is behind physically cannot merge until it is updated. Failing
+          #    here would be a second lock on a door that is already locked,
+          #    and the only thing a redundant gate can add is a red cross on a
+          #    pull request that was never going to merge anyway. Red crosses
+          #    that turn out to be nothing are how people learn to skim them.
+          #
+          #    So: the header's own position, kept. The ruleset is the guard.
+          #    This says it early, where somebody can act on it.
+          if [ "$behind" -gt 0 ] && [ "$at_risk" -gt 200 ]; then
+            echo "::warning::This branch is $behind commits behind $BASE and edits $overlap file(s)"
+            echo "::warning::that $BASE has changed by $at_risk lines since the branch was cut."
+            echo "::warning::Update it before reviewing: merging as-is is how that work gets"
+            echo "::warning::quietly reverted, and the ruleset will refuse the merge regardless."
+            sed 's/^/::warning::  /' /tmp/overlap.txt
+          fi
+
+          # Behind is not fatal on its own -- the ruleset requires the branch to
+          # be up to date before merging anyway -- but saying it here means it
+          # is fixed while somebody is looking at the pull request rather than
+          # discovered at the moment they try to merge.
+          if [ "$behind" -gt 25 ]; then
+            echo "::warning::$behind commits behind $BASE. Update the branch before"
+            echo "::warning::reviewing, or the diff describes a tree nobody has any more."
+          fi
+          echo "Shape looks reasonable."

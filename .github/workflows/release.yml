@@ -29,6 +29,21 @@ name: Release
 on:
   push:
     branches: [main]
+    # A version number is a thing every installed copy downloads, so it should
+    # correspond to something they could not already do. A change to these
+    # paths ships nothing a user can run: prose, the workflows that build the
+    # thing, and the token source the build regenerates from.
+    #
+    # Only a commit touching *nothing else* is skipped. A change that edits
+    # docs alongside code releases exactly as before, so this cannot quietly
+    # withhold a fix. `no-release` remains the way to skip one that does touch
+    # code.
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**'
+      - 'design/**'
+      - LICENSE
   workflow_dispatch:
     inputs:
       bump:
@@ -52,12 +67,13 @@ concurrency:
 jobs:
   decide:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       version: ${{ steps.plan.outputs.version }}
       skip: ${{ steps.plan.outputs.skip }}
       notes: ${{ steps.plan.outputs.notes }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Tags are needed to work out where we are, and a shallow checkout
           # has none. Losing this does not fail the build -- it quietly makes
@@ -156,6 +172,10 @@ jobs:
     needs: decide
     if: needs.decide.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    # Above the half-hour deadline the step sets for itself, so the step's own
+    # message -- which names the run and its last known status -- is what fails
+    # the job, rather than a bare cancellation that says nothing.
+    timeout-minutes: 35
     outputs:
       green: ${{ steps.wait.outputs.green }}
     steps:
@@ -173,9 +193,18 @@ jobs:
           deadline=$(( $(date +%s) + 1800 ))
 
           while :; do
-            run=$(gh api \
+            # A call that fails is not a run that has not started, and this
+            # discarded both into the same empty string. A rate limit or a blip
+            # then read as "CI has not begun", the loop polled on for the full
+            # half hour, and the release failed blaming CI for something that
+            # had never been asked. Still not fatal -- one blip should not stop
+            # a release -- but no longer indistinguishable.
+            if ! run=$(gh api \
                     "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=1" \
-                    --jq '.workflow_runs[0] // empty' 2>/dev/null || true)
+                    --jq '.workflow_runs[0] // empty' 2>err.log); then
+              echo "::warning::could not read CI runs for $SHA: $(tail -1 err.log)"
+              run=''
+            fi
             # Not `${run:-{}}`. Bash reads that as ${run:-{} followed by a
             # literal }, which parses fine until the first time there is a real
             # run to find. The same trap is written up in `decide` above.
@@ -236,13 +265,14 @@ jobs:
     needs: decide
     if: needs.decide.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     environment: release
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with: { version: 9 }
       # After pnpm: `cache: pnpm` asks pnpm where its store is.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 20, cache: pnpm }
       - run: pnpm install --frozen-lockfile
       - name: The signing key and its password agree
@@ -305,6 +335,13 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
+    # Per target, and the matrix is serial, so the worst case is four of these.
+    # The bundles take five to nine minutes each; this leaves room for a slow
+    # runner without leaving room for a wedged one, which would otherwise hold
+    # `concurrency: release` -- it does not cancel in progress -- and block
+    # every release behind it for the six-hour default.
+    timeout-minutes: 45
+
     # The signing key lives here rather than in repository secrets, so no other
     # workflow -- including one added by a pull request -- can reach it. Safe
     # if the environment does not exist yet: a job with an environment still
@@ -320,7 +357,7 @@ jobs:
     environment: release
 
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The exact commit that triggered this, so all four targets build
           # identical source however busy main is.
@@ -391,11 +428,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with: { version: 9 }
 
       # After pnpm: `cache: pnpm` asks pnpm where its store is.
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with: { node-version: 20, cache: pnpm }
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -405,7 +442,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
+      - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         id: tauri
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -425,7 +462,19 @@ jobs:
           # something than a release page. A draft here would also mean the
           # updater never sees it, since /releases/latest ignores drafts --
           # which is the shape of the bug this file just replaced.
-          releaseDraft: false
+          # A draft until every platform is in.
+          #
+          # tauri-action publishes as it goes, so the release went live the
+          # moment the *first* target finished -- and `/releases/latest`
+          # started answering with a manifest listing one platform. On Windows,
+          # which builds slowest and runs last, that meant "you are up to date"
+          # for the fifteen minutes the rest of the matrix was still going, with
+          # the update sitting on the page.
+          #
+          # A draft is invisible to `/releases/latest`, which is exactly what is
+          # wanted here: nobody is told anything until the release is whole.
+          # The verify job below checks it and publishes it.
+          releaseDraft: true
           prerelease: false
           # Writes latest.json, which is the file the updater actually reads.
           # Without it the release is just installers nobody's app will find.
@@ -438,8 +487,9 @@ jobs:
     needs: [decide, build]
     if: needs.decide.outputs.skip != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
-      - name: Every platform is in the manifest
+      - name: Every platform is in the manifest, then publish
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.decide.outputs.version }}
@@ -470,3 +520,17 @@ jobs:
             }
             console.log("Every platform present and signed.");
           '
+
+      - name: Publish it
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.decide.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Only now does anything reach an installed copy. Until this line the
+          # release is a draft and `/releases/latest` still answers with the
+          # previous version, which is the honest answer while this one is
+          # half-built.
+          gh release edit "v$VERSION" --repo "${{ github.repository }}" --draft=false
+          echo "v$VERSION is live."
+

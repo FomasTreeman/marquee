@@ -1,0 +1,151 @@
+# The board, kept true by one thing.
+#
+# Three workflows used to share this job and chain through label events, which
+# does not work: **GitHub will not run a workflow off an event that
+# GITHUB_TOKEN caused.** A label written by one was invisible to the next, the
+# card never moved, and nothing failed anywhere -- the worst kind of broken.
+#
+# This reads what is true about an issue and writes the label and the card in
+# the same run. Nothing depends on a second trigger, so nothing can be
+# suppressed. The rules live in .github/scripts/board.mjs and are tested
+# without a network by .github/scripts/board.test.mjs.
+#
+# Every path ends in the same call, so however this is woken up the answer is
+# the same. That also means a missed event costs nothing: the sweep below puts
+# everything right within the hour regardless.
+#
+# Two tokens, deliberately.
+#
+# A user-owned Projects board has no fine-grained token permission -- that
+# exists for organisation projects only -- so reaching one needs a **classic**
+# token with the `project` scope. Classic tokens are coarse, so this one is
+# used for the board and nothing else.
+#
+# Everything touching the repository -- reading issues, writing labels -- goes
+# through the workflow's own GITHUB_TOKEN, which cannot see the board but does
+# not need to. The alternative was a single classic token also carrying `repo`,
+# which would mean write access to every repository on the account in order to
+# add a label to this one.
+#
+#   PROJECT_TOKEN   classic PAT, `project` scope only
+#   (labels)        GITHUB_TOKEN, from the permissions block below
+
+name: Board
+
+on:
+  issues:
+    types: [opened, closed, reopened, labeled, unlabeled, assigned]
+  pull_request_target:
+    types: [opened, closed, reopened, ready_for_review, converted_to_draft, synchronize]
+  # CI finishing changes whether a pull request is ready to read, which is a
+  # fact about the issue even though nothing about the issue changed.
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+  schedule:
+    # Hourly. Not the mechanism -- the safety net. Anything the event-driven
+    # paths missed is corrected here, so a suppressed or dropped event is a
+    # delay rather than a permanently wrong board.
+    - cron: '17 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+concurrency:
+  # Serialised on purpose. Two runs reconciling the same issue would race on
+  # the card, and this is cheap enough that queueing costs nothing.
+  group: board
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    # Two GraphQL calls per issue. The hourly sweep over every open issue
+    # is the long case and it is seconds, not minutes.
+    timeout-minutes: 10
+    steps:
+      # No `ref:`, and that omission is load-bearing.
+      #
+      # This workflow runs on `pull_request_target`, which it needs to: a card
+      # has to move for a pull request from a fork, and `pull_request` gives a
+      # fork no secrets and no write access. The price is that
+      # pull_request_target runs from the default branch with PROJECT_TOKEN in
+      # the environment, whoever opened the pull request.
+      #
+      # Leaving `ref:` off means the checkout resolves to the base branch, so
+      # the only code on disk beside that token is code that is already
+      # reviewed and merged. Adding
+      # `ref: ${{ github.event.pull_request.head.sha }}` -- the obvious edit
+      # for anyone who wants the script to see the branch it is reconciling --
+      # would put an unreviewed .github/scripts/board.mjs from any fork one
+      # `await import` away from a classic token that can reach every board on
+      # the account. Nothing about that would look wrong in a diff.
+      #
+      # The script does not need the branch. It reads facts through the API.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          # The repository token. It cannot reach the board, and the script
+          # uses PROJECT_TOKEN for that half.
+          github-token: ${{ github.token }}
+          script: |
+            const { loadProject, projectCaller, reconcile } = await import(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/board.mjs`)
+
+            const owner = context.repo.owner
+            const repo = context.repo.repo
+            const projectApi = projectCaller(process.env.PROJECT_TOKEN)
+            const project = await loadProject(
+              projectApi, owner, Number(process.env.PROJECT_NUMBER))
+
+            // Which issues this event is about. A pull request is not itself a
+            // card -- it speaks for the issues it closes.
+            async function issuesFor(prNumber) {
+              const q = await github.graphql(
+                `query($owner: String!, $repo: String!, $n: Int!) {
+                   repository(owner: $owner, name: $repo) {
+                     pullRequest(number: $n) {
+                       closingIssuesReferences(first: 10) { nodes { number } }
+                     }
+                   }
+                 }`, { owner, repo, n: prNumber })
+              return q.repository.pullRequest.closingIssuesReferences.nodes.map((i) => i.number)
+            }
+
+            let numbers = []
+            if (context.eventName === 'issues') {
+              numbers = [context.payload.issue.number]
+            } else if (context.eventName === 'pull_request_target') {
+              numbers = await issuesFor(context.payload.pull_request.number)
+            } else if (context.eventName === 'workflow_run') {
+              const prs = context.payload.workflow_run.pull_requests || []
+              for (const pr of prs) numbers.push(...await issuesFor(pr.number))
+              // A workflow_run from a fork carries no pull requests, so fall
+              // back to a sweep rather than silently doing nothing.
+              if (!prs.length) numbers = null
+            } else {
+              numbers = null   // scheduled or dispatched: everything open
+            }
+
+            if (numbers === null) {
+              const open = await github.paginate(github.rest.issues.listForRepo, {
+                owner, repo, state: 'open', per_page: 100,
+              })
+              // listForRepo returns pull requests too, and they are not cards.
+              numbers = open.filter((i) => !i.pull_request).map((i) => i.number)
+              core.info(`sweeping ${numbers.length} open issues`)
+            }
+
+            for (const number of [...new Set(numbers)]) {
+              await reconcile({ github, project, projectApi, core, owner, repo, number })
+            }
+        env:
+          PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
+          PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER || 8 }}

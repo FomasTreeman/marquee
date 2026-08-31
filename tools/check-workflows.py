@@ -11,6 +11,12 @@ before anyone noticed.
 The specific bug this exists for: a step inserted between `- uses:` and its own
 `with:` block, so the inputs silently reattached to the new step. `run` steps
 cannot take `with`, and GitHub rejects the whole file for it.
+
+It also enforces two things GitHub accepts happily and should not: a job with
+no `timeout-minutes`, which inherits a six-hour default, and a job with no
+`permissions`, which inherits whatever a repository setting says today. Both
+were missed by all fifteen jobs in this directory at once, which is the sign of
+something that needs checking rather than remembering.
 """
 import pathlib
 import re
@@ -68,6 +74,10 @@ def check(path: pathlib.Path) -> None:
     if "on" not in doc and True not in doc:
         problems.append(f"{path}: no triggers")
 
+    # A workflow-level block covers every job in the file; a job may also
+    # narrow it for itself.
+    top_permissions = "permissions" in doc
+
     for job_name, job in (doc.get("jobs") or {}).items():
         where = f"{path}: job {job_name}"
         if not isinstance(job, dict):
@@ -75,6 +85,25 @@ def check(path: pathlib.Path) -> None:
             continue
         if "uses" in job:
             continue  # a reusable workflow call has no steps
+
+        # Two things nothing was checking, missed by all fifteen jobs here.
+        #
+        # A job with no ceiling gets GitHub's default of six hours. The release
+        # matrix holds `concurrency: release` without cancelling in progress,
+        # so one wedged bundle blocks every release behind it for the whole of
+        # that -- and an agent job spends subscription usage for as long as it
+        # is allowed to run.
+        if "timeout-minutes" not in job:
+            problems.append(
+                f"{where}: no `timeout-minutes`, so it inherits GitHub's six-hour default"
+            )
+        # And an undeclared job takes the repository-wide default, which is a
+        # setting somebody can change from a web page without touching this
+        # repository. Declaring it means the default is only ever a ceiling.
+        if not top_permissions and "permissions" not in job:
+            problems.append(
+                f"{where}: no `permissions`, so it inherits the repository-wide default"
+            )
         steps = job.get("steps")
         if not steps:
             problems.append(f"{where}: has no steps")
@@ -98,7 +127,9 @@ def check(path: pathlib.Path) -> None:
                 problems.append(f"{at}: a Windows `run` step should name its shell")
             # A local action (./path) or a container (docker://) has no tag to
             # move, so there is nothing to pin.
-            if has_uses and not step["uses"].startswith(("./", "docker://")):
+            if has_uses and not isinstance(step["uses"], str):
+                problems.append(f"{at}: `uses` is empty — a failed substitution, most likely")
+            elif has_uses and not step["uses"].startswith(("./", "docker://")):
                 if not PINNED.match(step["uses"]):
                     unpinned.append(f"{at}: {step['uses']}")
             for key in step:
@@ -115,7 +146,7 @@ for f in files:
     check(f)
 
 if problems:
-    print("Workflows GitHub would refuse:\n")
+    print("Workflows GitHub would refuse, or that leave something to a default:\n")
     for p in problems:
         print(f"  {p}")
     print("\nSee tools/check-workflows.py.")
