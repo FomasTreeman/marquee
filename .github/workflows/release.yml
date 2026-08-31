@@ -155,6 +155,40 @@ jobs:
             echo "notes=$notes"
           } >> "$GITHUB_OUTPUT"
 
+      # A release is built as a draft and published only once every platform is
+      # in it, which leaves one loose end: a run that dies between those two
+      # points leaves the draft behind.
+      #
+      # A draft carries no tag -- GitHub creates the tag when the release is
+      # published -- and the version floor above reads the newest tag. So the
+      # next run computes the same version, and tauri-action, finding a release
+      # already at that tag, adds this run's bundles to the previous run's
+      # half-finished draft. Publishing that would ship a latest.json
+      # describing two different builds, which is a worse version of the bug
+      # the draft was introduced to fix.
+      #
+      # Only a draft is ever deleted. A *published* release cannot be sitting
+      # at this version, because publishing is what creates the tag and the tag
+      # is what the floor above steps over.
+      - name: Clear a draft left behind by an earlier attempt
+        if: steps.plan.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Absent is the ordinary case, and `gh release view` exits non-zero
+          # for it. Anything else -- a published release, or no release at all
+          # -- leaves this alone.
+          state=$(gh release view "v$VERSION" --json isDraft --jq .isDraft 2>/dev/null || echo none)
+          if [ "$state" = "true" ]; then
+            gh release delete "v$VERSION" --yes --cleanup-tag
+            echo "::warning::Deleted a leftover draft v$VERSION from an earlier attempt. Rebuilding it."
+          else
+            echo "No draft v$VERSION to clear (found: $state)."
+          fi
+
 
   # Merging is the release, so merging is the last moment anyone could notice
   # that main does not work. Nothing was looking.
