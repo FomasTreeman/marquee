@@ -81,7 +81,7 @@ function el<K extends keyof HTMLElementTagNameMap>(
   return node
 }
 
-export function createPicker(): Picker {
+export function createPicker(onClose?: () => void): Picker {
   const root = el('div', 'add', document.body)
   root.hidden = true
 
@@ -211,6 +211,9 @@ export function createPicker(): Picker {
     field.blur()
     request = undefined
     generation++
+    // The field this panel owns is the only reason the on-screen keyboard is
+    // ever attached here; leaving it up after the panel closes is issue #18.
+    onClose?.()
   }
 
   field.addEventListener('input', () => {

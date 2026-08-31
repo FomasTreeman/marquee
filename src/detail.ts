@@ -115,6 +115,9 @@ export interface DetailHooks {
    *  The detail view does not own the keyboard -- main.ts does, because the
    *  input chain has to consume for it before anything else. */
   onTextField?(field: HTMLInputElement): void
+  /** The rename field it was offered for is going away -- close it too, or it
+   *  is left on screen with nothing left to type into (issue #18). */
+  onTextFieldClosed?(): void
 }
 
 /**
@@ -150,7 +153,7 @@ async function autoLocate(game: Game, button: HTMLElement, onChanged: () => void
 }
 
 export function createDetail(hooks: DetailHooks): DetailView {
-  const { onPlay, onChanged, onFindArtwork, onTextField } = hooks
+  const { onPlay, onChanged, onFindArtwork, onTextField, onTextFieldClosed } = hooks
   const root = el('div', 'detail', document.body)
   root.hidden = true
 
@@ -197,6 +200,7 @@ export function createDetail(hooks: DetailHooks): DetailView {
   let renaming = false
 
   function endRename(): void {
+    if (renaming) onTextFieldClosed?.()
     renaming = false
     rename.hidden = true
     renameField.blur()

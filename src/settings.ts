@@ -48,7 +48,7 @@ function section(parent: HTMLElement, title: string, note: string) {
   return { root, controls: el('div', 'settings-controls', root) }
 }
 
-export function createSettings(onChanged: () => void): SettingsView {
+export function createSettings(onChanged: () => void, onClose?: () => void): SettingsView {
   const root = el('div', 'settings', document.body)
   root.hidden = true
   const panel = el('div', 'settings-panel', root)
@@ -407,6 +407,9 @@ export function createSettings(onChanged: () => void): SettingsView {
     open = false
     root.hidden = true
     field.blur()
+    // The field this screen owns is the only reason the on-screen keyboard is
+    // ever attached here; leaving it up after the field is gone is issue #18.
+    onClose?.()
   }
 
   return {
