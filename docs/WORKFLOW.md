@@ -34,31 +34,79 @@ round: a board that disagrees with the labels is a board nobody trusts.
 **Setting it up** — one command, then two clicks:
 
 ```bash
-gh auth refresh -s project        # your token cannot see Projects yet
+gh auth refresh -s project
 gh project create --owner FomasTreeman --title Marquee
 ```
 
-Or make it in the browser: **your profile → Projects → New project → Board**.
+The board needs six Status options: `Todo (Human)`, `Todo`, `In Progress`,
+`Needs Decision`, `In Review`, `Done`. If one is missing the automation fails
+loudly, naming the ones your board does have.
 
-**Add the three Status options the default board does not have.** Project →
-Settings → Fields → Status. It ships with `Todo`, `In Progress` and `Done`;
-add **`In Review`**, **`Needs Decision`** and **`Todo (Human)`**. Capitals
-matter — the automation throws with the list of names your board actually has
-if one does not match, so a typo tells you what it is rather than quietly
-doing nothing.
+**`PROJECT_TOKEN`** — a fine-grained PAT with **Projects: read and write** and
+**Issues: read and write**. The default `GITHUB_TOKEN` cannot reach a
+user-level Projects board at all.
 
-Then **⋯ → Settings → Workflows** and switch on the three built-in ones:
+### The two tokens, and exactly what each needs
 
-| Workflow | What it does |
+**`PROJECT_TOKEN` has to be a classic token.** A user-owned Projects board has
+no fine-grained permission — that exists for *organisation* projects only — so
+there is no fine-grained equivalent to grant.
+
+Classic tokens are coarse, so it is kept to one job:
+
+| Token | Kind | Scope / permissions | Does |
+|---|---|---|---|
+| **`PROJECT_TOKEN`** | classic | **`project`** — and nothing else | moves cards on the board |
+| *(labels & issues)* | none needed | the workflow's own `GITHUB_TOKEN` | reads issues, writes labels |
+| **`CLAUDE_WORKFLOW_TOKEN`** | fine-grained | see below | what the agent acts as |
+
+Not adding `repo` to the classic token is the point. With it, a token whose job
+is moving a card would carry write access to every repository on the account.
+Without it, the board token can reach the board and nothing else, and the
+repository half runs on `GITHUB_TOKEN` — which cannot see the board but does
+not need to.
+
+**`CLAUDE_WORKFLOW_TOKEN`** — fine-grained, repository permissions:
+
+| Permission | Why |
 |---|---|
-| *Item added to project* → Todo | new issues land in the first column |
-| *Item closed* → Done | a merged fix leaves the board |
-| *Pull request merged* → Done | same, from the PR side |
+| **Contents: Read and write** | push branches and commits |
+| **Pull requests: Read and write** | open PRs, comment, read diffs |
+| **Issues: Read and write** | comment, label, read the thread |
+| **Actions: Read** | read the failing run it is repairing |
+| **Workflows: Read and write** | *easy to miss* — a commit touching anything under `.github/workflows/` is rejected without it, and the agent has written workflow files more than once |
 
-Finally **Settings → Manage access → link the `marquee` repository**, so issues
-land on it automatically.
+Two things worth knowing:
 
-The labels do the rest, and Claude maintains them itself — see below.
+- **It is why anything cascades.** GitHub will not run a workflow off an event
+  `GITHUB_TOKEN` caused. Everything falls back to `GITHUB_TOKEN` when this is
+  unset, which mostly works and silently does not trigger anything downstream.
+- **Nothing needs to bypass the branch ruleset.** The agent pushes to branches
+  and opens pull requests; it never writes to `main`.
+
+### One thing owns the board
+
+`.github/workflows/board.yml`, and the rules in
+`.github/scripts/board.mjs`. It reads what is *true* about an issue — its
+state, its linked pull requests, whether their checks pass — and writes the
+label and the card in the same run.
+
+That shape matters. Three workflows used to share this job and chain through
+label events, which does not work: **GitHub will not run a workflow off an
+event that `GITHUB_TOKEN` caused**. A label written by one was invisible to the
+next, the card never moved, and nothing failed anywhere. Only the one status
+that happened to be set by an action carrying its own token ever worked.
+
+Nothing here depends on a second trigger, so nothing can be suppressed. And it
+runs on an hourly sweep as well as on events, so a dropped event is a delay
+rather than a permanently wrong board.
+
+**Only issues are cards.** A pull request speaks for the issues it closes and
+is reachable from them. Putting both on the board meant thirty-four pull
+request cards beside thirteen issues, which is a board nobody reads.
+
+The rules are pure and tested without a network — `node
+.github/scripts/board.test.mjs`, and they run in `pnpm test` and in CI.
 
 ### The two tokens, and exactly what each needs
 

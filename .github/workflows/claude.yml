@@ -173,33 +173,19 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # The board is moved by the workflow, not by Claude.
+      # The run owns exactly one label: "I am working on this".
       #
-      # Asking the agent to run `gh issue edit` was the wrong mechanism. It is
-      # an instruction competing with the actual task for attention, it is
-      # skipped silently when it loses, and a board that is only sometimes
-      # right is worse than one nobody expects to be right at all. These steps
-      # always run, in order, whatever happened inside.
-      #
-      # GH_TOKEN has to be a PAT here, not GITHUB_TOKEN. GitHub does not run a
-      # workflow off an event that GITHUB_TOKEN itself caused -- the loop
-      # guard that stops an action from triggering itself -- so every label
-      # this step made with GITHUB_TOKEN was invisible to
-      # project-automation.yml's `issues` trigger. The card never reached "In
-      # Progress"; nothing failed, there was just no second run to move it.
-      # CLAUDE_WORKFLOW_TOKEN is a real account's PAT, which carries no such
-      # guard, and is already the token this file recommends for pushing to
-      # workflow files -- see the header. Falling back to GITHUB_TOKEN keeps
-      # today's behaviour for anyone who has not set that secret.
+      # It is the only piece of state nothing else can know -- whether this
+      # process is still going -- so it is set here and cleared here. Every
+      # other label and the card itself belong to board.yml, which reads what
+      # is true rather than being told.
       - name: Mark it in progress
         if: github.event.issue.number
         env:
-          GH_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           gh issue edit ${{ github.event.issue.number }} \
-            --add-label claude-working \
-            --remove-label needs-decision \
-            --remove-label in-review || true
+            --add-label claude-working --remove-label needs-decision || true
 
       # Appended, not replaced. `--system-prompt-file` would discard Claude
       # Code's own defaults along with the GitHub context this action installs,
@@ -243,14 +229,13 @@ jobs:
             --append-system-prompt-file .github/claude-instructions.md
 
       # `always()`, because the interesting case is the run that failed or was
-      # cancelled: leaving claude-working on an issue nobody is working on is
-      # exactly the stale label that makes a board untrustworthy.
+      # cancelled: an issue left marked in progress with nobody working on it
+      # is exactly the stale state that stops a board being believed.
       #
-      # Same PAT-over-GITHUB_TOKEN reasoning as the arming step above: without
-      # it, taking the label off never reached project-automation.yml either,
-      # so a card that did somehow show "In Progress" would have stayed there.
+      # board.yml then decides where the card actually goes, on the labels and
+      # pull requests that exist once this has finished.
       - name: Stop marking it in progress
         if: always() && github.event.issue.number
         env:
-          GH_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
         run: gh issue edit ${{ github.event.issue.number }} --remove-label claude-working || true
