@@ -272,15 +272,38 @@ export async function reconcile({ github, project, projectApi, core, owner, repo
   // the project, and reading it with the repository token returned nothing --
   // silently, so every run would have added a duplicate card.
   const existing = await projectApi(
-    `query($id: ID!) {
+    `query($id: ID!, $field: ID!) {
        node(id: $id) {
-         ... on Issue { projectItems(first: 20) { nodes { id project { id } } } }
+         ... on Issue {
+           projectItems(first: 20) {
+             nodes {
+               id
+               project { id }
+               fieldValueByName: fieldValues(first: 20) {
+                 nodes {
+                   ... on ProjectV2ItemFieldSingleSelectValue {
+                     name
+                     field { ... on ProjectV2SingleSelectField { id } }
+                   }
+                 }
+               }
+             }
+           }
+         }
        }
      }`,
-    { id: facts.id },
+    { id: facts.id, field: project.field.id },
   )
-  let itemId = existing.node.projectItems.nodes
-    .find((i) => i.project.id === project.id)?.id
+  const item = existing.node.projectItems.nodes
+    .find((i) => i.project.id === project.id)
+  let itemId = item?.id
+  // Where the card already is. The hourly sweep visits every open issue
+  // whether or not anything about it changed, and wrote the Status field on
+  // every one of them regardless -- so an idle board still spent a mutation
+  // per issue per hour, and every run's log read identically whether the
+  // sweep had found something or nothing at all.
+  const current = item?.fieldValueByName?.nodes
+    ?.find((v) => v?.field?.id === project.field.id)?.name
   if (!itemId) {
     const added = await projectApi(
       `mutation($p: ID!, $c: ID!) {
@@ -301,18 +324,26 @@ export async function reconcile({ github, project, projectApi, core, owner, repo
     return
   }
 
-  await projectApi(
-    `mutation($p: ID!, $i: ID!, $f: ID!, $o: String!) {
-       updateProjectV2ItemFieldValue(input: {
-         projectId: $p, itemId: $i, fieldId: $f, value: { singleSelectOptionId: $o }
-       }) { projectV2Item { id } }
-     }`,
-    { p: project.id, i: itemId, f: project.field.id, o: option.id },
-  )
+  const moved = current !== status
+  if (moved) {
+    await projectApi(
+      `mutation($p: ID!, $i: ID!, $f: ID!, $o: String!) {
+         updateProjectV2ItemFieldValue(input: {
+           projectId: $p, itemId: $i, fieldId: $f, value: { singleSelectOptionId: $o }
+         }) { projectV2Item { id } }
+       }`,
+      { p: project.id, i: itemId, f: project.field.id, o: option.id },
+    )
+  }
 
-  core.info(
-    `#${number} -> ${status}` +
-    (add.length ? `  +${add.join(',')}` : '') +
-    (remove.length ? `  -${remove.join(',')}` : ''),
-  )
+  // Only say something when something happened. A log line per issue per hour
+  // that reads the same whether the sweep corrected anything or not is a log
+  // nobody reads, and the sweep exists precisely to catch the rare case.
+  if (moved || add.length || remove.length) {
+    core.info(
+      `#${number} ${current ? `${current} -> ` : '-> '}${status}` +
+      (add.length ? `  +${add.join(',')}` : '') +
+      (remove.length ? `  -${remove.join(',')}` : ''),
+    )
+  }
 }

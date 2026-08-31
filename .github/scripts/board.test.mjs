@@ -8,7 +8,7 @@
  * the ones that only happen when something goes wrong, which are the ones that
  * used to leave a card lying about a thing nobody was doing.
  */
-import { CONFIG, statusFor, labelsFor, factsFor } from './board.mjs'
+import { CONFIG, statusFor, labelsFor, factsFor, reconcile } from './board.mjs'
 
 const S = CONFIG.status
 let failed = 0
@@ -129,6 +129,69 @@ check('checks still running are not a failure',
 const spy = {}
 await facts([{ source: pr(7) }], spy)
 check('the timeline is read from the newest end', /timelineItems\(last: 50/.test(spy.query), true)
+
+// ---------------------------------------------------------------------------
+// Reconciling. The hourly sweep visits every open issue whether or not
+// anything changed, so what it does when nothing has changed is the case that
+// decides what the sweep costs.
+// ---------------------------------------------------------------------------
+
+const project = {
+  id: 'P_1',
+  field: { id: 'F_1', options: Object.values(S).map((name, i) => ({ id: `O_${i}`, name })) },
+}
+
+// Records every call so a run that should be silent can be shown to be silent.
+function harness({ column, labels = [], nodes = [{ source: pr(7) }] }) {
+  const calls = { mutations: [], labelWrites: [], logs: [] }
+  const github = {
+    graphql: async () => ({
+      repository: { issue: {
+        id: 'I_1', state: 'OPEN',
+        labels: { nodes: labels.map((name) => ({ name })) },
+        timelineItems: { nodes },
+      } },
+    }),
+    rest: { issues: {
+      addLabels: async ({ labels: l }) => calls.labelWrites.push(`+${l}`),
+      removeLabel: async ({ name }) => calls.labelWrites.push(`-${name}`),
+    } },
+  }
+  const projectApi = async (query) => {
+    if (query.includes('projectItems')) {
+      return { node: { projectItems: { nodes: [{
+        id: 'PI_1',
+        project: { id: 'P_1' },
+        fieldValueByName: { nodes: [{ name: column, field: { id: 'F_1' } }] },
+      }] } } }
+    }
+    calls.mutations.push(query.includes('updateProjectV2ItemFieldValue') ? 'update' : 'add')
+    return { addProjectV2ItemById: { item: { id: 'PI_1' } } }
+  }
+  const core = { info: (m) => calls.logs.push(m), warning: () => {}, setFailed: (m) => calls.logs.push(`FAILED ${m}`) }
+  return { calls, run: () => reconcile({ github, project, projectApi, core, owner: 'o', repo: 'r', number: 1 }) }
+}
+
+console.log('\nreconciling an issue that has not changed')
+
+// A green pull request already in In Review and already labelled: the sweep's
+// ordinary case, and it used to cost a mutation per issue per hour regardless.
+const settledRun = harness({ column: S.inReview, labels: ['in-review'] })
+await settledRun.run()
+check('nothing is written when nothing moved', settledRun.calls.mutations, [])
+check('and no labels are touched either', settledRun.calls.labelWrites, [])
+check('and it says nothing', settledRun.calls.logs, [])
+
+const movedRun = harness({ column: S.todo, labels: [] })
+await movedRun.run()
+check('a card that should move is moved', movedRun.calls.mutations, ['update'])
+check('and the move is reported', movedRun.calls.logs.length, 1)
+
+const relabelRun = harness({ column: S.inReview, labels: [] })
+await relabelRun.run()
+check('a correct column with a missing label still writes the label',
+  relabelRun.calls.labelWrites, ['+in-review'])
+check('but does not rewrite the column', relabelRun.calls.mutations, [])
 
 console.log(failed ? `\n  ${failed} failed\n` : '\n  all rules hold\n')
 process.exit(failed ? 1 : 0)
