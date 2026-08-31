@@ -25,17 +25,35 @@ import { logInfo, logWarn } from './log'
 import { toast } from './toast'
 
 /**
- * The scroll delta a direction should apply to the settings body, or
- * `undefined` for actions that are not a scroll.
+ * Which focusable index `up`/`down` should land on next, skipping anything
+ * disabled -- landing the cursor on a button that does nothing is the same
+ * class of bug as not moving it at all. `undefined` for a direction that is
+ * not a move, or when nothing in the list can take focus.
  *
- * `handle` used to swallow `up`/`down` along with everything else while the
- * overlay was open, so the left stick moved nothing -- there was no focused
- * element for the browser's own scroll-into-view to chase, unlike a keyboard
- * `Tab`. Exported so the mapping is checkable without a DOM.
+ * A pure decision so it is checkable without a DOM, per this project's
+ * no-jsdom convention. This used to be `settingsScrollDelta`, which scrolled
+ * the panel by a fixed pixel amount on `up`/`down` -- so the left stick moved
+ * the view, but nothing was ever actually focused, and `A` always did the one
+ * thing it had always done (save the SteamGridDB key) no matter where you had
+ * scrolled to. Settings could be scrolled but not driven.
  */
-export function settingsScrollDelta(action: string): number | undefined {
-  if (action === 'up') return -220
-  if (action === 'down') return 220
+export function nextSettingsFocus(
+  action: string,
+  current: number,
+  count: number,
+  isDisabled: (index: number) => boolean,
+): number | undefined {
+  if (count <= 0) return undefined
+  const delta = action === 'up' ? -1 : action === 'down' ? 1 : 0
+  if (delta === 0) return undefined
+  // Nothing focused yet (the panel just opened, say): down should reach the
+  // first control and up the last, rather than both landing wherever -1
+  // happens to wrap to.
+  let next = current < 0 ? (delta > 0 ? -1 : 0) : current
+  for (let step = 0; step < count; step++) {
+    next = (next + delta + count) % count
+    if (!isDisabled(next)) return next
+  }
   return undefined
 }
 
@@ -443,6 +461,21 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
     }
   }
 
+  /**
+   * Every control `up`/`down` should be able to reach, top to bottom in the
+   * order they read on screen. Kept as one flat list rather than per-section
+   * groups because a controller does not care which section it is in, only
+   * what is next.
+   */
+  const focusables: HTMLElement[] = [
+    field, saveKey, minimiseToggle, backgroundToggle, updateButton,
+    testButton, reportButton, exportButton, importButton, folderButton,
+  ]
+
+  function isDisabled(el: HTMLElement): boolean {
+    return el instanceof HTMLButtonElement && el.disabled
+  }
+
   function close(): void {
     open = false
     root.hidden = true
@@ -487,11 +520,22 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
 
     handle(action) {
       if (!open) return false
-      if (action === 'b') close()
-      else if (action === 'a') void commitKey()
-      else {
-        const delta = settingsScrollDelta(action)
-        if (delta !== undefined) body.scrollBy({ top: delta, behavior: 'smooth' })
+      if (action === 'b') { close(); return true }
+      if (action === 'a') {
+        const active = document.activeElement
+        // The field keeps its old shortcut -- A saves the key -- because
+        // clicking a text input does nothing. Everything else is a real
+        // button now that it can actually be reached, so A is just a click.
+        if (active === field) void commitKey()
+        else if (active instanceof HTMLElement && focusables.includes(active)) active.click()
+        return true
+      }
+      const current = focusables.indexOf(document.activeElement as HTMLElement)
+      const next = nextSettingsFocus(action, current, focusables.length, (i) => isDisabled(focusables[i]!))
+      if (next !== undefined) {
+        const target = focusables[next]!
+        target.focus()
+        target.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
       }
       return true
     },
