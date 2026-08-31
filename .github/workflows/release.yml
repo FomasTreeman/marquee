@@ -57,7 +57,7 @@ jobs:
       skip: ${{ steps.plan.outputs.skip }}
       notes: ${{ steps.plan.outputs.notes }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Tags are needed to work out where we are, and a shallow checkout
           # has none. Losing this does not fail the build -- it quietly makes
@@ -238,7 +238,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
         with: { version: 9 }
       # After pnpm: `cache: pnpm` asks pnpm where its store is.
@@ -320,7 +320,7 @@ jobs:
     environment: release
 
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The exact commit that triggered this, so all four targets build
           # identical source however busy main is.
