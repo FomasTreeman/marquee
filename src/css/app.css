@@ -589,6 +589,10 @@ html[data-background="blur"] .backdrop-img {
   cursor: pointer;
 }
 .action-primary { background: var(--accent); color: #000; border-color: transparent; font-weight: 500; }
+/* Matches .search-button's own rule below -- a button driven by a pad or a
+   keyboard needs to show where it landed. Settings used to move a controller
+   cursor nowhere at all, so this was never reachable in practice. */
+.action:focus-visible { outline: 2px solid var(--focusBorder); outline-offset: 2px; }
 
 .detail-desc {
   margin: calc(28px * var(--s)) 0 0;

@@ -260,9 +260,18 @@ jobs:
       # confusing. A CI fix is tested by opening the pull request and letting
       # CI run on it, which is the loop this repository already has.
       #
-      # `gh api` is also absent. It is the one entry that could POST or DELETE
-      # anything the token is allowed to, and everything above is a read. Run
-      # logs carry per-line timestamps, so step timings can be had without it.
+      # `gh pr create` is here because without it the whole loop stops one step
+      # short. `.github/claude-instructions.md` says the pull request is the
+      # deliverable and a comment describing one is not -- and then the tool
+      # list did not let the agent open one. Issue #17 is what that looks like:
+      # fifteen minutes of work, a pushed branch, and a "Create PR" link for
+      # somebody to click. The instructions were not being ignored; they were
+      # impossible to follow.
+      #
+      # `gh api` is absent. It is the one entry that could POST or DELETE
+      # anything the token is allowed to, and everything else here is a read or
+      # a narrowly named write. Run logs carry per-line timestamps, so step
+      # timings can be had without it.
       - uses: anthropics/claude-code-action@a874e9ecd7bb36efdad65429c6b35815f5a08f10 # v1.0.210
         id: claude
         with:
@@ -275,7 +284,7 @@ jobs:
           # rather than a spinner.
           track_progress: true
           claude_args: |
-            --allowed-tools "Bash(pnpm:*),Bash(cargo:*),Bash(node:*),Bash(git:*),Bash(tools/:*),Bash(python3:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh pr edit:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh workflow list:*),Bash(gh workflow view:*)"
+            --allowed-tools "Bash(pnpm:*),Bash(cargo:*),Bash(node:*),Bash(git:*),Bash(tools/:*),Bash(python3:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh workflow list:*),Bash(gh workflow view:*)"
             --append-system-prompt-file .github/claude-instructions.md
 
       # `always()`, because the interesting case is the run that failed or was
