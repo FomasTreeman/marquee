@@ -21,6 +21,11 @@
 #
 # Check PROJECT_NUMBER below against the URL of your board:
 # github.com/users/FomasTreeman/projects/<number>
+#
+# The Status field needs an option for every string statusFor() below can
+# return: the default board ships Todo, In Progress and Done, so add In
+# Review, Needs Decision and Todo (Human) yourself. A mismatch throws and
+# names the options the board actually has, rather than doing nothing.
 # ---------------------------------------------------------------------------
 
 name: Project automation
@@ -74,6 +79,12 @@ jobs:
               if (labels.has("needs-decision")) return "Needs Decision";
               if (labels.has("in-review")) return "In Review";
               if (labels.has("claude-working")) return "In Progress";
+              // Checked after needs-decision/in-review, not before: a
+              // no-ai issue that a human is reviewing or that is blocked on
+              // a question is still waiting on a person in the same sense
+              // those columns already mean, and should show there rather
+              // than back in a column that just means "unstarted".
+              if (labels.has("no-ai")) return "Todo (Human)";
               return "Todo";
             }
 
