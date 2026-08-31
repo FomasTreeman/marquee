@@ -118,9 +118,43 @@ export function labelsFor(facts) {
 // Everything below talks to GitHub. The rules above do not, on purpose.
 // ---------------------------------------------------------------------------
 
+/**
+ * A GraphQL caller for the project, authenticated separately.
+ *
+ * A user-owned Projects board has no fine-grained token permission -- that
+ * exists for organisation projects only -- so reaching one needs a classic
+ * token with `project` scope. Classic tokens are coarse, so this keeps it as
+ * far from everything else as possible: it is used for the board and nothing
+ * else, while labels and issue reads go through the workflow's own
+ * GITHUB_TOKEN, which cannot reach the board but does not need to.
+ *
+ * The alternative was one classic token carrying `repo` as well, which would
+ * have granted write access to every repository on the account in order to add
+ * a label to this one.
+ */
+export function projectCaller(token) {
+  return async (query, variables) => {
+    const res = await fetch('https://api.github.com/graphql', {
+      method: 'POST',
+      headers: {
+        authorization: `bearer ${token}`,
+        'content-type': 'application/json',
+        'user-agent': 'marquee-board',
+      },
+      body: JSON.stringify({ query, variables }),
+    })
+    const body = await res.json()
+    if (body.errors?.length) {
+      throw new Error(body.errors.map((e) => e.message).join('; '))
+    }
+    if (!res.ok) throw new Error(`GraphQL ${res.status}`)
+    return body.data
+  }
+}
+
 /** The project, its Status field, and the option ids, fetched once. */
-export async function loadProject(github, owner, number) {
-  const q = await github.graphql(
+export async function loadProject(project, owner, number) {
+  const q = await project(
     `query($owner: String!, $number: Int!, $field: String!) {
        user(login: $owner) {
          projectV2(number: $number) {
@@ -133,10 +167,14 @@ export async function loadProject(github, owner, number) {
      }`,
     { owner, number, field: CONFIG.statusField },
   )
-  const project = q.user?.projectV2
-  if (!project) throw new Error(`No project ${number} for ${owner}.`)
-  if (!project.field) throw new Error(`Project ${number} has no "${CONFIG.statusField}" field.`)
-  return project
+  const found = q.user?.projectV2
+  if (!found) {
+    throw new Error(
+      `No project ${number} for ${owner}. A user-owned board needs a classic ` +
+      `token with the \`project\` scope -- a fine-grained one cannot see it.`)
+  }
+  if (!found.field) throw new Error(`Project ${number} has no "${CONFIG.statusField}" field.`)
+  return found
 }
 
 /**
@@ -154,7 +192,6 @@ export async function factsFor(github, owner, repo, number) {
          issue(number: $number) {
            id state
            labels(first: 50) { nodes { name } }
-           projectItems(first: 10) { nodes { id project { id } } }
            timelineItems(first: 50, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT]) {
              nodes {
                ... on CrossReferencedEvent {
@@ -188,7 +225,7 @@ export async function factsFor(github, owner, repo, number) {
     number,
     state: issue.state,
     labels: issue.labels.nodes.map((l) => l.name),
-    projectItems: issue.projectItems.nodes,
+
     openPr: openPr ? openPr.number : undefined,
     // Only a definite failure counts. Checks still running are not a failure,
     // and treating them as one would flap the card on every push.
@@ -197,7 +234,7 @@ export async function factsFor(github, owner, repo, number) {
 }
 
 /** Put one issue where it belongs, labels and card together. */
-export async function reconcile({ github, core, owner, repo, project, number }) {
+export async function reconcile({ github, project, projectApi, core, owner, repo, number }) {
   const facts = await factsFor(github, owner, repo, number)
   if (!facts) return
   const status = statusFor(facts)
@@ -217,9 +254,22 @@ export async function reconcile({ github, core, owner, repo, project, number }) 
   // Only issues go on the board. A pull request is reachable from the issue it
   // closes, and adding both put thirty-four cards beside thirteen -- a board
   // showing the same work twice is one nobody reads.
-  let itemId = facts.projectItems.find((i) => i.project.id === project.id)?.id
+  // Which card, if any, this issue already has. Asked through the project
+  // token: `projectItems` on an issue is invisible to a token that cannot see
+  // the project, and reading it with the repository token returned nothing --
+  // silently, so every run would have added a duplicate card.
+  const existing = await projectApi(
+    `query($id: ID!) {
+       node(id: $id) {
+         ... on Issue { projectItems(first: 20) { nodes { id project { id } } } }
+       }
+     }`,
+    { id: facts.id },
+  )
+  let itemId = existing.node.projectItems.nodes
+    .find((i) => i.project.id === project.id)?.id
   if (!itemId) {
-    const added = await github.graphql(
+    const added = await projectApi(
       `mutation($p: ID!, $c: ID!) {
          addProjectV2ItemById(input: { projectId: $p, contentId: $c }) { item { id } }
        }`,
@@ -238,7 +288,7 @@ export async function reconcile({ github, core, owner, repo, project, number }) 
     return
   }
 
-  await github.graphql(
+  await projectApi(
     `mutation($p: ID!, $i: ID!, $f: ID!, $o: String!) {
        updateProjectV2ItemFieldValue(input: {
          projectId: $p, itemId: $i, fieldId: $f, value: { singleSelectOptionId: $o }
