@@ -41,6 +41,9 @@ on:
 permissions:
   contents: write
   pull-requests: read
+  # Reading the CI run for this commit, which the `ci` job below refuses to
+  # release without. Read and not write: nothing here needs to start a run.
+  actions: read
 
 concurrency:
   group: release
@@ -136,6 +139,91 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
 
+  # Merging is the release, so merging is the last moment anyone could notice
+  # that main does not work. Nothing was looking.
+  #
+  # This workflow fired on push to main and went straight to bundling, and the
+  # bundler only compiles -- it runs no tests at all. So a commit that compiled
+  # and broke the suite was built, signed and published to every installed
+  # copy's updater, and the first evidence was somebody's launcher behaving
+  # oddly. Required status checks on main stop a red pull request being merged,
+  # which covers most of the ways this happens; they do not cover two branches
+  # that were each green and are not green together, which is the way that
+  # actually reaches main unnoticed.
+  #
+  # So: wait for CI on this exact commit, and release nothing without it.
+  ci:
+    needs: decide
+    if: needs.decide.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      green: ${{ steps.wait.outputs.green }}
+    steps:
+      - name: CI is green on this commit
+        id: wait
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+
+          # Half an hour. CI is about two minutes of work, so anything past
+          # this is a queue that is not going to clear, not a slow build.
+          deadline=$(( $(date +%s) + 1800 ))
+
+          while :; do
+            run=$(gh api \
+                    "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=1" \
+                    --jq '.workflow_runs[0] // empty' 2>/dev/null || true)
+            # Not `${run:-{}}`. Bash reads that as ${run:-{} followed by a
+            # literal }, which parses fine until the first time there is a real
+            # run to find. The same trap is written up in `decide` above.
+            [ -n "$run" ] || run='{}'
+
+            status=$(echo "$run" | jq -r '.status // "none"')
+            conclusion=$(echo "$run" | jq -r '.conclusion // ""')
+            url=$(echo "$run" | jq -r '.html_url // ""')
+
+            if [ "$status" = "completed" ]; then
+              case "$conclusion" in
+                success)
+                  echo "green=true" >> "$GITHUB_OUTPUT"
+                  echo "CI is green on $SHA."
+                  exit 0
+                  ;;
+                cancelled)
+                  # CI cancels itself when a newer push lands on the same ref.
+                  # If this commit is no longer the tip, that is what happened,
+                  # and the newer commit's release will carry this change --
+                  # so this is a clean stop, not a failure. Failing here would
+                  # put a red cross on a release that was correctly skipped,
+                  # and a red cross that is usually nothing is one nobody reads.
+                  tip=$(gh api "repos/$GH_REPO/commits/main" --jq '.sha')
+                  if [ "$tip" != "$SHA" ]; then
+                    echo "green=false" >> "$GITHUB_OUTPUT"
+                    echo "::notice::CI on $SHA was cancelled by a newer push. ${tip:0:7} will carry the release."
+                    exit 0
+                  fi
+                  echo "::error::CI on $SHA was cancelled, and it is still the tip of main. Nothing is released from a commit nothing has checked. $url"
+                  exit 1
+                  ;;
+                *)
+                  echo "::error::CI is $conclusion on $SHA. Nothing is released from a commit that does not pass. $url"
+                  exit 1
+                  ;;
+              esac
+            fi
+
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Waited thirty minutes and CI has not finished on $SHA (last seen: $status). $url"
+              exit 1
+            fi
+
+            echo "CI is $status on $SHA; waiting."
+            sleep 20
+          done
+
   # Prove the signing key works before spending nine minutes finding out it
   # does not.
   #
@@ -182,8 +270,8 @@ jobs:
           echo "Signing key OK."
 
   build:
-    needs: [decide, key]
-    if: needs.decide.outputs.skip != 'true'
+    needs: [decide, key, ci]
+    if: needs.decide.outputs.skip != 'true' && needs.ci.outputs.green == 'true'
     strategy:
       fail-fast: false
       # One at a time, and this is not a preference.

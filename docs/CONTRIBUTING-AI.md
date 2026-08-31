@@ -136,7 +136,10 @@ order they have actually gone wrong here:
 
 ## Releasing
 
-Nothing to do. Merging is the release.
+Nothing to do. Merging is the release — once CI is green on the merge commit.
+The Release workflow waits for it and publishes nothing without it, because the
+bundler only compiles and would happily sign and ship a commit whose tests
+fail.
 
 The Release workflow reads the labels on the pull request that was merged --
 `breaking` for a major, `enhancement` for a minor, anything else a patch,
