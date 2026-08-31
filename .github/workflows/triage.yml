@@ -7,6 +7,25 @@
 #
 # Separate from board.yml because it runs once, at the start, and answers a
 # different question: not "where does this belong" but "whose is it".
+#
+# ---------------------------------------------------------------------------
+# This is the only thing that decides whether Claude picks an issue up.
+#
+# It did not used to be. claude.yml also woke on `issues: opened`, and its
+# opt-out read `github.event.issue.labels` -- the labels in the *event
+# payload*, which at open time hold only what the template applied. The label
+# this workflow was in the middle of writing was not among them, both
+# workflows raced on the same event, and the race was not close: the third
+# option in the dropdown, "Me -- do not touch it", did nothing at all.
+#
+# So the handover is a label event now, which needs one thing to be true.
+# **GitHub will not run a workflow off an event GITHUB_TOKEN caused**, so a
+# `claude` label written by the workflow's own token wakes nothing. Writing it
+# with CLAUDE_WORKFLOW_TOKEN does. Without that secret the label is still
+# correct and nothing starts, so the fallback below says so on the issue
+# rather than leaving somebody waiting on a run that was never going to
+# happen.
+# ---------------------------------------------------------------------------
 
 name: Triage
 
@@ -20,9 +39,15 @@ permissions:
 jobs:
   route:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          HANDOVER: ${{ secrets.CLAUDE_WORKFLOW_TOKEN != '' }}
         with:
+          # The label write is the handover, so it goes through the token that
+          # can trigger a workflow. The comment below could use either.
+          github-token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || github.token }}
           script: |
             const body = context.payload.issue.body || ''
             const labels = context.payload.issue.labels.map((l) => l.name)
@@ -55,5 +80,27 @@ jobs:
                   'Filed without saying who should fix it, so it is labelled ' +
                   '`no-ai` and will wait for a person. Swap that for `claude` ' +
                   'to hand it over.',
+              })
+              return
+            }
+
+            // Labelled for Claude, but with a token that cannot wake anything.
+            // The label is right and the run will never start, which is the
+            // exact shape of failure this repository is worst at seeing.
+            if (process.env.HANDOVER !== 'true') {
+              core.warning(
+                'Labelled `claude`, but CLAUDE_WORKFLOW_TOKEN is not set, so the label '
+                + 'event will not start a run -- GitHub suppresses events caused by '
+                + 'GITHUB_TOKEN. Comment @claude on the issue to start it by hand.')
+              await github.rest.issues.createComment({
+                ...context.repo,
+                issue_number: context.payload.issue.number,
+                body:
+                  'Labelled `claude`, but nothing has started: without ' +
+                  '`CLAUDE_WORKFLOW_TOKEN` in the repository secrets this label ' +
+                  'cannot trigger a workflow, because GitHub suppresses events ' +
+                  'caused by `GITHUB_TOKEN`. Comment `@claude` here to start it, ' +
+                  'or add the secret — see the header of ' +
+                  '`.github/workflows/claude.yml`.',
               })
             }
