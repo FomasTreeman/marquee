@@ -13,6 +13,7 @@ The specific bug this exists for: a step inserted between `- uses:` and its own
 cannot take `with`, and GitHub rejects the whole file for it.
 """
 import pathlib
+import re
 import sys
 
 try:
@@ -30,7 +31,22 @@ STEP = {
     "timeout-minutes", "working-directory", "shell",
 }
 
+# An action referenced by a tag is whatever that tag points at today, and every
+# tag here is one somebody else can move -- `v0`, `v2`, and `stable`, which is
+# not even a tag but a branch. One of them, tauri-action, runs in the only job
+# that can see the update signing key, and a key in the wrong hands signs
+# updates that every installed copy accepts without question.
+#
+# Nothing about that would appear in a diff, a log or a test. The action would
+# be the same line it has always been.
+#
+# So a full commit SHA, which cannot be repointed, with the human-readable
+# version in a trailing comment. Dependabot reads and updates both -- see
+# .github/dependabot.yml, which is what stops the pins going stale.
+PINNED = re.compile(r"^[^@]+@[0-9a-f]{40}$")
+
 problems = []
+unpinned = []
 
 
 def check(path: pathlib.Path) -> None:
@@ -80,6 +96,11 @@ def check(path: pathlib.Path) -> None:
                 )
             if has_run and "shell" not in step and "windows" in str(job.get("runs-on", "")).lower():
                 problems.append(f"{at}: a Windows `run` step should name its shell")
+            # A local action (./path) or a container (docker://) has no tag to
+            # move, so there is nothing to pin.
+            if has_uses and not step["uses"].startswith(("./", "docker://")):
+                if not PINNED.match(step["uses"]):
+                    unpinned.append(f"{at}: {step['uses']}")
             for key in step:
                 if key not in STEP:
                     problems.append(f"{at}: unknown step key {key!r}")
@@ -98,5 +119,17 @@ if problems:
     for p in problems:
         print(f"  {p}")
     print("\nSee tools/check-workflows.py.")
+
+if unpinned:
+    print("Actions referenced by a tag somebody else can move:\n")
+    for u in unpinned:
+        print(f"  {u}")
+    print(
+        "\nPin each to a full commit SHA with the version in a trailing comment:\n"
+        "  uses: owner/action@<40-char sha> # v1.2.3\n"
+        "Find it with: gh api repos/<owner>/<action>/commits/<tag> --jq .sha"
+    )
+
+if problems or unpinned:
     sys.exit(1)
-print(f"check-workflows: {len(files)} workflows well formed")
+print(f"check-workflows: {len(files)} workflows well formed and pinned")
