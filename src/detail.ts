@@ -127,6 +127,27 @@ export function revealThenFocus(
   schedule(focus)
 }
 
+/**
+ * Which action button `left`/`right` should move to next, wrapping at either
+ * end. `up`/`down` are already spoken for here -- they scroll the
+ * description -- so unlike settings.ts's `nextSettingsFocus` this one only
+ * answers to the other pair, and there is no disabled state to skip: every
+ * button in the row is always clickable.
+ *
+ * Pure so it is checkable without a DOM, per this project's no-jsdom
+ * convention. Before this, `handle()` sent every `a` straight to `onPlay()`
+ * and left `left`/`right` unhandled -- swallowed along with everything else
+ * while the view is open -- so there was no route to Find artwork or Rename,
+ * and no way to move between them, at all.
+ */
+export function nextActionFocus(action: string, current: number, count: number): number | undefined {
+  if (count <= 0) return undefined
+  const delta = action === 'left' ? -1 : action === 'right' ? 1 : 0
+  if (delta === 0) return undefined
+  const start = current < 0 ? (delta > 0 ? -1 : 0) : current
+  return (start + delta + count) % count
+}
+
 export interface DetailHooks {
   onPlay(): void
   onChanged(): void
@@ -300,6 +321,14 @@ export function createDetail(hooks: DetailHooks): DetailView {
 
     open(game, meta, art, provenance) {
       const wasOpen = open
+      // The artwork report arrives after the view is already open (main.ts
+      // reopens to attach it once it resolves), and actions.textContent = ''
+      // below rebuilds every button -- so without this, whichever button the
+      // user had already moved to would silently lose focus back to the
+      // first one the moment the report landed.
+      const priorActionFocus = wasOpen
+        ? Array.from(actions.children).indexOf(document.activeElement as HTMLElement)
+        : -1
       open = true
       root.hidden = false
       // Two frames, not one: the first makes the element displayed, and a
@@ -458,6 +487,20 @@ export function createDetail(hooks: DetailHooks): DetailView {
       // from the screen. "Is it working" should be answerable without
       // squinting at a card.
       addFact('Artwork', describeArtwork(provenance))
+
+      // Land the pad somewhere on the row, or A has nothing to activate.
+      // Deferred a frame: root.hidden went false earlier in this same tick,
+      // and WebKit will not honour focus() on an element revealed in the same
+      // tick as the call -- revealThenFocus above and settings.ts's open()
+      // hit the same thing and defer for it too.
+      const actionButtons = Array.from(actions.children) as HTMLElement[]
+      if (wasOpen) {
+        if (priorActionFocus >= 0) {
+          actionButtons[Math.min(priorActionFocus, actionButtons.length - 1)]?.focus()
+        }
+      } else {
+        requestAnimationFrame(() => actionButtons[0]?.focus())
+      }
     },
 
     close,
@@ -475,10 +518,21 @@ export function createDetail(hooks: DetailHooks): DetailView {
       // Everything is swallowed while open, not just the actions understood.
       // Letting `left`/`right` fall through would move the grid selection
       // behind the overlay, so closing would land somewhere unexpected.
-      if (action === 'b' || action === 'y') close()
-      else if (action === 'a') onPlay()
-      else if (action === 'up') scroll.scrollBy({ top: -220, behavior: 'smooth' })
-      else if (action === 'down') scroll.scrollBy({ top: 220, behavior: 'smooth' })
+      if (action === 'b' || action === 'y') { close(); return true }
+      if (action === 'up') { scroll.scrollBy({ top: -220, behavior: 'smooth' }); return true }
+      if (action === 'down') { scroll.scrollBy({ top: 220, behavior: 'smooth' }); return true }
+      const buttons = Array.from(actions.children) as HTMLElement[]
+      if (action === 'a') {
+        const active = document.activeElement
+        // Whichever button has focus; the first one if a race with the
+        // deferred initial focus above somehow lands here before it runs.
+        const target = active instanceof HTMLElement && buttons.includes(active) ? active : buttons[0]
+        target?.click()
+        return true
+      }
+      const current = buttons.indexOf(document.activeElement as HTMLElement)
+      const next = nextActionFocus(action, current, buttons.length)
+      if (next !== undefined) buttons[next]?.focus()
       return true
     },
   }

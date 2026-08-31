@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createDetail, renameIntent, revealThenFocus } from '../detail'
+import { createDetail, nextActionFocus, renameIntent, revealThenFocus } from '../detail'
 import type { Game } from '../library'
 
 vi.mock('../library', async (importOriginal) => {
@@ -146,5 +146,37 @@ describe('createDetail hide button', () => {
 
     expect(view.isOpen).toBe(false)
     expect(onChanged).toHaveBeenCalledOnce()
+  })
+})
+
+/**
+ * Before this, `handle()` sent every `a` straight to `onPlay()` and left
+ * `left`/`right` unhandled -- swallowed along with everything else while the
+ * view was open, per the comment on `handle`. That meant no route to Find
+ * artwork or Rename, and no way to move between action buttons, at all.
+ */
+describe('nextActionFocus', () => {
+  it('moves right from nothing focused to the first button', () => {
+    expect(nextActionFocus('right', -1, 3)).toBe(0)
+  })
+
+  it('moves left from nothing focused to the last button', () => {
+    expect(nextActionFocus('left', -1, 3)).toBe(2)
+  })
+
+  it('wraps past either end', () => {
+    expect(nextActionFocus('right', 2, 3)).toBe(0)
+    expect(nextActionFocus('left', 0, 3)).toBe(2)
+  })
+
+  it('leaves actions that are not a move alone', () => {
+    expect(nextActionFocus('up', 0, 3)).toBeUndefined()
+    expect(nextActionFocus('down', 0, 3)).toBeUndefined()
+    expect(nextActionFocus('a', 0, 3)).toBeUndefined()
+    expect(nextActionFocus('b', 0, 3)).toBeUndefined()
+  })
+
+  it('has nothing to land on in an empty row', () => {
+    expect(nextActionFocus('right', -1, 0)).toBeUndefined()
   })
 })
