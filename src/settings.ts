@@ -15,7 +15,8 @@
  */
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import {
-  diagnosticReport, exportProfile, getSettings, importProfile, setProfileFolder, setSetting, setSteamGridDbKey,
+  diagnosticReport, exportProfile, getSettings, importProfile, setAutostart, setProfileFolder, setSetting,
+  setSteamGridDbKey,
 } from './library'
 import { onAnyInput, padStatus, webviewPads } from './input'
 import { applyBackgroundStyle, resolveBackgroundStyle, type BackgroundStyle } from './perf'
@@ -135,6 +136,28 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
       .catch((e) => toast(`Could not save that. ${String(e)}`, 'error'))
   }
 
+  // Windows only -- there is no Task Manager Startup tab to register with
+  // elsewhere, and src-tauri/src/autostart.rs has nothing to call. Hidden
+  // rather than disabled until hostInfo confirms the platform, below, so it
+  // never flashes on a Mac or Linux machine.
+  const startOnLoginToggle = el('button', 'action', launching.controls)
+  startOnLoginToggle.hidden = true
+  let startOnLogin = false
+
+  function describeStartOnLogin(): void {
+    startOnLoginToggle.textContent = startOnLogin
+      ? 'Start with Windows: on'
+      : 'Start with Windows: off'
+    startOnLoginToggle.classList.toggle('action-primary', startOnLogin)
+  }
+
+  startOnLoginToggle.onclick = () => {
+    const next = !startOnLogin
+    void setAutostart(next)
+      .then(() => { startOnLogin = next; describeStartOnLogin() })
+      .catch((e) => toast(`Could not save that. ${String(e)}`, 'error'))
+  }
+
   // --- background -------------------------------------------------------
   const background = section(
     body,
@@ -177,7 +200,11 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
   const updateStatus = el('p', 'settings-status', updates.root)
   let version = ''
   void hostInfo()
-    .then((h) => { version = h.version; updateStatus.textContent = `Version ${version}.` })
+    .then((h) => {
+      version = h.version
+      updateStatus.textContent = `Version ${version}.`
+      startOnLoginToggle.hidden = h.os !== 'windows'
+    })
     .catch(() => { /* the version is a nicety; the button works without it */ })
 
   updateButton.onclick = () => {
@@ -468,12 +495,16 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
    * what is next.
    */
   const focusables: HTMLElement[] = [
-    field, saveKey, minimiseToggle, backgroundToggle, updateButton,
+    field, saveKey, minimiseToggle, startOnLoginToggle, backgroundToggle, updateButton,
     testButton, reportButton, exportButton, importButton, folderButton,
   ]
 
   function isDisabled(el: HTMLElement): boolean {
-    return el instanceof HTMLButtonElement && el.disabled
+    // Hidden is the same class of bug as disabled for focus purposes -- see
+    // nextSettingsFocus's own doc comment. startOnLoginToggle is hidden
+    // outside Windows, and landing the cursor on it there would be a control
+    // that looks focused and does nothing.
+    return el.hidden || (el instanceof HTMLButtonElement && el.disabled)
   }
 
   function close(): void {
@@ -501,15 +532,18 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
       profileFolder = ''
       describeFolder()
       describeMinimise()
+      describeStartOnLogin()
       describeBackground()
       void getSettings()
         .then((s) => {
           field.value = s.steamgriddbKey
           profileFolder = s.profileFolder
           minimiseOnLaunch = s.minimiseOnLaunch
+          startOnLogin = s.startOnLogin
           backgroundStyle = resolveBackgroundStyle(s.backgroundStyle)
           describeFolder()
           describeMinimise()
+          describeStartOnLogin()
           describeBackground()
         })
         .catch(() => { /* an unreadable setting is an empty field, not an error */ })
