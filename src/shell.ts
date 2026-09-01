@@ -83,20 +83,23 @@ export function createShell(root: HTMLElement): Shell {
   brand.textContent = 'Library'
   const presets = el('nav', 'presets', topbar)
 
-  // Sat beside the preset tabs rather than buried in the footer legend or a
-  // pad-only menu, because that is where a 215-game library is actually
-  // scanned for a way in. It only opens the field below -- the box itself
-  // stays out of the bar until there is something in it, so this is the one
-  // permanent trace of search rather than a second permanent field.
-  const searchButton = el('button', 'search-button', topbar)
+  el('div', 'spacer', topbar)
+
+  // One control, not two. It used to be a labelled button beside the presets
+  // with the input living on the far side of the spacer -- so the icon a
+  // keyboard user clicked and the box that then appeared were on opposite
+  // sides of the bar, which read as two different search bars rather than
+  // one opening into the other. Grouped together, in the top-right corner
+  // where a console puts search, so there is one thing to look at rather
+  // than a button, a box, and a summary all naming the same query.
+  const search = el('div', 'search', topbar)
+  const searchButton = el('button', 'search-button', search)
   searchButton.type = 'button'
   searchButton.setAttribute('aria-label', 'Search')
 
-  el('div', 'spacer', topbar)
-
   // Hidden until there is a query. A search box occupying the top bar
   // permanently would be a desktop habit imposed on a television.
-  const query = el('input', 'query', topbar)
+  const query = el('input', 'query', search)
   query.type = 'text'
   query.placeholder = 'Search'
   query.autocomplete = 'off'

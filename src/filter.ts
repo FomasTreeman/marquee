@@ -152,9 +152,12 @@ export function apply(
   return out
 }
 
-/** Label for the always-visible search entry in the top bar: the query when
- *  one is active, so the entry doubles as an indicator of it, or an
- *  invitation to type one when it is not. */
+/** Accessible name for the always-visible search button: the query when one
+ *  is active, so a screen reader hears what is being searched for, or an
+ *  invitation to type one when it is not. Not shown sighted -- the field the
+ *  button opens already carries the query, and repeating it as the button's
+ *  own visible label was a query shown three times over between the button,
+ *  the field, and the result count. */
 export function searchLabel(query: string): string {
   const q = query.trim()
   return q ? `“${q}”` : 'Search'

@@ -155,9 +155,10 @@ describe('searching beyond the title', () => {
 })
 
 /**
- * The label on the permanent search entry in the top bar. It is the only
- * always-visible sign that a query is active -- see shell.ts -- so it has to
- * name the query rather than just say "Search" once one exists.
+ * The accessible name of the permanent search entry in the top bar -- see
+ * shell.ts. It has to name the query rather than just say "Search" once one
+ * exists, so a screen reader hears what is active even though the button no
+ * longer prints it sighted.
  */
 describe('searchLabel', () => {
   it('invites a query when there is none', () => {

@@ -330,6 +330,21 @@ export function runSelfCheck(): Check[] {
       const hit = reachable(searchButton)
       out.push(check('search button is reachable', hit.ok, hit.blocker ?? 'ok'))
     }
+
+    // The icon used to sit beside the preset tabs while the field it opens
+    // lived on the far side of the top bar's spacer -- so opening search
+    // looked like a second, unrelated search bar appearing on the other
+    // side of the screen rather than the icon's own field opening beside
+    // it. A large gap here is that bug; a small one is the icon and the
+    // field it drives being the same control.
+    const field = document.querySelector<HTMLElement>('.query')
+    if (searchButton && field && !field.hidden) {
+      const b = searchButton.getBoundingClientRect()
+      const f = field.getBoundingClientRect()
+      const gap = f.left - b.right
+      out.push(check('search field opens beside its icon, not across the bar',
+        gap >= 0 && gap < 40, `${Math.round(gap)}px between them`))
+    }
   }
 
   // --- overlays, when one is open --------------------------------------
