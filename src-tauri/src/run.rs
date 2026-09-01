@@ -438,7 +438,9 @@ mod tests {
         )
         .unwrap();
         assert!(
-            fail_rx.recv_timeout(std::time::Duration::from_secs(3)).is_err(),
+            fail_rx
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .is_err(),
             "a clean exit must not be reported as a failure"
         );
         assert!(
@@ -453,11 +455,16 @@ mod tests {
     /// to come back. Before this, `start` stopped watching once the grace
     /// period's single `try_wait` came back empty, so nothing ever fired and
     /// Marquee stayed minimised after the game closed (#63).
+    ///
+    /// `#[cfg(unix)]` on the test rather than a `cfg!(windows)` early return
+    /// inside it. The early return is a runtime check and the body still has
+    /// to compile: `PermissionsExt` and `Permissions::from_mode` do not exist
+    /// on Windows at all, so the test did not skip there, it failed the build
+    /// with "cannot find `unix` in `os`". This is the shape CLAUDE.md warns
+    /// about -- clean on the development machine, red only in CI.
+    #[cfg(unix)]
     #[test]
     fn a_process_that_outlives_the_grace_period_reports_its_end() {
-        if cfg!(windows) {
-            return; // the shebang script below is a unix mechanism
-        }
         use std::os::unix::fs::PermissionsExt;
 
         let script = std::env::temp_dir().join(format!(
@@ -488,8 +495,14 @@ mod tests {
 
         let ended = exit_rx.recv_timeout(std::time::Duration::from_secs(4));
         let _ = std::fs::remove_file(&script);
-        assert!(ended.is_ok(), "a session that ends on its own must be reported");
-        assert!(fail_rx.try_recv().is_err(), "a clean session is not a failure");
+        assert!(
+            ended.is_ok(),
+            "a session that ends on its own must be reported"
+        );
+        assert!(
+            fail_rx.try_recv().is_err(),
+            "a clean session is not a failure"
+        );
     }
 
     #[test]
