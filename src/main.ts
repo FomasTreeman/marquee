@@ -244,10 +244,11 @@ async function main(): Promise<void> {
   }
 
   function paintPresets(): void {
-    // The label doubles as the indicator: it names the query once one exists,
-    // rather than a fixed "Search" sitting there disconnected from the state
-    // the bar is otherwise reporting via the count next to the clock.
-    shell.searchButton.textContent = searchLabel(query)
+    // Icon only -- the query itself lives in the field beside it, and again
+    // in the count next to the clock. Putting the same text on the button too
+    // was the third copy of a search that only needs stating once; this one
+    // stays as the accessible name rather than something sighted twice.
+    shell.searchButton.setAttribute('aria-label', searchLabel(query))
     shell.searchButton.dataset['active'] = query.trim() ? '1' : '0'
 
     shell.presets.textContent = ''
