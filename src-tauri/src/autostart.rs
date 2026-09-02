@@ -48,11 +48,18 @@ fn run_value(exe: &std::path::Path) -> String {
 /// Add or remove the startup entry.
 #[cfg(target_os = "windows")]
 pub fn set_enabled(on: bool) -> Result<(), String> {
-    use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
+    use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
 
-    let key = RegKey::predef(HKEY_CURRENT_USER)
-        .open_subkey_with_flags(RUN_KEY, KEY_SET_VALUE)
+    // `create_subkey` rather than `open_subkey_with_flags`: the `Run` key
+    // exists on a normal desktop because something has autostarted before,
+    // but a fresh account -- a new Windows install, or a CI runner's profile
+    // -- has never had a reason to create it, and opening a key that is not
+    // there fails with "the system cannot find the file specified" rather
+    // than a permissions error. `create_subkey` opens it if present and
+    // creates it if not, which is what every other autostart entry relies on.
+    let (key, _) = RegKey::predef(HKEY_CURRENT_USER)
+        .create_subkey(RUN_KEY)
         .map_err(|e| format!("could not open the Windows startup key: {e}"))?;
 
     if on {
