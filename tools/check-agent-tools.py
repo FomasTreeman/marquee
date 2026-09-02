@@ -28,14 +28,21 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-# The documents an agent is told to read and follow.
-DOCS = [ROOT / "CLAUDE.md", ROOT / ".github" / "claude-instructions.md"]
-
-# The workflows that run an agent against those documents.
-WORKFLOWS = [
-    ROOT / ".github" / "workflows" / "claude.yml",
-    ROOT / ".github" / "workflows" / "ci-repair.yml",
-]
+# Each workflow against its own brief, which is not the same brief.
+#
+# claude.yml points an agent at these documents and tells it to follow them, so
+# everything they ask for it has to be able to do. ci-repair.yml is a narrower
+# job -- it fixes a red pull request on a branch that already exists -- and its
+# tool list is correctly narrower for it. Checking the shared documents against
+# both would demand `gh issue edit` from a workflow that has no business
+# editing issues, which is how a check earns its way into being switched off.
+#
+# So ci-repair.yml is checked against the commands in its own `prompt:`, which
+# is the brief it actually gets.
+BRIEFS = {
+    "claude.yml": [ROOT / "CLAUDE.md", ROOT / ".github" / "claude-instructions.md"],
+    "ci-repair.yml": [ROOT / ".github" / "workflows" / "ci-repair.yml"],
+}
 
 # What the loop depends on that no fenced block spells out.
 #
@@ -78,7 +85,14 @@ def commands(doc: pathlib.Path) -> list[str]:
             line = line.split("#", 1)[0].strip()
             if not line:
                 continue
-            for part in re.split(r"&&|\|\||(?<!\|)\|(?!\|)", line):
+            # Split on `&&` and `||`, which chain commands the agent has to
+            # run, and not on a single `|`, which pipes into a filter. The
+            # distinction matters: `cd src-tauri && cargo clippy` hides a
+            # second command that needs granting -- that is the bug this file
+            # exists for -- while `git log | head` in an example would
+            # otherwise demand a grant for `head` and fail the build over
+            # documentation.
+            for part in re.split(r"&&|\|\|", line):
                 part = part.strip()
                 if part and part.split()[0] not in IGNORE:
                     out.append(part)
@@ -99,22 +113,23 @@ def covered(command: str, grants: set[str]) -> bool:
 
 
 problems = []
-for workflow in WORKFLOWS:
+for name, docs in BRIEFS.items():
+    workflow = ROOT / ".github" / "workflows" / name
     grants = allowed_prefixes(workflow)
     if not grants:
-        problems.append(f"{workflow.name}: no Bash grants found — has --allowed-tools moved?")
+        problems.append(f"{name}: no Bash grants found — has --allowed-tools moved?")
         continue
-    for doc in DOCS:
+    for doc in docs:
         for command in commands(doc):
             if not covered(command, grants):
                 problems.append(
                     f"{doc.relative_to(ROOT)} tells the agent to run `{command}`, "
-                    f"which {workflow.name} does not allow"
+                    f"which {name} does not allow"
                 )
-    for command in REQUIRED.get(workflow.name, []):
+    for command in REQUIRED.get(name, []):
         if not covered(command, grants):
             problems.append(
-                f"{workflow.name} does not allow `{command}`, which the loop "
+                f"{name} does not allow `{command}`, which the loop "
                 f"cannot work without"
             )
 
@@ -130,4 +145,4 @@ if problems:
     )
     sys.exit(1)
 
-print(f"check-agent-tools: every documented command is granted in {len(WORKFLOWS)} workflows")
+print(f"check-agent-tools: every documented command is granted in {len(BRIEFS)} workflows")
