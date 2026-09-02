@@ -271,7 +271,7 @@ describe('once armed', () => {
       [0, 'a'], [1, 'b'], [2, 'x'], [3, 'y'],
       [4, 'lb'], [5, 'rb'],
       [8, 'add'], [9, 'menu'],
-      [10, 'sort'], [11, 'filter'],
+      [10, 'sort'], [11, 'search'],
       [12, 'up'], [13, 'down'], [14, 'left'], [15, 'right'],
     ]
     for (const [index, action] of cases) {

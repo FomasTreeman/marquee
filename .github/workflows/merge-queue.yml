@@ -1,0 +1,135 @@
+# Merging is one click. This is what makes the click enough.
+#
+# The ruleset on `main` requires a branch to be up to date before it merges --
+# the right rule, since a branch cut from an old `main` passes its own CI and
+# undoes everything merged since (see staleness.yml). But it has a cost that
+# fell on a person: every merge puts every other open pull request behind, and
+# each one then needs updating and a second CI run before its own merge button
+# works again. Four green pull requests took four rounds of update, wait, merge
+# by hand, and the second time through somebody asked for a merge and got
+# "the head branch is not up to date with the base branch".
+#
+# GitHub's own answer is the merge queue, which is not available on a personal
+# repository. So this is a merge queue in forty lines:
+#
+#   1. The person enables auto-merge on a pull request. That is the review
+#      gate, and it stays a person's -- nothing here decides that something
+#      should merge, only when a merge somebody asked for can happen.
+#   2. Whenever `main` moves, the oldest pull request waiting on auto-merge
+#      that is now behind is brought up to date. CI runs on the result and
+#      auto-merge completes it.
+#   3. That merge moves `main`, which is step 2 again for the next one.
+#
+# One at a time, oldest first, because updating them all at once would run a
+# full CI matrix on each and then invalidate all but one of those runs at the
+# next merge.
+#
+# The update goes through CLAUDE_WORKFLOW_TOKEN and must. It is the commit CI
+# has to run on, and GitHub will not run a workflow off a commit GITHUB_TOKEN
+# made -- so an update made with it would leave the pull request up to date,
+# unchecked and unmergeable, with nothing on the page saying why.
+
+name: Merge queue
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    types: [auto_merge_enabled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  # One updater at a time, for the same reason there is one update at a time.
+  group: merge-queue
+  cancel-in-progress: false
+
+jobs:
+  advance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Bring the next queued pull request up to date
+        env:
+          GH_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          # Enabling auto-merge names the pull request; a push to main does
+          # not, and the queue is read instead.
+          ONLY: ${{ github.event.pull_request.number }}
+          # Which queued pull request goes first. `number` is oldest first.
+          # `clicked` is the order auto-merge was enabled in, so the order
+          # something lands is set by the click that queued it -- the small
+          # green one first, the wide refactor last -- with no label or
+          # column to keep up to date. Not on by default: it is a preference
+          # nobody has needed yet, and it stays here rather than in someone's
+          # memory so that switching it is a repository variable, not a
+          # rewrite.
+          ORDER: ${{ vars.MERGE_QUEUE_ORDER || 'number' }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::CLAUDE_WORKFLOW_TOKEN is not set. An update made with GITHUB_TOKEN gets no CI run and can never merge, so nothing was updated."
+            exit 1
+          fi
+
+          # The merge state is computed lazily and reads UNKNOWN for a few
+          # seconds after main moves. Asking too early would skip every
+          # candidate and leave the queue standing.
+          state_of() {
+            for _ in 1 2 3 4 5 6; do
+              s=$(gh pr view "$1" --json mergeStateStatus --jq .mergeStateStatus)
+              [ "$s" != "UNKNOWN" ] && { echo "$s"; return; }
+              sleep 5
+            done
+            echo "$s"
+          }
+
+          if [ -n "$ONLY" ]; then
+            queued="$ONLY"
+          else
+            case "$ORDER" in
+              number)  key='.number' ;;
+              clicked) key='.autoMergeRequest.enabledAt' ;;
+              *)
+                echo "::error::MERGE_QUEUE_ORDER is '$ORDER'; it must be 'number' or 'clicked'. Nothing was updated."
+                exit 1
+                ;;
+            esac
+            queued=$(gh pr list --state open --limit 100 \
+              --json number,autoMergeRequest \
+              --jq "[.[] | select(.autoMergeRequest != null)] | sort_by($key) | .[].number")
+          fi
+          [ -n "$queued" ] || { echo "Nothing is waiting on auto-merge."; exit 0; }
+
+          for n in $queued; do
+            state=$(state_of "$n")
+            case "$state" in
+              BEHIND)
+                gh pr update-branch "$n"
+                echo "::notice::Brought #$n up to date; CI runs on it next, then auto-merge."
+                exit 0
+                ;;
+              DIRTY)
+                # A branch that will not merge cleanly is real work, and the
+                # agent already knows how to do it. Once per head commit, so a
+                # conflict it fails to resolve is not handed over again every
+                # time main moves.
+                head=$(gh pr view "$n" --json headRefOid --jq .headRefOid)
+                if gh pr view "$n" --json comments --jq '.comments[].body' | grep -q "<!-- conflict:$head -->"; then
+                  echo "::warning::#$n conflicts with main and was already handed over at $head; skipping."
+                  continue
+                fi
+                printf '%s\n\n%s\n' \
+                  "<!-- conflict:$head -->" \
+                  '@claude this branch conflicts with `main` and is waiting to merge. Merge `main` into it, resolve the conflicts keeping the intent of both sides, run `pnpm test`, and push to this branch. Do not open another pull request.' \
+                  > conflict.md
+                gh pr comment "$n" --body-file conflict.md
+                echo "::warning::#$n conflicts with main; handed to the agent."
+                ;;
+              *)
+                echo "#$n is $state; nothing to do for it."
+                ;;
+            esac
+          done

@@ -95,6 +95,24 @@ check('nothing to do is nothing to do',
 check('it never sets claude-working itself',
   labelsFor(issue({ labels: [] })).add.includes('claude-working'), false)
 
+// The column said Needs Decision at three attempts while the label did not,
+// and the label is what claude.yml reads to let a plain reply restart the
+// issue. A card in Needs Decision with no label was one nobody could resume.
+check('three attempts with nothing to show earns needs-decision',
+  labelsFor(issue({ labels: ['claude'], attempts: 3 })), { add: ['needs-decision'], remove: [] })
+check('two attempts do not',
+  labelsFor(issue({ labels: ['claude'], attempts: 2 })), { add: [], remove: [] })
+check('not while a run is still going',
+  labelsFor(issue({ labels: ['claude-working'], attempts: 3 })), { add: [], remove: [] })
+check('not for a human queue',
+  labelsFor(issue({ labels: ['no-ai'], attempts: 3 })), { add: [], remove: [] })
+check('not when a pull request is open',
+  labelsFor(issue({ openPr: 7, attempts: 3 })), { add: ['in-review'], remove: [] })
+check('not once closed',
+  labelsFor(issue({ state: 'CLOSED', attempts: 3 })), { add: [], remove: [] })
+check('the agent setting it earlier is not the board\'s to clear',
+  labelsFor(issue({ labels: ['needs-decision'], attempts: 1 })), { add: [], remove: [] })
+
 console.log('\nrepeating a run changes nothing')
 const settled = issue({ openPr: 7, labels: ['in-review'] })
 check('already correct, so no writes', labelsFor(settled), { add: [], remove: [] })
@@ -113,8 +131,11 @@ const pr = (number, over = {}) => ({
   ...over,
 })
 
-// A fake `github` that records the query it was given and replays a timeline.
-const fakeGithub = (nodes, spy = {}) => ({
+const labelled = (name) => ({ label: { name } })
+
+// A fake `github` that records the query it was given and replays the linked
+// pull requests and the label timeline.
+const fakeGithub = ({ prs = [], events = [] }, spy = {}) => ({
   graphql: async (query) => {
     spy.query = query
     return {
@@ -122,49 +143,54 @@ const fakeGithub = (nodes, spy = {}) => ({
         issue: {
           id: 'I_1', state: 'OPEN',
           labels: { nodes: [] },
-          timelineItems: { nodes },
+          closedByPullRequestsReferences: { nodes: prs },
+          timelineItems: { nodes: events },
         },
       },
     }
   },
 })
 
-const facts = async (nodes, spy) => factsFor(fakeGithub(nodes, spy), 'o', 'r', 1)
+const facts = async (shape, spy) => factsFor(fakeGithub(shape, spy), 'o', 'r', 1)
 
-console.log('\nreading a pull request off the timeline')
+console.log('\nreading the pull request for an issue')
 
-check('a cross-referenced pull request is found',
-  (await facts([{ source: pr(7) }])).openPr, 7)
-
-// A pull request linked through the Development sidebar rather than by being
-// mentioned raises a ConnectedEvent and nothing else. The query asked for
-// those and then only destructured `source`, which exists on
-// CrossReferencedEvent alone, so every one of them mapped to undefined and was
-// filtered away -- the issue's card never moved and nothing failed.
-check('a connected pull request is found too',
-  (await facts([{ subject: pr(7) }])).openPr, 7)
-
-check('one pull request raising both events is still one',
-  (await facts([{ source: pr(7) }, { subject: pr(7) }])).openPr, 7)
+check('a pull request that closes the issue is found',
+  (await facts({ prs: [pr(7)] })).openPr, 7)
 
 check('a closed pull request is not an open one',
-  (await facts([{ source: pr(7, { state: 'CLOSED' }) }])).openPr, undefined)
+  (await facts({ prs: [pr(7, { state: 'CLOSED' })] })).openPr, undefined)
 
 check('the newest open pull request wins, not the oldest',
-  (await facts([{ source: pr(7) }, { source: pr(9) }])).openPr, 9)
+  (await facts({ prs: [pr(9), pr(7)] })).openPr, 9)
 
 check('a red pull request is reported failing',
-  (await facts([{ source: pr(7, {
-    commits: { nodes: [{ commit: { statusCheckRollup: { state: 'FAILURE' } } }] } }) }])).prFailing, true)
+  (await facts({ prs: [pr(7, {
+    commits: { nodes: [{ commit: { statusCheckRollup: { state: 'FAILURE' } } }] } })] })).prFailing, true)
 
 check('checks still running are not a failure',
-  (await facts([{ source: pr(7, {
-    commits: { nodes: [{ commit: { statusCheckRollup: { state: 'PENDING' } } }] } }) }])).prFailing, false)
+  (await facts({ prs: [pr(7, {
+    commits: { nodes: [{ commit: { statusCheckRollup: { state: 'PENDING' } } }] } })] })).prFailing, false)
+
+// Three unrelated pull requests cited #76 in their commit messages, and a
+// timeline scan for CrossReferencedEvent took the newest of them as its pull
+// request. The card sat In Review with nothing to review. Only a pull request
+// that *closes* the issue counts, and that is a different field entirely.
+const spy = {}
+await facts({ prs: [pr(7)] }, spy)
+check('a mere mention is not a pull request for the issue',
+  /CROSS_REFERENCED_EVENT|CONNECTED_EVENT/.test(spy.query), false)
+check('the link the pull request declares is what is read',
+  /closedByPullRequestsReferences\(/.test(spy.query), true)
+
+console.log('\ncounting attempts off the timeline')
+
+check('no runs yet', (await facts({})).attempts, 0)
+check('each time the working label goes on is a run',
+  (await facts({ events: [labelled('claude-working'), labelled('claude'), labelled('claude-working')] })).attempts, 2)
 
 // A timeline is oldest first. `first: 50` on an issue with any history returns
-// the opening chatter and drops the newest pull request off the end.
-const spy = {}
-await facts([{ source: pr(7) }], spy)
+// the opening chatter and drops the newest labels off the end.
 check('the timeline is read from the newest end', /timelineItems\(last: 50/.test(spy.query), true)
 
 // ---------------------------------------------------------------------------
@@ -179,14 +205,15 @@ const project = {
 }
 
 // Records every call so a run that should be silent can be shown to be silent.
-function harness({ column, labels = [], nodes = [{ source: pr(7) }] }) {
+function harness({ column, labels = [], prs = [pr(7)] }) {
   const calls = { mutations: [], labelWrites: [], logs: [] }
   const github = {
     graphql: async () => ({
       repository: { issue: {
         id: 'I_1', state: 'OPEN',
         labels: { nodes: labels.map((name) => ({ name })) },
-        timelineItems: { nodes },
+        closedByPullRequestsReferences: { nodes: prs },
+        timelineItems: { nodes: [] },
       } },
     }),
     rest: { issues: {

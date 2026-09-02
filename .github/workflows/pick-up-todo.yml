@@ -35,6 +35,23 @@
 name: Pick up Todo
 
 on:
+  # The moment a run ends, take the next one. This is the trigger that makes
+  # the queue drain; the schedule below is the safety net, which is board.yml's
+  # arrangement and for the same reason.
+  #
+  # A cron is the wrong primary clock here and the numbers say so plainly. This
+  # asks for hourly and GitHub delivered gaps of 2.5, 2.6, 2.6, 3.7, 5, 5.7 and
+  # 5.9 hours -- scheduled runs are best-effort and get dropped under load. One
+  # issue per sweep at a real cadence near three and a half hours meant a queue
+  # of four took most of a day, which is indistinguishable from nothing
+  # happening at all.
+  #
+  # Pacing it by completions instead means the queue moves at exactly the rate
+  # work finishes, one at a time, and it stops on its own: a sweep that finds
+  # nothing waiting starts nothing, so the chain ends when the queue empties.
+  workflow_run:
+    workflows: [Claude]
+    types: [completed]
   schedule:
     # Offset from board.yml's :17 so the board has settled before this reads it.
     - cron: '43 * * * *'

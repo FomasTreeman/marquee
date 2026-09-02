@@ -103,7 +103,8 @@ wrong thing. What earns a good patch:
   silent on screen and loud in the log — that is deliberate, so use it.
 
 Then either put `@claude` in the body, comment `@claude` on it later, or add
-the **`claude`** label. Any of the three starts a run.
+the **`claude`** label. Any of the three starts a run (the first through
+triage, which turns it into the label).
 
 ## What happens
 
@@ -115,6 +116,16 @@ here: **a fix is not finished until something fails when it regresses.**
 
 It opens a branch and a pull request. It cannot merge, and it is not asked to.
 Progress is ticked off in the issue thread as it goes.
+
+A run ends in one of three states, and the board column says which: a pull
+request (In Review), a question it could not answer itself (Needs Decision,
+with the `needs-decision` label), or the issue closed because there was
+nothing to do (Done). A run that stops anywhere else — out of turns, a tool it
+was not allowed — has whatever it pushed turned into a pull request marked as
+salvaged, so the work is somewhere you can see it rather than gone.
+
+Answering the question is enough. A reply from someone with write access on
+a `needs-decision` issue restarts it; you do not need to write `@claude`.
 
 You can keep talking to it. `@claude` in a review comment on the PR, and it
 picks up from there with the review as context.
@@ -145,6 +156,21 @@ order they have actually gone wrong here:
    disease. A fix that leaves the next occurrence invisible is half a fix.
 3. **Is it the smallest change that works?** Look for scope that crept in.
 4. **Does the comment say why, not what?**
+
+When it is right, **enable auto-merge** — the button on the pull request, or
+`gh pr merge <n> --squash --auto`. That is the whole of the merge step.
+`main` requires a branch to be up to date before it merges, so every merge
+puts the other pull requests behind; `.github/workflows/merge-queue.yml`
+brings the oldest queued one up to date each time `main` moves, CI reruns on
+it, and auto-merge lands it. Queue four and they land one after another
+without further clicks. A branch that conflicts with `main` is handed back to
+the agent to resolve, once per head commit, and stays in the queue.
+
+They land oldest first. If the order ever matters — a one-line fix that
+should not wait behind a refactor, or a refactor that should be rebased once
+onto everything rather than everything onto it — set the repository variable
+`MERGE_QUEUE_ORDER` to `clicked` and they land in the order auto-merge was
+enabled. Nothing else changes; delete the variable to go back.
 
 ## Releasing
 

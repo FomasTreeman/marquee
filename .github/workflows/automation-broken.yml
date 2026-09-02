@@ -37,6 +37,8 @@ on:
 
 permissions:
   issues: write
+  # For the one retry below, and nothing else in here uses it.
+  actions: write
 
 concurrency:
   # Serialised, so two workflows failing at once cannot both decide no issue
@@ -52,25 +54,77 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+      # Once, before anyone is told. A release leg died on a single 403 from
+      # the Releases API while the three legs either side of it went through,
+      # and the issue filed for it cost two agent runs to conclude "retry it"
+      # and then stop to ask whether it could. A second failure in a row is
+      # not a blip, and that one is filed.
+      #
+      # Re-running failed jobs only. The jobs that passed keep their outputs,
+      # which for Release means the version already decided and the draft
+      # already half-built are picked up rather than started over.
+      - name: Retry it once first
+        id: retry
+        if: github.event.workflow_run.run_attempt == 1
         env:
-          HAS_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN != '' }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          NAME: ${{ github.event.workflow_run.name }}
+        run: |
+          set -euo pipefail
+          gh run rerun "$RUN_ID" --failed
+          echo "retried=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::$NAME failed on its first attempt; re-running the failed jobs before filing anything."
+
+      # Two steps, two tokens, on purpose. The "failed again" note on an issue
+      # that already exists is bookkeeping and goes through GITHUB_TOKEN, which
+      # wakes nothing. It used to go through the PAT, and claude.yml now
+      # restarts a `needs-decision` issue on any owner comment -- so an
+      # automation issue that had stopped to ask a question would have been
+      # restarted every hour by its own "failed again" note, and the question
+      # never answered.
+      - id: existing
+        if: steps.retry.outputs.retried != 'true'
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
-          github-token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || github.token }}
+          github-token: ${{ github.token }}
           script: |
             const { owner, repo } = context.repo
             const run = context.payload.workflow_run
             // The marker is per workflow, so Board breaking does not silence a
             // later Release break.
             const marker = `<!-- automation-broken:${run.name} -->`
+            core.setOutput('marker', marker)
 
             const open = await github.paginate(github.rest.issues.listForRepo, {
               owner, repo, state: 'open', labels: 'claude', per_page: 100,
             })
             const existing = open.find((i) => !i.pull_request && (i.body || '').includes(marker))
+            if (!existing) return
+
+            // Updated, not duplicated. Board runs hourly; a break that lasts
+            // a day would otherwise be twenty-four identical issues.
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: existing.number,
+              body: `${run.name} failed again: ${run.html_url}`,
+            })
+            core.setOutput('number', existing.number)
+            core.info(`#${existing.number} already open for ${run.name}; commented.`)
+
+      - if: steps.retry.outputs.retried != 'true' && steps.existing.outputs.number == ''
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          HAS_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN != '' }}
+          MARKER: ${{ steps.existing.outputs.marker }}
+        with:
+          github-token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || github.token }}
+          script: |
+            const { owner, repo } = context.repo
+            const run = context.payload.workflow_run
 
             const body = [
-              marker,
+              process.env.MARKER,
               `**${run.name} failed on \`${run.head_branch}\`.**`,
               '',
               `Failed run: ${run.html_url}`,
@@ -82,17 +136,6 @@ jobs:
               'If the cause is a token or a repository setting rather than code, say so',
               'and stop: that needs a person, not a patch.',
             ].join('\n')
-
-            if (existing) {
-              // Updated, not duplicated. Board runs hourly; a break that lasts
-              // a day would otherwise be twenty-four identical issues.
-              await github.rest.issues.createComment({
-                owner, repo, issue_number: existing.number,
-                body: `${run.name} failed again: ${run.html_url}`,
-              })
-              core.info(`#${existing.number} already open for ${run.name}; commented.`)
-              return
-            }
 
             const { data: issue } = await github.rest.issues.create({
               owner, repo,
