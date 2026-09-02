@@ -47,8 +47,13 @@ pub enum Action {
     Add,
     /// Open the sort menu. Left stick click, as on a console.
     Sort,
-    /// Open the filter menu. Right stick click.
-    Filter,
+    /// Open the library search field. Right stick click.
+    ///
+    /// Used to open a filter menu instead, which only re-listed the preset
+    /// tabs already always visible in the frontend's nav bar -- the same
+    /// options behind an extra press. Search had no pad route at all, so the
+    /// stick click now reaches the one thing the nav bar cannot do.
+    Search,
 }
 
 impl Action {
@@ -97,7 +102,7 @@ fn button_action(b: Button) -> Option<Action> {
         Button::LeftTrigger => Action::Lb,
         Button::RightTrigger => Action::Rb,
         Button::LeftThumb => Action::Sort,
-        Button::RightThumb => Action::Filter,
+        Button::RightThumb => Action::Search,
         Button::Start => Action::Menu,
         // Select/Back adds a game. Not the main menu, despite sitting next to
         // Start -- that is Action::Menu.
@@ -783,7 +788,7 @@ mod tests {
             Action::Menu,
             Action::Add,
             Action::Sort,
-            Action::Filter,
+            Action::Search,
         ] {
             assert!(!a.repeats(), "{a:?} must not repeat");
         }
@@ -810,7 +815,7 @@ mod tests {
             (Button::Start, Action::Menu),
             (Button::Select, Action::Add),
             (Button::LeftThumb, Action::Sort),
-            (Button::RightThumb, Action::Filter),
+            (Button::RightThumb, Action::Search),
             (Button::DPadUp, Action::Up),
             (Button::DPadDown, Action::Down),
             (Button::DPadLeft, Action::Left),

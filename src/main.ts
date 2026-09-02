@@ -453,7 +453,6 @@ async function main(): Promise<void> {
         details: () => openDetails(grid.focused),
         favourite: () => void favourite(grid.focused),
         sort: openSort,
-        filter: openFilter,
         search: openSearch,
         menu: openMainMenu,
         add: openAdd,
@@ -463,9 +462,11 @@ async function main(): Promise<void> {
 
 
   /**
-   * Sort and filter are separate menus on separate sticks, because they are
-   * separate questions. Cycling a hidden value with a shoulder button meant
-   * neither was discoverable and the two were easy to confuse.
+   * Sort is a menu of its own, on its own stick, because it is a separate
+   * question from which preset is showing. Presets themselves used to have a
+   * matching menu on the other stick, but it only re-listed the tabs already
+   * always visible along the top -- the same options behind an extra press
+   * rather than a real second path.
    */
   function openSort(): void {
     menu.open({
@@ -479,43 +480,6 @@ async function main(): Promise<void> {
       },
     })
     checkNow('sort')
-  }
-
-  function openFilter(): void {
-    menu.open({
-      title: 'Show',
-      anchor: 'right',
-      items: [
-        // Search belongs here, not on a button of its own. It is a way of
-        // narrowing the library, which is what this menu is for, and it gives
-        // search a controller route without inventing a binding for it —
-        // which is how PS5 and Xbox both handle it.
-        {
-          id: 'search',
-          label: query.trim() ? `Search — “${query.trim()}”` : 'Search…',
-          detail: query.trim() ? 'change' : '',
-        },
-        ...PRESETS.map((p) => ({
-          id: p.id,
-          label: p.label,
-          selected: p.id === preset,
-          // The count answers "is this worth opening" before it is opened, and
-          // dims a preset that would show an empty grid.
-          detail: String(applyFilter(games, p.id, '', sort).length),
-          disabled: applyFilter(games, p.id, '', sort).length ? undefined : 'none',
-        })),
-      ],
-      onChoose(id) {
-        if (id === 'search') { openSearch(); return }
-        preset = id as Preset
-        query = ''
-        shell.query.hidden = true
-        shell.query.value = ''
-        grid.focus(0)
-        applyView()
-      },
-    })
-    checkNow('filter')
   }
 
   function openMainMenu(): void {
@@ -779,7 +743,6 @@ async function main(): Promise<void> {
       if (e.action === 'x') { void favourite(grid.focused); return }
       if (e.action === 'menu') { openMainMenu(); return }
       if (e.action === 'add') { openAdd(); return }
-      if (e.action === 'filter') { openFilter(); return }
       if (e.action === 'search') { openSearch(); return }
       if (e.action === 'y') {
         const game = gameAt(grid.focused)
@@ -847,7 +810,6 @@ async function main(): Promise<void> {
         menu,
         openMainMenu,
         openSort,
-        openFilter,
         openAdd,
         openArtwork,
         settings,
