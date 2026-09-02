@@ -132,9 +132,9 @@ html[data-background="blur"] .backdrop-img {
   display: block;
 }
 
-/* Placeholder art for the spike: a deterministic tint plus the title, so a
-   grid of 2,000 is visually distinguishable while scrolling without any
-   network at all. */
+/* Shown until the cover arrives, and for good when there is none: a
+   deterministic tint plus the title, so a grid is readable while scrolling
+   before any artwork has loaded. */
 .card-fallback {
   position: absolute;
   inset: 0;
@@ -177,9 +177,8 @@ html[data-background="blur"] .backdrop-img {
 }
 
 /* --- HUD ----------------------------------------------------------
-   Phase 0 instrumentation. Every number the spike has to produce is on
-   screen at once, stamped with the webview that drew it, because a frame
-   rate without an engine name proves nothing. */
+   The performance readout, stamped with the webview that drew it, because
+   a frame rate without an engine name proves nothing. */
 .hud {
   position: fixed;
   right: 16px;
@@ -377,19 +376,6 @@ html[data-background="blur"] .backdrop-img {
 /* --- library ------------------------------------------------------- */
 
 .library { flex: 1; min-height: 0; display: flex; }
-.library .grid-viewport { flex: 1; }
-
-.library::before {
-  top: 0;
-  background: linear-gradient(to bottom, var(--bg0) 12%, rgb(0 0 0 / 0) 100%);
-}
-.library::after {
-  bottom: 0;
-  /* Taller at the bottom: the legend sits below it, and the eye is more
-     forgiving of a long fade into a bar than of a short one. */
-  height: calc(var(--grid-fade) * 1.6 * var(--s));
-  background: linear-gradient(to top, var(--bg0) 18%, rgb(0 0 0 / 0) 100%);
-}
 
 /* --- legend -------------------------------------------------------- */
 
@@ -638,9 +624,6 @@ html[data-background="blur"] .backdrop-img {
 
 .add-panel {
   transition: transform calc(var(--motion) * 180ms) cubic-bezier(0.2, 0.7, 0.3, 1);
-}
-
-.add-panel {
   width: min(90vw, calc(1020px * var(--s)));
   padding: calc(40px * var(--s));
   border: 1px solid var(--line);
@@ -772,16 +755,10 @@ html[data-background="blur"] .backdrop-img {
   font: inherit;
   flex: none;
 }
-/* Drawn rather than the glyph '⌕' it replaced: that glyph sat visibly low
-   in the button on Windows, because centring the button's own box (above)
-   only centres the glyph's line box, not the ink inside it -- a symbol
-   character's font-defined descent still pushes it down within that line.
-   An SVG has no descent to allocate, so display: block plus this fixed
-   square is centred by geometry rather than by a font's metrics. That still
-   was not enough on its own: a magnifying glass's circle-plus-handle shape
-   is not symmetric within its own viewBox, so the icon's coordinates in
-   shell.ts (SEARCH_ICON) also needed nudging so the drawn ink, not just the
-   box around it, sits on centre. */
+/* Drawn rather than the glyph '⌕' it replaced, which sat visibly low on
+   Windows: centring a glyph's line box does not centre its ink. An SVG has
+   no font descent, so this fixed square is centred by geometry; the ink
+   itself is centred by the coordinates in shell.ts (SEARCH_ICON). */
 .search-icon {
   display: block;
   width: calc(17px * var(--s));

@@ -36,14 +36,9 @@ interface Slot {
   art: HTMLElement
   fallback: HTMLElement
   img: HTMLImageElement
-  /** Bumped on every reassignment.
-   *
-   *  A slot recycled while scrolling keeps showing its previous cover until
-   *  the new one decodes -- which is why fast scrolling appeared to show
-   *  duplicates: the same artwork on two cards, one of them stale. The image
-   *  is hidden on assignment and revealed on load, and this guards against a
-   *  slow load for an assignment that has since been superseded revealing the
-   *  wrong game's art. */
+  /** Bumped on every reassignment, so a slow decode for an assignment that
+   *  has since been superseded cannot reveal the wrong game's art -- the
+   *  cause of "duplicate covers" while fast-scrolling. */
   generation: number
   /** Which item this pooled node currently shows, or -1 when parked. */
   index: number
@@ -54,12 +49,9 @@ interface Slot {
    *  p99. */
   transform: string
   focus: boolean
-  /** Whether the node is currently showing anything.
-   *
-   *  Tracked separately from `index` because layout() resets index to -1 for
-   *  every slot, which made the "park it" branch below a no-op -- so shrinking
-   *  the item list left the old cards on screen, fully visible. That is how
-   *  filtering to two results still showed forty-eight. */
+  /** Whether the node is currently showing anything. Not derivable from
+   *  `index`: layout() resets index to -1 for every slot, which made the park
+   *  branch a no-op -- filtering to two results still showed forty-eight. */
   visible: boolean
 }
 
@@ -159,38 +151,36 @@ export function createGrid(
     const scale = px('--s', 1) || 1
     gap = px('--gap', 20) * scale
     gapX = px('--gap-x', 30) * scale
-    clearance = topClearance(m.cardH, px('--focus-scale', 1) || 1, px('--ring-offset', 4) * scale)
     shadowReach = px('--card-shadow-reach', 19) * scale
-
-    // The gap has to pay for the ring's clearance *and* keep the previous
-    // row's shadow out of view. Those pull in opposite directions and the
-    // numbers currently balance exactly, so a change to any of them is worth
-    // hearing about rather than discovering as a sliver at the top edge.
-    if (!gapCoversEdges(gap, shadowReach, clearance)) {
-      logWarn(
-        'grid',
-        'the vertical gap no longer covers the focus ring and the shadow above it; ' +
-          'the top edge will show a sliver of the previous row',
-        { gap, clearance, shadowReach: px('--card-shadow-reach', 19) * scale },
-      )
-    }
 
     viewH = viewport.clientHeight
     m = metrics({
       inner: viewport.clientWidth - parseFloat(getComputedStyle(viewport).paddingLeft) * 2,
       viewportHeight: viewH,
-      // Both operands are read as plain numbers and multiplied here: a token
-      // defined as `calc(... * var(--s))` comes back from getComputedStyle as
-      // the unresolved calc() string, not a number.
       ideal: px('--card-w', 188) * scale,
       gapX,
       gapY: gap,
       ratio: px('--cover-ratio', 0.6667) || 0.6667,
       count: items.length,
     })
+    // After metrics(): the focused card grows with its height, and reading
+    // the previous layout's height here left the clearance short for one
+    // layout after every resize.
+    clearance = topClearance(m.cardH, px('--focus-scale', 1) || 1, px('--ring-offset', 4) * scale)
+
+    // The gap has to pay for the ring's clearance *and* keep the previous
+    // row's shadow out of view. Those pull in opposite directions, so a
+    // change to any of the numbers is worth hearing about rather than
+    // discovering as a sliver at the top edge.
+    if (!gapCoversEdges(gap, shadowReach, clearance)) {
+      logWarn(
+        'grid',
+        'the vertical gap no longer covers the focus ring and the shadow above it; ' +
+          'the top edge will show a sliver of the previous row',
+        { gap, clearance, shadowReach },
+      )
+    }
   }
-
-
 
   function makeSlot(): Slot {
     const el = document.createElement('div')

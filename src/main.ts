@@ -27,7 +27,7 @@ import {
   type Artwork, type Game, type Meta, type ScanResult,
 } from './library'
 import { installErrorHandlers, logInfo, logWarn, logError, renderFatal, logPath } from './log'
-import { scheduleSelfCheck } from './selfcheck'
+import { runSelfCheck, scheduleSelfCheck } from './selfcheck'
 import { declineUpdate, scheduleUpdateCheck, updateMenuItems } from './update'
 import {
   apply as applyFilter, describe as describeFilter, searchLabel,
@@ -108,9 +108,6 @@ async function main(): Promise<void> {
 
   const shell = createShell(document.getElementById('app')!)
   const backdrop = createBackdrop(shell.backdropA, shell.backdropB)
-  // Long-pressing a face button is the console convention for fullscreen, but
-  // it needs a hold timer and a pad to test it on. F11 is the keyboard one and
-  // it works everywhere today.
 
   // Library state. Rebuilt wholesale by reloadLibrary(), so adding a game
   // arrives through exactly the same path as every other one rather than a
@@ -396,11 +393,7 @@ async function main(): Promise<void> {
       // seconds. Saying so beats a toast that implies the game is coming now.
       const cold = how.includes('starting Steam')
       toast(
-        cold
-          ? `Starting Steam, then ${label}. This takes a few seconds.`
-          : game.provider === 'steam'
-            ? `Starting ${label}`
-            : `Starting ${label}`,
+        cold ? `Starting Steam, then ${label}. This takes a few seconds.` : `Starting ${label}`,
         'info',
         cold ? 9000 : 4000,
       )
@@ -433,13 +426,6 @@ async function main(): Promise<void> {
    *  it live, same as a mouse touched later switches the legend. */
   let heldDevice: Device = 'keyboard'
 
-  /**
-   * Change the order, and remember it.
-   *
-   * Re-sorting is debounced when names are still arriving: sorting by name on a
-   * first run would otherwise reshuffle the grid under the cursor once per
-   * metadata event, which is intolerable on a pad.
-   */
   const menu = createMenu()
 
   /** Rebuild the legend for whatever is now being held. The table itself is
@@ -459,7 +445,6 @@ async function main(): Promise<void> {
       }),
     )
   }
-
 
   /**
    * Sort is a menu of its own, on its own stick, because it is a separate
@@ -508,6 +493,9 @@ async function main(): Promise<void> {
     checkNow('menu')
   }
 
+  /** Re-sorting is debounced while names are still arriving: sorting by name
+   *  on a first run reshuffled the grid under the cursor once per metadata
+   *  event, which is intolerable on a pad. */
   let resortPending: number | undefined
   function resortLater(): void {
     if (sort !== 'name') return
@@ -671,7 +659,7 @@ async function main(): Promise<void> {
     }
   }
   await refreshSettings()
-  sort = (SORTS.find((s) => s.id === savedSort)?.id ?? 'recent') as Sort
+  sort = SORTS.find((s) => s.id === savedSort)?.id ?? 'recent'
 
   const settings = createSettings(() => {
     void refreshSettings()
@@ -816,7 +804,7 @@ async function main(): Promise<void> {
         play: play_,
         favourite,
         reloadLibrary,
-        selfCheck: () => import('./selfcheck').then((m) => m.runSelfCheck()),
+        selfCheck: runSelfCheck,
       },
     })
   }

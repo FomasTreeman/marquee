@@ -168,9 +168,9 @@ export function topClearance(cardHeight: number, focusScale: number, ringOffset:
  *
  *     gapY  >=  shadowReach + topClearance
  *
- * It currently balances exactly, which is a coincidence of three tuned numbers
- * and not a property anyone should rely on remembering. Hence a function, a
- * test, and a runtime check.
+ * A few pixels to spare at the ideal card size, and the card grows with the
+ * column width, so it is three tuned numbers and not a property anyone should
+ * rely on remembering. Hence a function, a test, and a runtime check.
  */
 export function gapCoversEdges(gapY: number, shadowReach: number, clearance: number): boolean {
   return gapY + 0.5 >= shadowReach + clearance
