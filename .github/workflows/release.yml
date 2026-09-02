@@ -522,7 +522,12 @@ jobs:
           prerelease: false
           # Writes latest.json, which is the file the updater actually reads.
           # Without it the release is just installers nobody's app will find.
-          includeUpdaterJson: true
+          #
+          # This was `includeUpdaterJson`, the v0.4 name, which v1 does not
+          # know: every leg logged "Unexpected input(s) 'includeUpdaterJson'"
+          # and the file was written only because the real input defaults to
+          # true. Named correctly so that default is no longer load-bearing.
+          uploadUpdaterJson: true
 
   # The release page can look perfect while the one file that matters is
   # incomplete. Nothing noticed that until a Windows user was told they were up
