@@ -120,21 +120,13 @@ struct AxisState {
 
 /// A button that is not being pressed by anybody.
 ///
-/// Found on a DualSense over Bluetooth on macOS: gilrs reports BUTTON(5) and
-/// BUTTON(6) -- the two bumpers -- pressing and releasing about seven times a
-/// second, forever, with the controller sitting untouched on a desk. Clean
-/// digital pairs, exactly 1.000 then 0.000, not analogue jitter.
+/// A DualSense over Bluetooth on macOS reports both bumpers pressing and
+/// releasing about seven times a second, untouched, as clean 1.0/0.0 pairs.
+/// Because the two alternate, one paging forward and the other back, the
+/// grid ended where it started and the bumpers looked dead rather than noisy.
 ///
-/// The symptom is not "the bumpers misbehave". The two alternate, one pages
-/// the library forward and the other back, so the grid ends where it started
-/// and the bumpers appear to *do nothing at all* -- while a real press is one
-/// event lost in a stream of noise. That took four rounds to find because
-/// every layer above it was working perfectly.
-///
-/// Whatever the cause, a control that reports faster than a person can move it
-/// is not reporting input. This mutes it, says so, and lets it back the moment
-/// it goes quiet -- so a fast human tapping is muted for a moment at worst,
-/// while a genuinely broken button stays out of the way.
+/// A control reporting faster than a person can move it is not reporting
+/// input: mute it, log once, unmute when it goes quiet.
 struct Noise {
     /// Per *pad* and action: when the current burst started, when it was last
     /// seen, and how many presses are in it.
@@ -224,16 +216,10 @@ impl Noise {
 
 /// What is auto-repeating, and what started it.
 ///
-/// The origin is the whole point. Repeat used to be a bare
-/// `Option<(Action, Instant)>` cleared by *any* axis settling back to centre
-/// -- and on Windows the analogue triggers are axes as well as buttons, so
-/// they emit constantly even at rest. Holding a bumper to page through the
-/// library therefore stopped repeating the moment a trigger twitched, which
-/// from the sofa is a shoulder button that works intermittently for no
-/// visible reason.
-///
-/// A stick's repeat is cancelled by the stick going quiet. A button's repeat
-/// is cancelled by the button coming up, and by nothing else.
+/// Repeat used to be cleared by any axis returning to centre. On Windows the
+/// triggers are axes too and twitch at rest, so holding a bumper to page
+/// stopped whenever a trigger moved. A stick's repeat ends when the stick
+/// rests; a button's ends only when the button comes up.
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Repeat {
     action: Action,
@@ -388,7 +374,8 @@ pub fn spawn(app: AppHandle, start: Instant) -> Arc<Status> {
                 .or_else(|| payload.downcast_ref::<String>().cloned())
                 .unwrap_or_else(|| "no message".into());
             shared.fail(format!(
-                "the gamepad thread stopped: {why}. {BACKEND} is unavailable,                  so the interface is keyboard and mouse only."
+                "the gamepad thread stopped: {why}. {BACKEND} is unavailable, \
+                 so the interface is keyboard and mouse only."
             ));
         }
     });
@@ -397,220 +384,216 @@ pub fn spawn(app: AppHandle, start: Instant) -> Arc<Status> {
 }
 
 fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
-    {
-        let backend = BACKEND;
-
-        let mut gilrs = match Gilrs::new() {
-            Ok(g) => g,
-            Err(e) => {
-                shared.fail(format!(
-                    "no gamepad support via {backend}: {e}. Keyboard and mouse only."
-                ));
-                return;
-            }
-        };
-        shared.supported.store(true, Ordering::Relaxed);
-        let mut pads = 0usize;
-        let mut seen: Vec<String> = Vec::new();
-        for (_id, pad) in gilrs.gamepads() {
-            // Recorded verbatim as well as logged. "No controller" has several
-            // causes that feel identical from the sofa, and the difference
-            // between "nothing enumerated" and "enumerated but unmapped" is the
-            // whole diagnosis. Settings shows this list.
-            let line = format!(
-                "{} — {} mapping, {}",
-                pad.name(),
-                match pad.mapping_source() {
-                    gilrs::MappingSource::SdlMappings => "SDL",
-                    gilrs::MappingSource::Driver => "driver",
-                    gilrs::MappingSource::None => "no",
-                },
-                if pad.is_connected() {
-                    "connected"
-                } else {
-                    "not connected"
-                },
-            );
-            crate::log_info!("input", "{line} (via {backend})");
-            seen.push(line);
-            pads += 1;
+    let mut gilrs = match Gilrs::new() {
+        Ok(g) => g,
+        Err(e) => {
+            shared.fail(format!(
+                "no gamepad support via {BACKEND}: {e}. Keyboard and mouse only."
+            ));
+            return;
         }
-        if let Ok(mut d) = shared.devices.lock() {
-            *d = seen;
-        }
-        shared.connected.store(pads, Ordering::Relaxed);
+    };
+    shared.supported.store(true, Ordering::Relaxed);
+    let mut pads = 0usize;
+    let mut seen: Vec<String> = Vec::new();
+    for (_id, pad) in gilrs.gamepads() {
+        // Recorded verbatim as well as logged. "No controller" has several
+        // causes that feel identical from the sofa, and the difference
+        // between "nothing enumerated" and "enumerated but unmapped" is the
+        // whole diagnosis. Settings shows this list.
+        let line = format!(
+            "{} — {} mapping, {}",
+            pad.name(),
+            match pad.mapping_source() {
+                gilrs::MappingSource::SdlMappings => "SDL",
+                gilrs::MappingSource::Driver => "driver",
+                gilrs::MappingSource::None => "no",
+            },
+            if pad.is_connected() {
+                "connected"
+            } else {
+                "not connected"
+            },
+        );
+        crate::log_info!("input", "{line} (via {BACKEND})");
+        seen.push(line);
+        pads += 1;
+    }
+    if let Ok(mut d) = shared.devices.lock() {
+        *d = seen;
+    }
+    shared.connected.store(pads, Ordering::Relaxed);
 
-        // Whether to complain about there being no pad, and when.
-        //
-        // Not at startup: gilrs enumerates before the platform has finished
-        // reporting devices, so a connected pad shows as absent for a few
-        // milliseconds and then arrives as a Connected event. Warning
-        // immediately produced "no gamepad seen" followed 11 ms later by
-        // "gamepad connected", which is worse than saying nothing.
-        let decide_at = Instant::now() + Duration::from_secs(3);
-        let mut reported = false;
+    // Whether to complain about there being no pad, and when.
+    //
+    // Not at startup: gilrs enumerates before the platform has finished
+    // reporting devices, so a connected pad shows as absent for a few
+    // milliseconds and then arrives as a Connected event. Warning
+    // immediately produced "no gamepad seen" followed 11 ms later by
+    // "gamepad connected", which is worse than saying nothing.
+    let decide_at = Instant::now() + Duration::from_secs(3);
+    let mut reported = false;
 
-        let mut held: Option<Repeat> = None;
-        let mut noise = Noise::new();
-        let mut last_published = Instant::now();
-        let mut xs = AxisState { held: None };
-        let mut ys = AxisState { held: None };
+    let mut held: Option<Repeat> = None;
+    let mut noise = Noise::new();
+    let mut last_published = Instant::now();
+    let mut xs = AxisState { held: None };
+    let mut ys = AxisState { held: None };
 
-        let emit = |action: Action, repeat: bool| {
-            let _ = app.emit(
-                "input",
-                InputEvent {
-                    action,
-                    repeat,
-                    t: start.elapsed().as_secs_f64() * 1000.0,
-                },
-            );
-        };
+    // Both emits: the only listener is the webview, and a closed webview is
+    // not an error.
+    let emit = |action: Action, repeat: bool| {
+        let _ = app.emit(
+            "input",
+            InputEvent {
+                action,
+                repeat,
+                t: start.elapsed().as_secs_f64() * 1000.0,
+            },
+        );
+    };
 
-        loop {
-            while let Some(ev) = gilrs.next_event() {
-                match ev.event {
-                    EventType::ButtonPressed(b, code) => {
-                        if let Some(a) = button_action(b) {
-                            let now = Instant::now();
-                            let pad = usize::from(ev.id);
-                            if noise.muted(pad, a, now) {
-                                if noise.just_crossed(pad, a) {
-                                    crate::log_warn!(
-                                        "input",
-                                        "{b:?} is reporting faster than anyone can press it \
-                                         and is being ignored until it stops"
-                                    );
-                                }
-                                continue;
+    loop {
+        while let Some(ev) = gilrs.next_event() {
+            match ev.event {
+                EventType::ButtonPressed(b, code) => {
+                    if let Some(a) = button_action(b) {
+                        let now = Instant::now();
+                        let pad = usize::from(ev.id);
+                        if noise.muted(pad, a, now) {
+                            if noise.just_crossed(pad, a) {
+                                crate::log_warn!(
+                                    "input",
+                                    "{b:?} is reporting faster than anyone can press it \
+                                     and is being ignored until it stops"
+                                );
                             }
-                            // Every press, at debug. Unmapped buttons were
-                            // already logged, which answers "did anything
-                            // arrive" but not "did the *bumper* arrive" -- the
-                            // question that cost four rounds of guessing.
-                            // Repeats are excluded, so this is bounded by how
-                            // fast a person can press.
-                            crate::log_debug!("input", "{b:?} -> {a:?}");
-                            emit(a, false);
-                            if a.repeats() {
-                                held = Some(Repeat::from_button(a, now));
-                            }
-                        } else {
-                            // A pad that sends buttons we do not understand
-                            // looks exactly like a pad that sends nothing.
-                            // Saying which is the entire difference between a
-                            // fixable report and "the controller doesn't work".
-                            let what = format!("{b:?} ({code})");
-                            crate::log_warn!("input", "unmapped button {what}");
-                            let _ = app.emit("input-unmapped", what);
+                            continue;
+                        }
+                        // Every press, at debug. Unmapped buttons were
+                        // already logged, which answers "did anything
+                        // arrive" but not "did the *bumper* arrive" -- the
+                        // question that cost four rounds of guessing.
+                        // Repeats are excluded, so this is bounded by how
+                        // fast a person can press.
+                        crate::log_debug!("input", "{b:?} -> {a:?}");
+                        emit(a, false);
+                        if a.repeats() {
+                            held = Some(Repeat::from_button(a, now));
+                        }
+                    } else {
+                        // A pad that sends buttons we do not understand
+                        // looks exactly like a pad that sends nothing.
+                        // Saying which is the entire difference between a
+                        // fixable report and "the controller doesn't work".
+                        let what = format!("{b:?} ({code})");
+                        crate::log_warn!("input", "unmapped button {what}");
+                        let _ = app.emit("input-unmapped", what);
+                    }
+                }
+                EventType::ButtonReleased(b, _) => {
+                    if let Some(a) = button_action(b) {
+                        if matches!(held, Some(h) if h.ends_with_button(a)) {
+                            held = None;
                         }
                     }
-                    EventType::ButtonReleased(b, _) => {
-                        if let Some(a) = button_action(b) {
-                            if matches!(held, Some(h) if h.ends_with_button(a)) {
+                }
+                EventType::AxisChanged(axis, v, _) => {
+                    let changed = match axis {
+                        Axis::LeftStickX => xs.update(v, Action::Left, Action::Right),
+                        Axis::LeftStickY => ys.update(v, Action::Down, Action::Up),
+                        _ => None,
+                    };
+                    match changed {
+                        Some(a) => {
+                            // Deliberately not logged. A stick crossing
+                            // the deadzone fires on every direction change
+                            // while navigating, which is several a second
+                            // for as long as someone is using the app --
+                            // and a debug report drowned in those is the
+                            // mistake `will retry 0` already made once.
+                            // Buttons are logged; they are bounded by how
+                            // fast a person can press.
+                            emit(a, false);
+                            held = Some(Repeat::from_stick(a, Instant::now()));
+                        }
+                        None => {
+                            // Both sticks back inside the deadzone ends a
+                            // repeat a stick started -- and only that. A
+                            // bumper being held is none of this branch's
+                            // business, which is what it used to get wrong.
+                            if xs.held.is_none()
+                                && ys.held.is_none()
+                                && matches!(held, Some(h) if h.ends_with_the_sticks())
+                            {
                                 held = None;
                             }
                         }
                     }
-                    EventType::AxisChanged(axis, v, _) => {
-                        let changed = match axis {
-                            Axis::LeftStickX => xs.update(v, Action::Left, Action::Right),
-                            Axis::LeftStickY => ys.update(v, Action::Down, Action::Up),
-                            _ => None,
-                        };
-                        match changed {
-                            Some(a) => {
-                                // Deliberately not logged. A stick crossing
-                                // the deadzone fires on every direction change
-                                // while navigating, which is several a second
-                                // for as long as someone is using the app --
-                                // and a debug report drowned in those is the
-                                // mistake `will retry 0` already made once.
-                                // Buttons are logged; they are bounded by how
-                                // fast a person can press.
-                                emit(a, false);
-                                held = Some(Repeat::from_stick(a, Instant::now()));
-                            }
-                            None => {
-                                // Both sticks back inside the deadzone ends a
-                                // repeat a stick started -- and only that. A
-                                // bumper being held is none of this branch's
-                                // business, which is what it used to get wrong.
-                                if xs.held.is_none()
-                                    && ys.held.is_none()
-                                    && matches!(held, Some(h) if h.ends_with_the_sticks())
-                                {
-                                    held = None;
-                                }
-                            }
-                        }
-                    }
-                    EventType::Connected => {
-                        shared.connected.fetch_add(1, Ordering::Relaxed);
-                        crate::log_info!("input", "gamepad connected");
-                    }
-                    EventType::Disconnected => {
-                        // Saturating, because a disconnect can arrive for a pad
-                        // that was already gone when we enumerated at startup.
-                        let _ = shared.connected.fetch_update(
-                            Ordering::Relaxed,
-                            Ordering::Relaxed,
-                            |n| Some(n.saturating_sub(1)),
-                        );
-                        crate::log_info!("input", "gamepad disconnected");
-                    }
-                    _ => {}
                 }
-            }
-
-            if !reported && Instant::now() >= decide_at {
-                reported = true;
-                if shared.connected.load(Ordering::Relaxed) == 0 {
-                    // Deliberately not advice any more. This used to claim that
-                    // XInput sees Xbox-compatible pads only and to recommend
-                    // DS4Windows, which was wrong on both counts: the backend is
-                    // Windows.Gaming.Input, and it enumerates through
-                    // RawGameController, which sees any HID game controller.
-                    // Guessing at a cause is worse than reporting the fact,
-                    // because the guess is what gets acted on.
-                    crate::log_warn!(
-                        "input",
-                        "no gamepad after 3s. {backend} started and enumerated nothing."
-                    );
+                EventType::Connected => {
+                    shared.connected.fetch_add(1, Ordering::Relaxed);
+                    crate::log_info!("input", "gamepad connected");
                 }
-            }
-
-            if let Some(r) = held {
-                let now = Instant::now();
-                if now >= r.due {
-                    emit(r.action, true);
-                    held = Some(Repeat {
-                        due: now + REPEAT_RATE,
-                        ..r
-                    });
+                EventType::Disconnected => {
+                    // Saturating, because a disconnect can arrive for a pad
+                    // that was already gone when we enumerated at startup.
+                    let _ =
+                        shared
+                            .connected
+                            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+                                Some(n.saturating_sub(1))
+                            });
+                    crate::log_info!("input", "gamepad disconnected");
                 }
+                _ => {}
             }
-
-            // Publish what is being ignored, about once a second. Cheap, and
-            // it means a control that has been switched off can be seen in
-            // Settings rather than only in a log line that scrolled past.
-            if last_published.elapsed() >= Duration::from_secs(1) {
-                last_published = Instant::now();
-                let now = Instant::now();
-                let names: Vec<String> = noise
-                    .silenced(now)
-                    .iter()
-                    .map(|a| format!("{a:?}"))
-                    .collect();
-                if let Ok(mut slot) = shared.silenced.lock() {
-                    if *slot != names {
-                        *slot = names;
-                    }
-                }
-            }
-
-            std::thread::sleep(POLL);
         }
+
+        if !reported && Instant::now() >= decide_at {
+            reported = true;
+            if shared.connected.load(Ordering::Relaxed) == 0 {
+                // A fact, not a diagnosis. This used to recommend
+                // DS4Windows for "XInput only", and both halves were
+                // wrong (the BACKEND is Windows.Gaming.Input, which sees
+                // any HID pad). The guess is what gets acted on.
+                crate::log_warn!(
+                    "input",
+                    "no gamepad after 3s. {BACKEND} started and enumerated nothing."
+                );
+            }
+        }
+
+        if let Some(r) = held {
+            let now = Instant::now();
+            if now >= r.due {
+                emit(r.action, true);
+                held = Some(Repeat {
+                    due: now + REPEAT_RATE,
+                    ..r
+                });
+            }
+        }
+
+        // Publish what is being ignored, about once a second. Cheap, and
+        // it means a control that has been switched off can be seen in
+        // Settings rather than only in a log line that scrolled past.
+        if last_published.elapsed() >= Duration::from_secs(1) {
+            last_published = Instant::now();
+            let now = Instant::now();
+            let names: Vec<String> = noise
+                .silenced(now)
+                .iter()
+                .map(|a| format!("{a:?}"))
+                .collect();
+            if let Ok(mut slot) = shared.silenced.lock() {
+                if *slot != names {
+                    *slot = names;
+                }
+            }
+        }
+
+        std::thread::sleep(POLL);
     }
 }
 

@@ -1,7 +1,7 @@
 import { logWarn } from './log'
 import {
   firstVisibleIndex, glide, metrics, move as moveIndex, poolSize, positionOf,
-  scrollToShow, topClearance, gapCoversEdges, type Metrics,
+  scrollToShow, topClearance, gapCoversEdges, imageAction, type Metrics,
 } from './grid-math'
 
 /**
@@ -36,15 +36,12 @@ interface Slot {
   art: HTMLElement
   fallback: HTMLElement
   img: HTMLImageElement
-  /** Bumped on every reassignment.
-   *
-   *  A slot recycled while scrolling keeps showing its previous cover until
-   *  the new one decodes -- which is why fast scrolling appeared to show
-   *  duplicates: the same artwork on two cards, one of them stale. The image
-   *  is hidden on assignment and revealed on load, and this guards against a
-   *  slow load for an assignment that has since been superseded revealing the
-   *  wrong game's art. */
+  /** Bumped on every reassignment, so a slow decode for an assignment that
+   *  has since been superseded cannot reveal the wrong game's art -- the
+   *  cause of "duplicate covers" while fast-scrolling. */
   generation: number
+  /** The src that last failed to decode in this node, if it is still set. */
+  failed: string | undefined
   /** Which item this pooled node currently shows, or -1 when parked. */
   index: number
   /** Last values written to the DOM. Every write is compared against these
@@ -54,12 +51,9 @@ interface Slot {
    *  p99. */
   transform: string
   focus: boolean
-  /** Whether the node is currently showing anything.
-   *
-   *  Tracked separately from `index` because layout() resets index to -1 for
-   *  every slot, which made the "park it" branch below a no-op -- so shrinking
-   *  the item list left the old cards on screen, fully visible. That is how
-   *  filtering to two results still showed forty-eight. */
+  /** Whether the node is currently showing anything. Not derivable from
+   *  `index`: layout() resets index to -1 for every slot, which made the park
+   *  branch a no-op -- filtering to two results still showed forty-eight. */
   visible: boolean
 }
 
@@ -159,38 +153,36 @@ export function createGrid(
     const scale = px('--s', 1) || 1
     gap = px('--gap', 20) * scale
     gapX = px('--gap-x', 30) * scale
-    clearance = topClearance(m.cardH, px('--focus-scale', 1) || 1, px('--ring-offset', 4) * scale)
     shadowReach = px('--card-shadow-reach', 19) * scale
-
-    // The gap has to pay for the ring's clearance *and* keep the previous
-    // row's shadow out of view. Those pull in opposite directions and the
-    // numbers currently balance exactly, so a change to any of them is worth
-    // hearing about rather than discovering as a sliver at the top edge.
-    if (!gapCoversEdges(gap, shadowReach, clearance)) {
-      logWarn(
-        'grid',
-        'the vertical gap no longer covers the focus ring and the shadow above it; ' +
-          'the top edge will show a sliver of the previous row',
-        { gap, clearance, shadowReach: px('--card-shadow-reach', 19) * scale },
-      )
-    }
 
     viewH = viewport.clientHeight
     m = metrics({
       inner: viewport.clientWidth - parseFloat(getComputedStyle(viewport).paddingLeft) * 2,
       viewportHeight: viewH,
-      // Both operands are read as plain numbers and multiplied here: a token
-      // defined as `calc(... * var(--s))` comes back from getComputedStyle as
-      // the unresolved calc() string, not a number.
       ideal: px('--card-w', 188) * scale,
       gapX,
       gapY: gap,
       ratio: px('--cover-ratio', 0.6667) || 0.6667,
       count: items.length,
     })
+    // After metrics(): the focused card grows with its height, and reading
+    // the previous layout's height here left the clearance short for one
+    // layout after every resize.
+    clearance = topClearance(m.cardH, px('--focus-scale', 1) || 1, px('--ring-offset', 4) * scale)
+
+    // The gap has to pay for the ring's clearance *and* keep the previous
+    // row's shadow out of view. Those pull in opposite directions, so a
+    // change to any of the numbers is worth hearing about rather than
+    // discovering as a sliver at the top edge.
+    if (!gapCoversEdges(gap, shadowReach, clearance)) {
+      logWarn(
+        'grid',
+        'the vertical gap no longer covers the focus ring and the shadow above it; ' +
+          'the top edge will show a sliver of the previous row',
+        { gap, clearance, shadowReach },
+      )
+    }
   }
-
-
 
   function makeSlot(): Slot {
     const el = document.createElement('div')
@@ -229,7 +221,7 @@ export function createGrid(
 
     const s: Slot = {
       el, art, fallback, img,
-      index: -1, transform: '', focus: false, visible: false, generation: 0,
+      index: -1, transform: '', focus: false, visible: false, generation: 0, failed: undefined,
     }
     // Parked until it is given an item. A fresh slot has index -1 and no
     // transform, so without this the whole unused pool sits stacked at 0,0 on
@@ -296,32 +288,34 @@ export function createGrid(
       s.el.style.setProperty('--card-tint', item.tint)
       s.fallback.textContent = item.title
       const generation = ++s.generation
-      if (item.art) {
-        if (s.img.getAttribute('src') !== item.art) {
-          // Hidden until the new artwork has actually decoded. Without this the
-          // previous game's cover stays on screen underneath the new game's
-          // title, which reads as the grid showing duplicates.
-          s.img.style.display = 'none'
-          s.img.src = item.art
-          const reveal = () => {
-            if (s.generation !== generation) return
-            s.img.style.display = ''
-          }
-          // decode() resolves once the image is ready to paint, so revealing it
-          // cannot land on a half-decoded frame. It rejects on a 404 or when
-          // superseded, and both mean "leave the fallback showing".
-          s.img.decode().then(reveal).catch(() => {
-            // Superseded is routine — the slot was recycled mid-flight. A
-            // cover we already resolved and verified failing to decode is not,
-            // and a title card with no art is exactly the bug that gets
-            // reported as "artwork is broken" with nothing in the log.
-            if (s.generation === generation) reportArtFailure(String(item.art))
-          })
-        } else {
+      const action = imageAction(s.img.getAttribute('src'), s.failed, item.art)
+      if (action === 'load') {
+        // Hidden until the new artwork has actually decoded. Without this the
+        // previous game's cover stays on screen underneath the new game's
+        // title, which reads as the grid showing duplicates.
+        s.img.style.display = 'none'
+        s.img.src = item.art!
+        s.failed = undefined
+        const reveal = () => {
+          if (s.generation !== generation) return
           s.img.style.display = ''
         }
+        // decode() resolves once the image is ready to paint, so revealing it
+        // cannot land on a half-decoded frame. It rejects on a 404 or when
+        // superseded, and both mean "leave the fallback showing".
+        s.img.decode().then(reveal).catch(() => {
+          // Superseded is routine — the slot was recycled mid-flight. A
+          // cover we already resolved and verified failing to decode is not,
+          // and a title card with no art is exactly the bug that gets
+          // reported as "artwork is broken" with nothing in the log.
+          if (s.generation !== generation) return
+          s.failed = item.art
+          reportArtFailure(String(item.art))
+        })
+      } else if (action === 'show') {
+        s.img.style.display = ''
       } else {
-        s.img.removeAttribute('src')
+        if (!item.art) s.img.removeAttribute('src')
         s.img.style.display = 'none'
       }
       s.index = index

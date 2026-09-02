@@ -11,6 +11,7 @@
  * these from the control that opened them.
  */
 import { logInfo } from './log'
+import { el } from './dom'
 
 export interface MenuItem {
   id: string
@@ -38,15 +39,6 @@ export interface Menu {
   open(request: MenuRequest): void
   close(): void
   handle(action: string): boolean
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K, className?: string, parent?: HTMLElement,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag)
-  if (className) node.className = className
-  parent?.appendChild(node)
-  return node
 }
 
 export function createMenu(): Menu {
@@ -152,12 +144,6 @@ export function createMenu(): Menu {
       return true
     },
   }
-}
-
-/** True when this menu owns the given number of usable items. Exposed for the
- *  self-check, which asserts a menu never opens with nothing to choose. */
-export function usableCount(items: MenuItem[]): number {
-  return items.filter((i) => !i.disabled).length
 }
 
 /**

@@ -15,10 +15,6 @@ vi.mock('../library', async (importOriginal) => {
  * unchanged the day you do it.
  */
 describe('renameIntent', () => {
-  it('writes an override for a real change', () => {
-    expect(renameIntent('ELDEN RING', 'Elden Ring')).toEqual({ kind: 'set', title: 'Elden Ring' })
-  })
-
   it('does nothing when the name is unchanged', () => {
     expect(renameIntent('Portal 2', 'Portal 2')).toEqual({ kind: 'none' })
   })

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   MAX_GROWTH, easeOut, firstVisibleIndex, glide, metrics, move, poolSize,
-  positionOf, scrollToShow, topClearance, gapCoversEdges, type MetricsInput,
+  positionOf, scrollToShow, topClearance, gapCoversEdges, imageAction, type MetricsInput,
 } from '../grid-math'
 
 const base: MetricsInput = {
@@ -334,9 +334,9 @@ describe('the gap has to pay for both edges', () => {
   /**
    * With a hard top edge, two things compete for the space above a row scrolled
    * to the top: the focused card's ring needs clearance, and the previous row's
-   * shadow needs *not* to be cleared into view. The gap has to cover both, and
-   * the current values balance exactly — which is a coincidence of three tuned
-   * numbers, not something to rely on anyone remembering.
+   * shadow needs *not* to be cleared into view. The gap has to cover both,
+   * with a few pixels to spare at the ideal card size — a coincidence of three
+   * tuned numbers, not something to rely on anyone remembering.
    */
   // The design's own values, from design/tokens.json. A card at the ideal
   // width of 188 is 282 tall at 2:3.
@@ -367,5 +367,28 @@ describe('the gap has to pay for both edges', () => {
 
   it('is satisfied by making the gap larger', () => {
     expect(gapCoversEdges(120, 40, topClearance(CARD_H, 1.4, RING))).toBe(true)
+  })
+})
+
+describe('a recycled slot handed a cover', () => {
+  it('loads one it does not hold yet', () => {
+    expect(imageAction(null, undefined, 'a.jpg')).toBe('load')
+    expect(imageAction('a.jpg', undefined, 'b.jpg')).toBe('load')
+  })
+
+  it('shows one it already holds', () => {
+    expect(imageAction('a.jpg', undefined, 'a.jpg')).toBe('show')
+  })
+
+  it('keeps hidden one that failed to decode in it, rather than showing the broken-image glyph', () => {
+    expect(imageAction('a.jpg', 'a.jpg', 'a.jpg')).toBe('hide')
+  })
+
+  it('reloads after a failure once a different cover is asked for', () => {
+    expect(imageAction('a.jpg', 'a.jpg', 'b.jpg')).toBe('load')
+  })
+
+  it('hides when there is nothing to show', () => {
+    expect(imageAction('a.jpg', undefined, undefined)).toBe('hide')
   })
 })

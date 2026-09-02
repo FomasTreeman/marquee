@@ -71,16 +71,6 @@ export async function requestMeta(appIds: string[]): Promise<Meta[]> {
   return call<Meta[]>('request_meta', { appIds })
 }
 
-/**
- * Start a game.
- *
- * Resolves to a description of what happened -- the steam:// URI or the
- * executable path -- so the interface can say "handing off to Steam" rather
- * than showing a generic spinner. Rejects with a human-readable reason.
- *
- * The game is resolved from the library Rust already holds. The interface is
- * never the authority on what a game is.
- */
 export interface SearchHit {
   appId: string
   name: string
@@ -113,8 +103,6 @@ export function artSourceFor(hit: SearchHit): string {
 export function coverFor(hit: SearchHit): string | undefined {
   return steamArtwork(artKeyFor(hit)).cover
 }
-
-/** A SteamGridDB entry, as offered by the artwork picker. */
 
 /**
  * Search for artwork to borrow, from both catalogues.
@@ -161,12 +149,6 @@ export async function removeManualGame(id: number): Promise<void> {
   return call<void>('remove_manual_game', { id })
 }
 
-/**
- * Point a game's artwork at a different Steam appid, or null to undo.
- *
- * The appid a game *is* is not always the appid whose artwork it should
- * borrow, and no amount of renaming fixes that.
- */
 export interface Settings {
   steamgriddbKey: string
   /** Sort order, remembered across launches. */
@@ -208,8 +190,6 @@ export async function setAutostart(enabled: boolean): Promise<void> {
   return call<void>('set_autostart', { enabled })
 }
 
-/** Saving also clears the artwork cache, so games that previously found
- *  nothing are re-resolved against the new source. */
 export interface ImportSummary {
   settings: number
   games: number
@@ -245,8 +225,6 @@ export async function setProfileFolder(folder: string): Promise<void> {
   return call<void>('set_profile_folder', { folder })
 }
 
-/** Quit, minimise, restart or shut down. The last two end the whole session,
- *  so the interface arms them with a second press first. */
 /**
  * Everything worth knowing about this machine, as one block of text.
  *
@@ -257,6 +235,8 @@ export async function diagnosticReport(): Promise<string> {
   return call<string>('diagnostic_report')
 }
 
+/** Quit, minimise, restart or shut down. The last two end the whole session,
+ *  so the interface arms them with a second press first. */
 export async function systemAction(action: string): Promise<void> {
   if (!inApp) throw new Error('that needs the app, not a browser tab')
   return call<void>('system_action', { action })
@@ -291,6 +271,8 @@ export async function toggleFullscreen(): Promise<boolean> {
   return call<boolean>('toggle_fullscreen')
 }
 
+/** Saving also clears the artwork cache, so games that previously found
+ *  nothing are re-resolved against the new source. */
 export async function setSteamGridDbKey(key: string): Promise<void> {
   return call<void>('set_steamgriddb_key', { key })
 }
@@ -309,19 +291,17 @@ export async function artworkReport(appIds: string[]): Promise<ArtworkManifest[]
   return call<ArtworkManifest[]>('artwork_report', { appIds })
 }
 
+/**
+ * Point a game's artwork at a different Steam appid, or null to undo.
+ *
+ * The appid a game *is* is not always the appid whose artwork it should
+ * borrow, and no amount of renaming fixes that.
+ */
 export async function setArtSource(gameId: string, appId: string | null): Promise<void> {
   return call<void>('set_art_source', { gameId, appId })
 }
 
-/**
- * Rename a game, persistently.
- *
- * No caller yet: the store, the command and the profile round trip are all
- * built and tested, but nothing in the interface offers a rename, so today a
- * custom title can only arrive by importing a profile that already has one.
- * The missing piece is a text prompt the pad can drive, which is a screen
- * rather than a button. On the roadmap in docs/PLAN.md, not forgotten.
- */
+/** Rename a game, persistently. `null` restores the provider's title. */
 export async function setCustomTitle(gameId: string, title: string | null): Promise<void> {
   return call<void>('set_custom_title', { gameId, title })
 }
@@ -344,6 +324,16 @@ export async function toggleFavourite(gameId: string): Promise<boolean> {
   return call<boolean>('toggle_favourite', { gameId })
 }
 
+/**
+ * Start a game.
+ *
+ * Resolves to a description of what happened -- the steam:// URI or the
+ * executable path -- so the interface can say "handing off to Steam" rather
+ * than showing a generic spinner. Rejects with a human-readable reason.
+ *
+ * The game is resolved from the library Rust already holds. The interface is
+ * never the authority on what a game is.
+ */
 export async function launchGame(id: string): Promise<string> {
   if (!inApp) throw new Error('launching needs the app, not a browser tab')
   return call<string>('launch_game', { id })

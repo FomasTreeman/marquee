@@ -91,18 +91,13 @@ export async function checkForUpdate(): Promise<PendingUpdate | undefined> {
     version: update.version,
     notes: (update.body ?? '').trim(),
     async install(onProgress) {
-      let total = 0
-      let got = 0
+      const progress: Progress = { total: 0, got: 0 }
       await update!.downloadAndInstall((event) => {
-        if (event.event === 'Started') {
-          total = event.data.contentLength ?? 0
-          onProgress?.(total ? 0 : undefined)
-        } else if (event.event === 'Progress') {
-          got += event.data.chunkLength
-          onProgress?.(total ? Math.round((got / total) * 100) : undefined)
-        } else if (event.event === 'Finished') {
-          onProgress?.(100)
-        }
+        if (event.event === 'Started') progress.total = event.data.contentLength ?? 0
+        else if (event.event === 'Progress') progress.got += event.data.chunkLength
+        else if (event.event === 'Finished') progress.got = progress.total
+        const percent = progressStep(progress)
+        if (percent !== undefined || event.event === 'Started') onProgress?.(percent)
       })
       // Only reached if the installer did not take over the process. On
       // Windows the passive installer replaces us, so this never returns.
@@ -110,6 +105,27 @@ export async function checkForUpdate(): Promise<PendingUpdate | undefined> {
       await relaunch()
     },
   }
+}
+
+export interface Progress {
+  total: number
+  got: number
+  /** The last percentage reported, so the next one is only spoken if it moved. */
+  reported?: number
+}
+
+/**
+ * The percentage to report for the bytes so far, or undefined when there is
+ * nothing new to say: no known size, or the same figure as last time. A
+ * download arrives in chunks far smaller than a percent of the whole, and
+ * reporting each one was the reason the screen filled with identical toasts.
+ */
+export function progressStep(p: Progress): number | undefined {
+  if (!p.total) return undefined
+  const percent = Math.min(100, Math.round((p.got / p.total) * 100))
+  if (percent === p.reported) return undefined
+  p.reported = percent
+  return percent
 }
 
 /** Remember a refusal, so this version is not offered again. */
