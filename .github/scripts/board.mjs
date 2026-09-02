@@ -121,10 +121,17 @@ export function statusFor(facts) {
  *
  * The cooldown is what keeps this from becoming one. An issue whose run fails,
  * or whose pull request is closed unmerged, returns to Todo and would
- * otherwise be picked up again on the next sweep, forever, at a full run of
+ * otherwise be picked up again on the next sweep, at a full run of
  * subscription usage each time.
+ *
+ * An hour, down from six. Six was set when the sweep was the only bound and
+ * a failing issue could be offered forever; now three attempts send it to
+ * Needs Decision, so the most a broken issue can cost is three runs, and the
+ * cooldown only decides whether those happen this afternoon or over two days.
+ * #76 failed in four seconds on a workflow bug and then sat for six hours
+ * waiting to be allowed another go, which read as the loop having died.
  */
-export function shouldPickUp(facts, hoursSinceHandover, cooldownHours = 6) {
+export function shouldPickUp(facts, hoursSinceHandover, cooldownHours = 1) {
   if (statusFor(facts) !== CONFIG.status.todo) return false
   // Never handed over, so this is the first offer.
   if (hoursSinceHandover === undefined || hoursSinceHandover === null) return true
@@ -267,8 +274,12 @@ export async function factsFor(github, owner, repo, number) {
                commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
              }
            }
-           timelineItems(last: 50, itemTypes: [LABELED_EVENT]) {
-             nodes { ... on LabeledEvent { label { name } } }
+           timelineItems(last: 50, itemTypes: [LABELED_EVENT, UNLABELED_EVENT, REOPENED_EVENT]) {
+             nodes {
+               __typename
+               ... on LabeledEvent { label { name } }
+               ... on UnlabeledEvent { label { name } }
+             }
            }
          }
        }
@@ -302,9 +313,25 @@ export async function factsFor(github, owner, repo, number) {
     // Without it a run that ended with nothing to show is indistinguishable
     // from an issue nobody has ever touched, which is how a card went
     // backwards from In Progress to Todo.
-    attempts: issue.timelineItems.nodes
-      .filter((n) => n?.label?.name === CONFIG.labels.working).length,
+    //
+    // Counted since the brief last changed: a reopen, or a person answering
+    // a `needs-decision` question. An issue reopened because its merged fix
+    // did not do what was intended starts a new job, and the run that
+    // delivered the first fix was a success, not a failed attempt at this
+    // one. Likewise a run that stopped to ask did what it was told, and the
+    // answer is a new brief -- #91 had one proper stop and one failed run
+    // after the answer, and counting both left it one failure from Needs
+    // Decision when the rule everywhere else is three.
+    attempts: sinceLastRestart(issue.timelineItems.nodes)
+      .filter((n) => n?.__typename === 'LabeledEvent' && n?.label?.name === CONFIG.labels.working).length,
   }
+}
+
+function sinceLastRestart(nodes) {
+  const restart = (n) => n?.__typename === 'ReopenedEvent'
+    || (n?.__typename === 'UnlabeledEvent' && n?.label?.name === CONFIG.labels.blocked)
+  const at = nodes.map(restart).lastIndexOf(true)
+  return at < 0 ? nodes : nodes.slice(at + 1)
 }
 
 /** Put one issue where it belongs, labels and card together. */

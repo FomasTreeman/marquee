@@ -147,7 +147,22 @@ on:
     # the tracking comment's own pending run happened to replace it in the
     # queue. triage.yml turns `@claude` in a body into the label instead, and
     # the label is the one way in.
-    types: [labeled]
+    #
+    # `reopened` is the amendment trigger. A fix that merges, releases and
+    # does not do what was intended breaks nothing CI can see, so nothing
+    # here would notice. The person notices. Reopening the issue, with a
+    # comment saying what is still wrong, was already what the board expected
+    # -- it put the card back in Todo -- but the only thing that would then
+    # start a run was the hourly sweep, with a brief that never mentioned the
+    # fix that had already landed. So it starts one now, and the step below
+    # names the merged pull request as the starting point.
+    #
+    # Not by running the action on the reopen event: it refuses that one --
+    # "Unsupported issue action: reopened", on #76, four seconds in -- and
+    # supports `labeled` and comments. So the reopen is turned into the
+    # comment pick-up-todo.yml would have written, through the token that
+    # wakes this workflow, and the run that follows is an ordinary one.
+    types: [labeled, reopened]
   issue_comment:
     types: [created]
   pull_request_review_comment:
@@ -162,6 +177,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A reopen becomes a handover comment, because the action cannot take the
+  # reopen itself. The comment carries pick-up-todo.yml's marker so its
+  # cooldown counts from here, and goes through CLAUDE_WORKFLOW_TOKEN because
+  # a comment GITHUB_TOKEN writes wakes nothing -- which would be this whole
+  # trigger reduced to a note on the issue.
+  reopened:
+    if: |
+      github.event_name == 'issues' && github.event.action == 'reopened' &&
+      contains(github.event.issue.labels.*.name, 'claude') &&
+      !contains(github.event.issue.labels.*.name, 'no-ai')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::CLAUDE_WORKFLOW_TOKEN is not set, so a comment posted here would start nothing. #$NUMBER was reopened and nobody is coming; pick-up-todo.yml will offer it on its next sweep."
+            exit 1
+          fi
+          printf '%s\n%s\n' \
+            '<!-- handed-over -->' \
+            '@claude this was reopened, so the fix that closed it did not do what was intended. Read the newest comments for what is still wrong and amend the merged pull request rather than starting over.' \
+            > reopened.md
+          gh issue comment "$NUMBER" --body-file reopened.md
+          echo "::notice::#$NUMBER reopened; handed to the agent."
+
   claude:
     # An issue is picked up when it carries the `claude` label. triage.yml
     # applies that from the template's dropdown, so a new issue still starts on
@@ -320,6 +367,37 @@ jobs:
           gh issue edit "$NUMBER" --add-label claude-working --remove-label needs-decision \
             || echo "::warning::could not set claude-working on #$NUMBER; the board will show it as untouched"
 
+      # What already landed for this issue. An open issue with a merged pull
+      # request that closes it is one that was reopened -- the fix shipped and
+      # did not do what was intended -- and the agent should start from that
+      # diff rather than from the issue text, or it rediscovers the same fix.
+      # Numbers only go into the prompt; the reopening comment is read from
+      # the thread, where the action already puts it.
+      - name: What has already merged for it
+        id: history
+        if: github.event.issue.number && !github.event.issue.pull_request
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          merged=$(gh api graphql -F owner="${GITHUB_REPOSITORY%/*}" -F repo="${GITHUB_REPOSITORY#*/}" -F number="$NUMBER" -f query='
+            query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                issue(number: $number) {
+                  closedByPullRequestsReferences(first: 20, includeClosedPrs: true) {
+                    nodes { number state }
+                  }
+                }
+              }
+            }' --jq '[.data.repository.issue.closedByPullRequestsReferences.nodes[] | select(.state == "MERGED") | "#\(.number)"] | join(", ")')
+          if [ -n "$merged" ]; then
+            echo "brief=- This issue was already closed by $merged, which is merged and on main, and it has been reopened: that fix did not do what was intended. Read the newest comments on the issue for what is still wrong, start from the diff of that pull request (\`gh pr diff <number>\`) rather than from the issue text, and open a new pull request that amends it. Do not revert it unless the comment asks for that." >> "$GITHUB_OUTPUT"
+            echo "::notice::#$NUMBER already has $merged merged; the agent is told to amend rather than start over."
+          else
+            echo "brief=" >> "$GITHUB_OUTPUT"
+          fi
+
       # Appended, not replaced. `--system-prompt-file` would discard Claude
       # Code's own defaults along with the GitHub context this action installs,
       # and the symptom would be an agent that works but cannot see the issue
@@ -385,6 +463,7 @@ jobs:
             - If the issue needs a decision that is not yours, comment the one question with `gh issue comment`, label it with `gh issue edit <number> --add-label needs-decision`, and stop without a pull request. The person's reply restarts you.
             - Do not stop with an unticked list. Every run ends in a pull request, a `needs-decision` question, or the issue closed.
             - If this run was started from a pull request rather than an issue, the pull request already exists: push to its branch and reply there instead.
+            ${{ steps.history.outputs.brief }}
           claude_args: |
             --allowed-tools "Bash(cd:*),Bash(pnpm:*),Bash(cargo:*),Bash(node:*),Bash(git:*),Bash(tools/:*),Bash(python3:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(gh issue view:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh workflow list:*),Bash(gh workflow view:*)"
             --append-system-prompt-file .github/claude-instructions.md
