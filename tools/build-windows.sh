@@ -10,6 +10,7 @@
 # why, and for what the target machine needs.
 
 set -euo pipefail
+cd "$(dirname "$0")/.."
 
 TARGET=x86_64-pc-windows-msvc
 PROFILE=${1:-release}
