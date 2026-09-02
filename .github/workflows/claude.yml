@@ -437,15 +437,15 @@ jobs:
             const pr = issue.closedByPullRequestsReferences.nodes.find((p) => p.state === 'OPEN')
             core.setOutput('title', issue.title)
 
-            if (pr) { core.info(`#${number}: pull request #${pr.number} is open.`); return }
-            if (labels.includes('needs-decision')) { core.info(`#${number}: stopped and asked.`); return }
-            if (issue.state === 'CLOSED') { core.info(`#${number}: closed, nothing to review.`); return }
-
-            // Why it stopped, from the action's own record, since the full
-            // transcript is hidden and #76 took a log dig to diagnose: it had
-            // thirteen permission denials and a green job. The denied
-            // commands are printed; the transcript is not, because these
-            // logs are public.
+            // What the agent was refused, from the action's own record, since
+            // the full transcript is hidden. Logged for every run and not only
+            // a stalled one: #76 delivered its pull request after nine
+            // refusals and #78's repair stalled twice after six and then
+            // eighteen, and the only run that said which commands were
+            // refused was the one that had already failed. The allowlist can
+            // only be tuned from what the successful runs were denied too.
+            // The denied commands are printed; the transcript is not, because
+            // these logs are public.
             let why = 'The action left no execution record, so it probably failed before the agent started.'
             const file = process.env.EXECUTION_FILE
             if (file && fs.existsSync(file)) {
@@ -460,6 +460,12 @@ jobs:
                       : ', and was refused nothing.')
               }
             }
+            core.info(why)
+
+            if (pr) { core.info(`#${number}: pull request #${pr.number} is open.`); return }
+            if (labels.includes('needs-decision')) { core.info(`#${number}: stopped and asked.`); return }
+            if (issue.state === 'CLOSED') { core.info(`#${number}: closed, nothing to review.`); return }
+
             core.setOutput('why', why)
             core.setOutput('stopped_early', 'true')
             core.warning(`#${number}: no pull request, no needs-decision, still open. ${why}`)
