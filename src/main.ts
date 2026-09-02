@@ -27,8 +27,9 @@ import {
   type Artwork, type Game, type Meta, type ScanResult,
 } from './library'
 import { installErrorHandlers, logInfo, logWarn, logError, renderFatal, logPath } from './log'
-import { scheduleSelfCheck } from './selfcheck'
+import { runSelfCheck, scheduleSelfCheck } from './selfcheck'
 import { declineUpdate, scheduleUpdateCheck, updateMenuItems } from './update'
+import { serialised } from './serial'
 import {
   apply as applyFilter, describe as describeFilter, searchLabel,
   PRESETS, SORTS, type Preset, type Sort,
@@ -113,9 +114,6 @@ async function main(): Promise<void> {
 
   const shell = createShell(document.getElementById('app')!)
   const backdrop = createBackdrop(shell.backdropA, shell.backdropB)
-  // Long-pressing a face button is the console convention for fullscreen, but
-  // it needs a hold timer and a pad to test it on. F11 is the keyboard one and
-  // it works everywhere today.
 
   // Library state. Rebuilt wholesale by reloadLibrary(), so adding a game
   // arrives through exactly the same path as every other one rather than a
@@ -194,7 +192,18 @@ async function main(): Promise<void> {
    */
   function openDetails(index: number): void {
     const game = gameAt(index)
-    if (game) detail.open(game, meta.get(game.providerId), artAt(index))
+    if (!game) return
+    detail.open(game, meta.get(game.providerId), artAt(index))
+    // The manifest is written when artwork resolves, which may be after the
+    // card was drawn, so it is fetched on open rather than cached. This lived
+    // in the Y handler alone, so the mouse and the legend opened a details
+    // screen that never learned where its artwork came from.
+    void artworkReport([game.providerId])
+      .then((r) => {
+        if (r[0] && detail.isOpen) detail.open(game, meta.get(game.providerId), artAt(index), r[0])
+      })
+      .catch(() => { /* a missing report is a fact that says "not yet" */ })
+    checkNow('detail')
   }
 
   const grid = createGrid(
@@ -311,7 +320,7 @@ async function main(): Promise<void> {
   }
 
   /** Rescan and rebuild everything, keeping the cursor on the same game. */
-  async function reloadLibrary(): Promise<void> {
+  const reloadLibrary = serialised(async (): Promise<void> => {
     try {
       scan = MOCK ? { games: [], providers: [], tookMs: 0 } : await scanLibrary()
       for (const p of scan.providers) if (p.error) logWarn('scan', `${p.provider}: ${p.error}`)
@@ -346,7 +355,7 @@ async function main(): Promise<void> {
     const ready = await requestMeta(appIds)
     for (const m of ready) applyMeta(m)
     logInfo('meta', `${ready.length}/${appIds.length} names already cached`)
-  }
+  })
 
   function applyMeta(m: Meta): void {
     meta.set(m.appId, m)
@@ -401,11 +410,7 @@ async function main(): Promise<void> {
       // seconds. Saying so beats a toast that implies the game is coming now.
       const cold = how.includes('starting Steam')
       toast(
-        cold
-          ? `Starting Steam, then ${label}. This takes a few seconds.`
-          : game.provider === 'steam'
-            ? `Starting ${label}`
-            : `Starting ${label}`,
+        cold ? `Starting Steam, then ${label}. This takes a few seconds.` : `Starting ${label}`,
         'info',
         cold ? 9000 : 4000,
       )
@@ -438,13 +443,6 @@ async function main(): Promise<void> {
    *  it live, same as a mouse touched later switches the legend. */
   let heldDevice: Device = 'keyboard'
 
-  /**
-   * Change the order, and remember it.
-   *
-   * Re-sorting is debounced when names are still arriving: sorting by name on a
-   * first run would otherwise reshuffle the grid under the cursor once per
-   * metadata event, which is intolerable on a pad.
-   */
   const menu = createMenu()
 
   /** Rebuild the legend for whatever is now being held. The table itself is
@@ -464,7 +462,6 @@ async function main(): Promise<void> {
       }),
     )
   }
-
 
   /**
    * Sort is a menu of its own, on its own stick, because it is a separate
@@ -513,6 +510,9 @@ async function main(): Promise<void> {
     checkNow('menu')
   }
 
+  /** Re-sorting is debounced while names are still arriving: sorting by name
+   *  on a first run reshuffled the grid under the cursor once per metadata
+   *  event, which is intolerable on a pad. */
   let resortPending: number | undefined
   function resortLater(): void {
     if (sort !== 'name') return
@@ -676,7 +676,7 @@ async function main(): Promise<void> {
     }
   }
   await refreshSettings()
-  sort = (SORTS.find((s) => s.id === savedSort)?.id ?? 'recent') as Sort
+  sort = SORTS.find((s) => s.id === savedSort)?.id ?? 'recent'
 
   const settings = createSettings(() => {
     void refreshSettings()
@@ -749,23 +749,7 @@ async function main(): Promise<void> {
       if (e.action === 'menu') { openMainMenu(); return }
       if (e.action === 'add') { openAdd(); return }
       if (e.action === 'search') { openSearch(); return }
-      if (e.action === 'y') {
-        const game = gameAt(grid.focused)
-        if (game) {
-          detail.open(game, meta.get(game.providerId), artAt(grid.focused))
-          // The manifest is written when artwork resolves, which may be after
-          // the card was drawn, so it is fetched on open rather than cached.
-          void artworkReport([game.providerId])
-            .then((r) => {
-              if (r[0] && detail.isOpen) {
-                detail.open(game, meta.get(game.providerId), artAt(grid.focused), r[0])
-              }
-            })
-            .catch(() => { /* a missing report is a fact that says "not yet" */ })
-          checkNow('detail')
-        }
-        return
-      }
+      if (e.action === 'y') { openDetails(grid.focused); return }
       if (e.action === 'sort') { openSort(); return }
     }
     // The shoulders move between the tabs along the top -- All, Favourites,
@@ -821,7 +805,7 @@ async function main(): Promise<void> {
         play: play_,
         favourite,
         reloadLibrary,
-        selfCheck: () => import('./selfcheck').then((m) => m.runSelfCheck()),
+        selfCheck: runSelfCheck,
       },
     })
   }
@@ -908,10 +892,10 @@ async function main(): Promise<void> {
             toast('Left as it is. It will be offered again next release.')
             return
           }
-          toast('Downloading…', 'info', 30_000)
+          const progress = toast('Downloading…', 'info', 30_000)
           try {
             await update.install((percent) => {
-              if (percent !== undefined) toast(`Downloading… ${percent}%`, 'info', 30_000)
+              if (percent !== undefined) progress.update(`Downloading… ${percent}%`)
             })
           } catch (e) {
             // The signature check failing lands here too, which is the whole

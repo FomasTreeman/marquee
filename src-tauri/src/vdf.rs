@@ -133,26 +133,29 @@ impl<'a> Parser<'a> {
 
     fn quoted(&mut self) -> Result<String, ParseError> {
         self.bump(); // opening quote
-        let mut out = String::new();
+                     // Bytes until the closing quote, decoded once at the end. Pushing
+                     // each byte as a char decoded UTF-8 as Latin-1, so every accented or
+                     // Japanese title came out as mojibake.
+        let mut out = Vec::new();
         loop {
             match self.bump() {
                 None => return self.err("unterminated string"),
-                Some(b'"') => return Ok(out),
+                Some(b'"') => return Ok(String::from_utf8_lossy(&out).into_owned()),
                 Some(b'\\') => match self.bump() {
-                    Some(b'n') => out.push('\n'),
-                    Some(b't') => out.push('\t'),
-                    Some(b'\\') => out.push('\\'),
-                    Some(b'"') => out.push('"'),
+                    Some(b'n') => out.push(b'\n'),
+                    Some(b't') => out.push(b'\t'),
+                    Some(b'\\') => out.push(b'\\'),
+                    Some(b'"') => out.push(b'"'),
                     // Windows paths in these files are written with single
                     // backslashes as often as escaped ones. Keep whatever
                     // followed rather than losing a path separator.
                     Some(other) => {
-                        out.push('\\');
-                        out.push(other as char);
+                        out.push(b'\\');
+                        out.push(other);
                     }
                     None => return self.err("unterminated escape"),
                 },
-                Some(b) => out.push(b as char),
+                Some(b) => out.push(b),
             }
         }
     }
@@ -293,6 +296,15 @@ mod tests {
         assert_eq!(
             folders.get("1").unwrap().str_at("path"),
             Some("D:\\SteamLibrary")
+        );
+    }
+
+    #[test]
+    fn a_title_outside_ascii_survives_intact() {
+        let v = parse("\"AppState\" { \"name\" \"Ōkami HD — 大神 絶景版\" }").unwrap();
+        assert_eq!(
+            v.root_child().unwrap().str_at("name"),
+            Some("Ōkami HD — 大神 絶景版")
         );
     }
 
