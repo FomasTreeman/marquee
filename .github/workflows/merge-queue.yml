@@ -58,6 +58,15 @@ jobs:
           # Enabling auto-merge names the pull request; a push to main does
           # not, and the queue is read instead.
           ONLY: ${{ github.event.pull_request.number }}
+          # Which queued pull request goes first. `number` is oldest first.
+          # `clicked` is the order auto-merge was enabled in, so the order
+          # something lands is set by the click that queued it -- the small
+          # green one first, the wide refactor last -- with no label or
+          # column to keep up to date. Not on by default: it is a preference
+          # nobody has needed yet, and it stays here rather than in someone's
+          # memory so that switching it is a repository variable, not a
+          # rewrite.
+          ORDER: ${{ vars.MERGE_QUEUE_ORDER || 'number' }}
         run: |
           set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then
@@ -80,9 +89,17 @@ jobs:
           if [ -n "$ONLY" ]; then
             queued="$ONLY"
           else
+            case "$ORDER" in
+              number)  key='.number' ;;
+              clicked) key='.autoMergeRequest.enabledAt' ;;
+              *)
+                echo "::error::MERGE_QUEUE_ORDER is '$ORDER'; it must be 'number' or 'clicked'. Nothing was updated."
+                exit 1
+                ;;
+            esac
             queued=$(gh pr list --state open --limit 100 \
               --json number,autoMergeRequest \
-              --jq '[.[] | select(.autoMergeRequest != null) | .number] | sort | .[]')
+              --jq "[.[] | select(.autoMergeRequest != null)] | sort_by($key) | .[].number")
           fi
           [ -n "$queued" ] || { echo "Nothing is waiting on auto-merge."; exit 0; }
 

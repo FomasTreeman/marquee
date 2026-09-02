@@ -166,6 +166,12 @@ it, and auto-merge lands it. Queue four and they land one after another
 without further clicks. A branch that conflicts with `main` is handed back to
 the agent to resolve, once per head commit, and stays in the queue.
 
+They land oldest first. If the order ever matters — a one-line fix that
+should not wait behind a refactor, or a refactor that should be rebased once
+onto everything rather than everything onto it — set the repository variable
+`MERGE_QUEUE_ORDER` to `clicked` and they land in the order auto-merge was
+enabled. Nothing else changes; delete the variable to go back.
+
 ## Releasing
 
 Nothing to do. Merging is the release — once CI is green on the merge commit.
