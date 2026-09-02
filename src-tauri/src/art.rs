@@ -248,24 +248,13 @@ fn path_for(slug: &str, kind: Kind) -> PathBuf {
     ))
 }
 
-/// Fetch, resize and store. Returns the bytes ready to serve.
 /// Build a portrait cover out of a game's other artwork.
 ///
-/// Some games publish no box art anywhere: not on Steam, not on SteamGridDB.
-/// The previous answer was to letterbox the wide capsule into the card, which
-/// looked exactly as broken as it sounds. Every card should carry a real
-/// portrait image, so when none exists, one is made.
-///
-/// A heavily blurred, darkened fill of the game's own key art, with its
-/// wordmark centred on top. It reads as deliberate rather than as a fallback,
-/// and it is built from the game's own colours so it sits correctly beside
-/// real covers.
-///
-/// **A wordmark is required.** Composing without one produces a handsome
-/// abstract blur that identifies nothing -- which is worse than the plain
-/// tinted card carrying the game's name in text, because a launcher's job is
-/// letting you find a game at a glance. So when there is no wordmark, this is
-/// not used and the card falls back to type.
+/// No portrait art anywhere -- Steam or SteamGridDB -- used to mean the wide
+/// capsule letterboxed into the card. Instead: the key art blurred and
+/// darkened with the wordmark centred, in the game's own colours, so it sits
+/// beside real covers. A wordmark is required; without one the result is an
+/// anonymous blur, which identifies less than the typed card it replaces.
 fn compose_cover(hero: &image::DynamicImage, logo: &image::DynamicImage) -> image::DynamicImage {
     use image::imageops;
 
@@ -341,7 +330,10 @@ pub enum Source {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
-    pub app_id: String,
+    /// `steam-1091500` or `sgdb-8452`: the cache key, not an appid. Named
+    /// `appId` on the wire because the interface already reads it as such.
+    #[serde(rename = "appId")]
+    pub slug: String,
     pub cover: Source,
     pub hero: Source,
     pub logo: Source,
@@ -406,10 +398,9 @@ fn steam_urls(app_id: &str, kind: Kind) -> Vec<String> {
 
 /// Which catalogue a game's artwork is being looked up in.
 ///
-/// Previously everything was keyed by Steam appid, which meant the artwork
-/// picker could only ever re-point a game at a *different Steam game* -- no
-/// help at all when the missing artwork is Steam's. A SteamGridDB entry is now
-/// addressable directly.
+/// Source-qualified: keyed by Steam appid alone, the artwork picker could only
+/// re-point a game at another Steam game, which is no help when the missing
+/// artwork is Steam's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceKey {
     Steam(String),
@@ -456,7 +447,7 @@ const KINDS: [Kind; 3] = [Kind::Cover, Kind::Hero, Kind::Logo];
 fn resolve(key: &SourceKey, sgdb_key: Option<&str>) -> Manifest {
     let slug = key.slug();
     let mut m = Manifest {
-        app_id: slug.clone(),
+        slug: slug.clone(),
         cover: Source::None,
         hero: Source::None,
         logo: Source::None,
@@ -1024,17 +1015,12 @@ mod tests {
 mod live {
     use super::*;
 
-    /// The real Battlefield 6 case, end to end.
-    ///
-    /// Its `library_600x900.jpg` is 1.6 KB of grey and its `logo.png` is the
-    /// same, while its `library_hero.jpg` is 250 KB of real art and its actual
-    /// capsule exists only under a hashed path. Every part of the fallback is
-    /// exercised by this one appid, which is why it is the fixture.
-    ///
-    ///     cargo test live -- --ignored --nocapture
     /// Prints the resolution report for a spread of real games: an old one
     /// Steam has everything for, a recent one it does not, and a couple in
-    /// between. This is the "can it certifiably tell" question, answered.
+    /// between. Battlefield 6 is the fixture that exercises every part of the
+    /// fallback: its `library_600x900.jpg` and `logo.png` are 1.6 KB of grey,
+    /// its `library_hero.jpg` is real, and its capsule exists only under a
+    /// hashed path.
     ///
     ///     cargo test live -- --ignored --nocapture
     #[test]

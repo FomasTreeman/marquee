@@ -107,10 +107,8 @@ pub fn open_uri(uri: &str) -> Result<(), String> {
     //
     // Nothing reaches here with such a character today: the appid is checked
     // for digits in `plan`. This is the second lock, for the caller who adds a
-    // provider later and builds a URI out of a name read off the disk. A
-    // legitimate steam:// URI is only ever letters, digits and a little
-    // punctuation, so nothing is lost by insisting.
-    // An allowlist rather than a list of dangerous characters: every steam://
+    // provider later and builds a URI out of a name read off the disk. An
+    // allowlist rather than a list of dangerous characters: every steam://
     // URI this app builds is letters, digits, slashes and dots, so anything
     // else is a bug worth refusing rather than a case worth supporting.
     if let Some(bad) = uri
@@ -163,21 +161,9 @@ const STARTUP_GRACE: std::time::Duration = std::time::Duration::from_millis(900)
 const STEAM_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 const STEAM_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// Make sure Steam is up, without showing its window.
-///
-/// Handing `steam://` to the system with Steam closed makes Steam start *and*
-/// open its library window in front of everything -- on a television, the
-/// launcher vanishing behind a storefront. Starting it silently first means the
-/// window never appears and the game comes up over Marquee, which is what
-/// pressing Play should look like.
-///
-/// Blocking, so it runs on the launch thread rather than the interface's.
-/// Steam accepts `steam://` some seconds after its process appears.
-///
-/// The process existing is not the same as the client being ready, and firing
-/// the URI in that window gets it silently swallowed -- press Play, Steam
-/// starts, nothing happens, press Play again and the game runs. That is exactly
-/// what was reported.
+/// Steam accepts `steam://` some seconds after its process appears. A URI
+/// fired before then is silently swallowed: press Play, Steam starts,
+/// nothing; press Play again, the game runs. That was the report.
 const STEAM_SETTLE: std::time::Duration = std::time::Duration::from_secs(4);
 /// A second attempt, for when the first still landed too early.
 const STEAM_RETRY: std::time::Duration = std::time::Duration::from_secs(8);
@@ -197,8 +183,14 @@ const STEAM_SESSION_START_TIMEOUT: std::time::Duration = std::time::Duration::fr
 
 /// Make sure Steam is up, without showing its window.
 ///
+/// Handing `steam://` to the system with Steam closed makes Steam start *and*
+/// open its library window in front of everything -- on a television, the
+/// launcher vanishing behind a storefront. Started silently first, the window
+/// never appears and the game comes up over Marquee.
+///
 /// Returns true when Steam had to be started, because that is the case where
-/// the launch needs to be more careful about timing.
+/// the launch needs to be more careful about timing. Blocking, so it runs on
+/// the launch thread rather than the interface's.
 fn ensure_steam_ready() -> bool {
     use crate::library::steam::Steam;
 

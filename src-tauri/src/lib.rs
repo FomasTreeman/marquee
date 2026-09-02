@@ -221,16 +221,9 @@ fn set_art_source(
 /// Search for artwork to borrow, from both catalogues.
 ///
 /// Answers "whose artwork should this use", where `search_games` answers
-/// "which game is this". SteamGridDB leads because it is the source that has
-/// what Steam is missing -- that is the whole reason this screen exists.
-///
-/// Steam follows rather than being absent. The original argument for leaving
-/// it out was that the obvious Steam match is the game itself, and re-pointing
-/// a game at its own appid changes nothing. True, and it was the bug that made
-/// three games look fixed when nothing had happened -- but it only rules out
-/// the *obvious* match. A game listed on Steam under a name you would not
-/// guess, or a regional or bundled edition with different art, is a real
-/// answer, and refusing to show any Steam entry threw those away too.
+/// "which game is this". SteamGridDB leads because it has what Steam lacks.
+/// Steam stays in the list: dropping it once hid regional and bundled
+/// editions with different art, not just the game's own appid.
 #[tauri::command]
 async fn search_artwork(
     term: String,
@@ -391,7 +384,7 @@ fn set_custom_title(
     out
 }
 
-/// Settings the interface can read. Only one so far.
+/// Settings the interface can read.
 #[tauri::command]
 fn get_settings(
     store: tauri::State<'_, std::sync::Arc<store::Store>>,
@@ -684,15 +677,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        // Over-the-air updates.
-        //
-        // The plugin does the whole dangerous half: it fetches the manifest,
-        // verifies the bundle's signature against the public key in
-        // tauri.conf.json, and only then hands anything to the installer. A
-        // compromised host therefore serves a bundle that will not install
-        // rather than one that runs. Everything Marquee adds is *policy* --
-        // when to ask, and what the user is told -- and that lives in
-        // src/update.ts. See docs/UPDATES.md.
+        // Over-the-air updates. The plugin verifies the bundle against the
+        // public key in tauri.conf.json before the installer sees it, so a
+        // compromised host serves a bundle that will not install. Marquee
+        // adds only policy (src/update.ts). See docs/UPDATES.md.
         .plugin(tauri_plugin_updater::Builder::new().build())
         // Needed only so the app can restart itself after an update lands.
         .plugin(tauri_plugin_process::init())

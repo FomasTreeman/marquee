@@ -164,6 +164,7 @@ fn roots() -> Vec<PathBuf> {
         out.push(h.join("GOG Games"));
     }
 
+    // Only some platforms' arms read it.
     let _ = &home;
     out.retain(|p| p.is_dir());
     out

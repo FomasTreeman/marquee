@@ -55,6 +55,7 @@ impl Steam {
 
         #[cfg(target_os = "windows")]
         {
+            // Only the other arms read it.
             let _ = &home;
             if let Some(p) = windows_steam_path() {
                 out.push(p);
