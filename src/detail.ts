@@ -18,6 +18,7 @@ import {
 import { toast } from './toast'
 import { logInfo } from './log'
 import { inApp } from './host'
+import { el } from './dom'
 
 export interface DetailView {
   readonly isOpen: boolean
@@ -25,15 +26,6 @@ export interface DetailView {
   close(): void
   /** Returns true if the action was consumed. */
   handle(action: string): boolean
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K, className?: string, parent?: HTMLElement,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag)
-  if (className) node.className = className
-  parent?.appendChild(node)
-  return node
 }
 
 const SOURCE_NAMES: Record<string, string> = {
@@ -102,20 +94,15 @@ export function renameIntent(
 ): { kind: 'none' } | { kind: 'clear' } | { kind: 'set'; title: string } {
   const next = typed.trim()
   if (!next) return { kind: 'clear' }
-  if (next === (showing ?? '').trim()) return { kind: 'none' }
+  if (next === showing.trim()) return { kind: 'none' }
   return { kind: 'set', title: next }
 }
 
 /**
  * Reveal the rename field, then focus it a frame later.
  *
- * WebKit will not honour `.focus()` on an element that is still
- * `display: none` at the moment the call runs, and clearing `hidden` does not
- * repaint until the next frame -- so focusing in the same tick as revealing
- * silently does nothing. picker.ts and settings.ts already learned this and
- * defer with `requestAnimationFrame`; rename skipped it, so the field opened
- * looking focused while a physical keyboard typed into nothing.
- *
+ * WebKit ignores `.focus()` on an element still `display: none` this tick,
+ * so the field opened looking focused while a keyboard typed into nothing.
  * Pure so the ordering can be tested; a real frame cannot be.
  */
 export function revealThenFocus(
@@ -128,17 +115,11 @@ export function revealThenFocus(
 }
 
 /**
- * Which action button `left`/`right` should move to next, wrapping at either
- * end. `up`/`down` are already spoken for here -- they scroll the
- * description -- so unlike settings.ts's `nextSettingsFocus` this one only
- * answers to the other pair, and there is no disabled state to skip: every
- * button in the row is always clickable.
- *
- * Pure so it is checkable without a DOM, per this project's no-jsdom
- * convention. Before this, `handle()` sent every `a` straight to `onPlay()`
- * and left `left`/`right` unhandled -- swallowed along with everything else
- * while the view is open -- so there was no route to Find artwork or Rename,
- * and no way to move between them, at all.
+ * Which action button `left`/`right` should move to next, wrapping. `up` and
+ * `down` scroll the description, and every button in the row is always
+ * clickable, so there is nothing to skip. Before this every `a` went to
+ * `onPlay()` and `left`/`right` were swallowed, so Find artwork and Rename
+ * were unreachable on a pad.
  */
 export function nextActionFocus(action: string, current: number, count: number): number | undefined {
   if (count <= 0) return undefined
@@ -285,7 +266,7 @@ export function createDetail(hooks: DetailHooks): DetailView {
   async function commitRename(): Promise<void> {
     const game = current
     if (!game) return
-    const intent = renameIntent(game.title ?? '', renameField.value)
+    const intent = renameIntent(game.title, renameField.value)
     endRename()
     if (intent.kind === 'none') return
     const title = intent.kind === 'set' ? intent.title : null

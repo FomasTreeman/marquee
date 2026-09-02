@@ -46,23 +46,22 @@ tauri-plugin-dialog = "2"
 # off-brand pad work without a per-device patch. See src/input.rs.
 gilrs = "0.11"
 
-# Steam's store endpoints, for names and metadata. rustls rather than the
-# system TLS stack so a Linux build does not depend on which OpenSSL the
-# distribution shipped.
-# Bundled so there is no system SQLite dependency on any of the three
-# platforms, and so the version is ours rather than the distribution's.
-rusqlite = { version = "0.32", features = ["bundled"] }
-
 # Bundled so there is no system SQLite dependency to differ across the three
 # platforms. docs/PLAN.md §8: user data must survive, so it gets a real
 # database with real migrations rather than a JSON file.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Artwork resizing on ingest. Only the codecs we actually fetch, so the build
 # does not carry decoders for formats Steam never serves.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
+# Steam's store endpoints, for names and metadata. rustls rather than the
+# system TLS stack so a Linux build does not depend on which OpenSSL the
+# distribution shipped.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
-tauri-plugin-process = "2.0.0-rc.1"
+
+# Only so the app can restart itself after an update lands.
+tauri-plugin-process = "2"
 
 [target.'cfg(windows)'.dependencies]
 # Only for SetThreadExecutionState, to stop the screen blanking while someone

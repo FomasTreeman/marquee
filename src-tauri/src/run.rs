@@ -16,14 +16,18 @@
 //! Restoring the window Marquee minimised for the game is a different
 //! problem, and playtime's own answer does not solve it: nothing reads
 //! `localconfig.vdf` until the *next* scan, which can be minutes away. On
-//! Windows, Steam also keeps the running appid live in the registry -- the
-//! same key `Steam::is_running` already reads -- updated the instant a game
-//! starts or stops, so `start` polls that to know when a hand-off session
-//! ends. macOS and Linux have no equivalent live signal, so a Steam launch
-//! there still leaves Marquee minimised until the user switches back by hand.
-//! Before this, *no* Steam launch on any platform brought the window back --
-//! only a manually-added game did, because the first attempt at this (#63)
-//! only ever watched a child process we owned (#90).
+//! Windows, Steam also keeps the running appid live in the registry --
+//! updated the instant a game starts or stops -- so `start` polls that to
+//! know when a hand-off session ends. macOS and Linux have no equivalent
+//! live signal, so a Steam launch there still leaves Marquee minimised until
+//! the user switches back by hand. Before this, *no* Steam launch on any
+//! platform brought the window back -- only a manually-added game did,
+//! because the first attempt at this (#63) only ever watched a child process
+//! we owned (#90). The first attempt at fixing *that* (#94) read the appid
+//! from the wrong registry key -- nested under `ActiveProcess`, by analogy
+//! with the pid `Steam::is_running` reads there -- so it still never fired
+//! against a real session; see `Steam::running_app_id` for where it actually
+//! lives.
 //!
 //! **Manual** games spawn directly, so we own the child and can time the
 //! session exactly.
@@ -34,7 +38,7 @@ use std::process::Command;
 use serde::Serialize;
 
 use crate::library::Game;
-use crate::{log_info, log_warn};
+use crate::{log_if_err, log_info, log_warn};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum Launch {
@@ -110,10 +114,8 @@ pub fn open_uri(uri: &str) -> Result<(), String> {
     //
     // Nothing reaches here with such a character today: the appid is checked
     // for digits in `plan`. This is the second lock, for the caller who adds a
-    // provider later and builds a URI out of a name read off the disk. A
-    // legitimate steam:// URI is only ever letters, digits and a little
-    // punctuation, so nothing is lost by insisting.
-    // An allowlist rather than a list of dangerous characters: every steam://
+    // provider later and builds a URI out of a name read off the disk. An
+    // allowlist rather than a list of dangerous characters: every steam://
     // URI this app builds is letters, digits, slashes and dots, so anything
     // else is a bug worth refusing rather than a case worth supporting.
     if let Some(bad) = uri
@@ -212,21 +214,9 @@ const STARTUP_GRACE: std::time::Duration = std::time::Duration::from_millis(900)
 const STEAM_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 const STEAM_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// Make sure Steam is up, without showing its window.
-///
-/// Handing `steam://` to the system with Steam closed makes Steam start *and*
-/// open its library window in front of everything -- on a television, the
-/// launcher vanishing behind a storefront. Starting it silently first means the
-/// window never appears and the game comes up over Marquee, which is what
-/// pressing Play should look like.
-///
-/// Blocking, so it runs on the launch thread rather than the interface's.
-/// Steam accepts `steam://` some seconds after its process appears.
-///
-/// The process existing is not the same as the client being ready, and firing
-/// the URI in that window gets it silently swallowed -- press Play, Steam
-/// starts, nothing happens, press Play again and the game runs. That is exactly
-/// what was reported.
+/// Steam accepts `steam://` some seconds after its process appears. A URI
+/// fired before then is silently swallowed: press Play, Steam starts,
+/// nothing; press Play again, the game runs. That was the report.
 const STEAM_SETTLE: std::time::Duration = std::time::Duration::from_secs(4);
 /// A second attempt, for when the first still landed too early.
 const STEAM_RETRY: std::time::Duration = std::time::Duration::from_secs(8);
@@ -246,8 +236,14 @@ const STEAM_SESSION_START_TIMEOUT: std::time::Duration = std::time::Duration::fr
 
 /// Make sure Steam is up, without showing its window.
 ///
+/// Handing `steam://` to the system with Steam closed makes Steam start *and*
+/// open its library window in front of everything -- on a television, the
+/// launcher vanishing behind a storefront. Started silently first, the window
+/// never appears and the game comes up over Marquee.
+///
 /// Returns true when Steam had to be started, because that is the case where
-/// the launch needs to be more careful about timing.
+/// the launch needs to be more careful about timing. Blocking, so it runs on
+/// the launch thread rather than the interface's.
 fn ensure_steam_ready() -> bool {
     use crate::library::steam::Steam;
 
@@ -301,15 +297,21 @@ fn watch_steam_session(
     mut running_app_id: impl FnMut() -> Option<u32>,
 ) {
     let start_deadline = std::time::Instant::now() + start_timeout;
-    while running_app_id() != Some(appid) {
+    let mut last_seen = running_app_id();
+    while last_seen != Some(appid) {
         if std::time::Instant::now() >= start_deadline {
+            // Logged with what was actually last read, not just that it gave
+            // up: #94 gave up on every session because the registry read was
+            // wrong and always came back empty, and "never showed up" alone
+            // looked identical to a game that was merely slow to start.
             log_info!(
                 "run",
-                "{title} never showed up as Steam's running game; not tracking its session"
+                "{title} never showed up as Steam's running game (last read {last_seen:?}, wanted {appid}); not tracking its session"
             );
             return;
         }
         std::thread::sleep(poll);
+        last_seen = running_app_id();
     }
     log_info!(
         "run",
@@ -356,7 +358,9 @@ pub fn start(
                         "run",
                         "asking Steam for {title} again, in case the first was early"
                     );
-                    let _ = open_uri(&uri);
+                    // Not a failure to report: the first request already
+                    // went through the same path and was accepted.
+                    log_if_err!("run", open_uri(&uri), "second request for {title}");
                 }
 
                 // Steam owns the game from here, so there is no child to
@@ -430,6 +434,8 @@ pub fn start(
                 // here for the real exit -- not just the startup check above
                 // -- is what makes "quit to desktop" bring Marquee back
                 // instead of leaving it minimised until the next Alt-Tab (#63).
+                // The exit status is the game's business; a crash at the end
+                // of a session is still the end of a session.
                 let _ = child.wait();
                 log_info!("run", "{title} session ended");
                 on_exit();

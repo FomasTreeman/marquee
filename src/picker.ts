@@ -14,6 +14,7 @@
  */
 import { searchGames, searchArtwork, coverFor, type SearchHit } from './library'
 import { logWarn } from './log'
+import { el } from './dom'
 
 const DEBOUNCE_MS = 280
 
@@ -70,15 +71,6 @@ export interface Picker {
   open(request: PickRequest): void
   close(): void
   handle(action: string): boolean
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K, className?: string, parent?: HTMLElement,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag)
-  if (className) node.className = className
-  parent?.appendChild(node)
-  return node
 }
 
 export function createPicker(onClose?: () => void): Picker {

@@ -171,7 +171,10 @@ export function describe(
   sort: Sort = 'recent',
 ): string {
   const label = PRESETS.find((p) => p.id === preset)?.label ?? 'All'
-  const order = sort === 'recent' ? '' : ` · ${SORTS.find((s) => s.id === sort)?.label}`
+  // A sort the build does not know -- saved by another version -- reads as
+  // the default it falls back to, not as the word "undefined" in the corner.
+  const known = SORTS.find((s) => s.id === sort)
+  const order = !known || known.id === 'recent' ? '' : ` · ${known.label}`
   if (query.trim()) return `“${query.trim()}” · ${shown} of ${total}${order}`
   if (preset === 'all') return `${total} ${total === 1 ? 'game' : 'games'}${order}`
   return `${label} · ${shown}${order}`

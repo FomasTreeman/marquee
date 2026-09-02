@@ -178,15 +178,10 @@ fn loose(name: &str) -> String {
 
 async fn search_steam(term: String) -> Result<Vec<SearchHit>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(std::time::Duration::from_secs(10))
-            .user_agent(concat!(
-                "Marquee/",
-                env!("CARGO_PKG_VERSION"),
-                " (game launcher)"
-            ))
-            .build()
-            .map_err(|e| e.to_string())?;
+        // Shorter than the default: this is behind a search box, and ten
+        // seconds is already longer than anyone waits for a list.
+        let client = crate::meta::http_client_with(std::time::Duration::from_secs(10))
+            .ok_or("no HTTP client")?;
 
         let url = "https://store.steampowered.com/api/storesearch/";
         let response = client

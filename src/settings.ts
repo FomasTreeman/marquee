@@ -24,19 +24,13 @@ import { hostInfo } from './host'
 import { checkForUpdate } from './update'
 import { logInfo, logWarn } from './log'
 import { toast } from './toast'
+import { el } from './dom'
 
 /**
- * Which focusable index `up`/`down` should land on next, skipping anything
- * disabled -- landing the cursor on a button that does nothing is the same
- * class of bug as not moving it at all. `undefined` for a direction that is
- * not a move, or when nothing in the list can take focus.
- *
- * A pure decision so it is checkable without a DOM, per this project's
- * no-jsdom convention. This used to be `settingsScrollDelta`, which scrolled
- * the panel by a fixed pixel amount on `up`/`down` -- so the left stick moved
- * the view, but nothing was ever actually focused, and `A` always did the one
- * thing it had always done (save the SteamGridDB key) no matter where you had
- * scrolled to. Settings could be scrolled but not driven.
+ * Which control `up`/`down` lands on next, skipping disabled ones; `undefined`
+ * when the action is not a move or nothing can take focus. This replaced
+ * `settingsScrollDelta`, which scrolled the panel without focusing anything,
+ * so `A` always saved the SteamGridDB key wherever you had scrolled to.
  */
 export function nextSettingsFocus(
   action: string,
@@ -64,15 +58,6 @@ export interface SettingsView {
   open(): void
   close(): void
   handle(action: string): boolean
-}
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K, className?: string, parent?: HTMLElement,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag)
-  if (className) node.className = className
-  parent?.appendChild(node)
-  return node
 }
 
 /** A titled block with an explanation and its own controls. */
@@ -368,8 +353,8 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
     testOut.textContent = seen.join('\n')
   }
 
-  testButton.onclick = () => {
-    testing = !testing
+  function setTesting(on: boolean): void {
+    testing = on
     testButton.textContent = testing ? 'Stop testing' : 'Test a controller'
     testButton.classList.toggle('action-primary', testing)
     testOut.hidden = !testing
@@ -382,6 +367,7 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
       (raw) => note(`unmapped  ${raw}   <- this is why that button does nothing`),
     )
   }
+  testButton.onclick = () => setTesting(!testing)
 
   // --- profile --------------------------------------------------------
   const profile = section(
@@ -512,6 +498,9 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
     open = false
     root.hidden = true
     field.blur()
+    // Closing with the test running left it tapping every press in the
+    // library, and the panel reopened mid-test with a button that said Stop.
+    setTesting(false)
     // The field this screen owns is the only reason the on-screen keyboard is
     // ever attached here; leaving it up after the field is gone is issue #18.
     onClose?.()

@@ -227,38 +227,21 @@ export async function createInput(
   }
 
   /**
-   * Exactly one path drives, and it is whichever knows about more hardware.
-   *
-   * The native path is preferred: lower latency, repeat that survives a busy
-   * webview, and it still works when a game takes focus. But preferring it
-   * unconditionally was wrong in a way that took a while to see. Standing the
-   * webview down as soon as *one* pad delivered natively left every pad gilrs
-   * could not read with nothing driving it at all -- so a DualSense working
-   * perfectly was the reason an Xbox controller plugged in beside it was not
-   * recognised in the slightest.
-   *
-   * The two see different hardware because they are genuinely different code:
-   * gilrs reads Windows.Gaming.Input, while the webview is Chromium reading
-   * XInput, raw HID and DirectInput. Either can see something the other cannot.
-   *
-   * So: count. If the webview can drive more pads than the native path has
-   * found, it takes over completely -- completely, because running both is how
-   * every press ends up happening twice.
+   * Exactly one path drives: whichever sees more hardware. Native is
+   * preferred (latency, repeat, survives a game taking focus), but gilrs
+   * reads Windows.Gaming.Input and the webview reads XInput, HID and
+   * DirectInput, so a DualSense working natively once hid an Xbox pad gilrs
+   * could not see. Count both; the webview takes over completely, because
+   * both at once is every press twice.
    */
   let nativePads = (await padStatus()).connected
 
   /**
-   * Only a delivered event proves the native path works.
-   *
-   * `connected > 0` is a claim, not evidence, and on Windows it can be both
-   * true and useless at once. From a real report: gilrs raised a Connected
-   * event so the count read 1, enumerated no devices at all, and never sent a
-   * single button. Counting that as coverage stood the webview down -- which
-   * could see the controller perfectly -- and left nothing driving a pad that
-   * works fine in Steam on the same machine.
-   *
-   * So the count only decides *how much* the native path covers. Whether it
-   * works at all is answered by whether anything has arrived from it.
+   * Only a delivered event proves the native path works. `connected > 0` is
+   * a claim, not evidence: gilrs has reported one pad, enumerated nothing and
+   * never sent a button, and counting that stood the webview down. The count
+   * says how much native covers; whether it works at all is whether anything
+   * has arrived from it.
    */
   const nativeHandlesEverything = () =>
     nativeDelivered && nativePads >= (webPad?.usable() ?? 0)
@@ -296,7 +279,7 @@ export function webviewPads(): string[] {
 /** Everything watching the raw stream, for the tester in Settings. */
 const taps = new Set<(action: Action, device: Device) => void>()
 
-/** Called from the dispatch below, so the tap sees exactly what the app sees. */
+/** Called from each dispatch above, so the tap sees exactly what the app sees. */
 function tap(action: Action, device: Device): void {
   for (const t of taps) t(action, device)
 }
@@ -317,12 +300,17 @@ export function onAnyInput(
 ): () => void {
   taps.add(onAction)
   let stopRust: (() => void) | undefined
+  let stopped = false
   if (inApp) {
+    // Stopping before listen() has resolved -- a quick toggle of the test --
+    // left the Rust listener attached for the life of the window, reporting
+    // to a panel that had gone.
     void listen<string>('input-unmapped', (e) => onUnmapped(e.payload))
-      .then((un) => { stopRust = un })
+      .then((un) => { if (stopped) un(); else stopRust = un })
       .catch((e) => logWarn('input', 'could not watch for unmapped buttons', e))
   }
   return () => {
+    stopped = true
     taps.delete(onAction)
     stopRust?.()
   }

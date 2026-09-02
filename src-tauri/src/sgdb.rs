@@ -109,10 +109,6 @@ impl Want {
     }
 }
 
-/// The best asset URL for a Steam appid, or None.
-///
-/// Never an error: this is a fallback, and a fallback that can fail loudly is
-/// worse than one that quietly does not apply.
 /// How many community submissions to consider for one asset.
 ///
 /// Bounded rather than unlimited: a popular game can have hundreds, each one is

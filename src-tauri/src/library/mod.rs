@@ -124,15 +124,6 @@ pub fn scan(store: &Store) -> ScanResult {
         games.extend(found);
     }
 
-    // Recently played first, then most played, then installed, then appid.
-    //
-    // Deliberately NOT alphabetical. Titles arrive progressively from the
-    // metadata worker, so an alphabetical library would reshuffle itself under
-    // the cursor for several minutes on first run -- which is intolerable on a
-    // pad. This order is known the instant the scan finishes and never
-    // changes, so names fill in without anything moving. It is also what every
-    // console does by default, and it puts the games worth enriching first at
-    // the front of the queue.
     // User flags are merged after scanning, never during it. The providers do
     // not know this table exists, which is how docs/PLAN.md §8 guarantees a
     // scanner can never clear a favourite.
@@ -157,6 +148,13 @@ pub fn scan(store: &Store) -> ScanResult {
     // way back: a hidden game with no route to unhide it is a trap. Filtering
     // is the view's job, and it has a Hidden preset for exactly this.
 
+    // Favourites, then recently played, most played, installed, appid.
+    //
+    // Deliberately not alphabetical. Titles arrive progressively from the
+    // metadata worker, so an alphabetical library would reshuffle itself
+    // under the cursor for minutes on first run. Everything here is known the
+    // instant the scan finishes, so names fill in without anything moving --
+    // and it puts the games worth enriching first at the front of the queue.
     games.sort_by(|a, b| {
         b.favourite
             .cmp(&a.favourite)
@@ -171,20 +169,6 @@ pub fn scan(store: &Store) -> ScanResult {
         providers: results,
         took_ms: started.elapsed().as_millis() as u64,
     }
-}
-
-/// Sort "The Witcher 3" under W, and lowercase so case never splits the list.
-/// Unused until alphabetical sorting becomes a user-facing option; kept
-/// because getting it right is fiddlier than it looks.
-#[allow(dead_code)]
-fn sort_key(title: &str) -> String {
-    let t = title.trim();
-    for article in ["The ", "A ", "An "] {
-        if let Some(rest) = t.strip_prefix(article) {
-            return rest.to_lowercase();
-        }
-    }
-    t.to_lowercase()
 }
 
 #[cfg(test)]

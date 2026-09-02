@@ -19,7 +19,13 @@ function ensureHost(): HTMLElement {
   return host
 }
 
-export function toast(message: string, kind: 'info' | 'error' = 'info', ms = 4000): void {
+/** A toast that is still on screen, for updating its text in place. */
+export interface Toast {
+  /** Replace the text and restart the clock. Nothing happens once it has gone. */
+  update(message: string): void
+}
+
+export function toast(message: string, kind: 'info' | 'error' = 'info', ms = 4000): Toast {
   const el = document.createElement('div')
   el.className = `toast toast-${kind}`
   el.textContent = message
@@ -28,8 +34,26 @@ export function toast(message: string, kind: 'info' | 'error' = 'info', ms = 400
 
   // Fade, then remove. Removing on transitionend alone would leak an element
   // per toast if the window is hidden and the transition never fires.
-  window.setTimeout(() => {
-    el.classList.add('is-leaving')
-    window.setTimeout(() => el.remove(), 400)
-  }, ms)
+  let leaving: number | undefined
+  let gone = false
+  const arm = (): void => {
+    if (leaving !== undefined) window.clearTimeout(leaving)
+    leaving = window.setTimeout(() => {
+      gone = true
+      el.classList.add('is-leaving')
+      window.setTimeout(() => el.remove(), 400)
+    }, ms)
+  }
+  arm()
+
+  return {
+    // Downloading an update reported progress with a fresh toast per chunk,
+    // which stacked "Downloading… 41%" thirty deep down the side of the
+    // screen. One toast, edited, reads as a counter.
+    update(next) {
+      if (gone) return
+      el.textContent = next
+      arm()
+    },
+  }
 }

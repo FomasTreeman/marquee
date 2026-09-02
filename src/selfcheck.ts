@@ -357,21 +357,10 @@ export function runSelfCheck(): Check[] {
   // is hard to reach and easy to break, and its buttons are the only things in
   // the interface that can be silently unclickable.
   //
-  // Only the TOPMOST one. The picker opens from the detail view, so the detail
-  // view stays open underneath -- and its buttons are then correctly
-  // unreachable. Asserting on it reported a failure while the interface was
-  // working exactly as designed, which is the second time that mistake has
-  // been made here and the reason the rule below is written down.
-  // Innermost first. `.add` is shared by the picker and the settings panel,
-  // and only one of them is ever open.
-  const overlays: Array<[string, string]> = [
-    ['.add:not([hidden])', 'panel'],
-    ['.detail', 'detail view'],
-  ]
-  const topmost = overlays.find(([sel]) => {
-    const el = document.querySelector<HTMLElement>(sel)
-    return el && !el.hidden
-  })
+  // Only the TOPMOST one. The picker opens from the detail view, which stays
+  // open underneath with its buttons correctly unreachable; asserting on it
+  // reported a failure while the interface was working exactly as designed.
+  const topmost = openOverlay()
   for (const [sel, name] of topmost ? [topmost] : []) {
     const overlay = document.querySelector<HTMLElement>(sel)
     if (!overlay || overlay.hidden) continue
@@ -380,7 +369,10 @@ export function runSelfCheck(): Check[] {
       r.width >= window.innerWidth - 1 && r.height >= window.innerHeight - 1,
       `${Math.round(r.width)}x${Math.round(r.height)} of ${window.innerWidth}x${window.innerHeight}`))
 
+    // Settings scrolls, so a button below the fold is out of view, not
+    // painted over; only what is on screen can be blocked.
     const buttons = [...overlay.querySelectorAll<HTMLElement>('.action, .add-result')]
+      .filter((b) => { const br = b.getBoundingClientRect(); return br.bottom > 0 && br.top < window.innerHeight })
     const blocked = buttons.map((b) => ({ b, hit: reachable(b) })).filter((x) => !x.hit.ok)
     if (buttons.length) {
       out.push(check(`${name} buttons are reachable`, blocked.length === 0,
