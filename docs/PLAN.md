@@ -1,9 +1,14 @@
 # Marquee — build plan
 
-> **Marquee** is a placeholder name. An arcade cabinet's marquee is the lit
-> panel above the screen: the art *is* the interface. It fits the design, but
-> pick the real name before the first public commit — renaming a project after
-> people have installed it is the one refactor you cannot do.
+> An arcade cabinet's marquee is the lit panel above the screen: the art *is*
+> the interface. The name began as a placeholder and stayed, because a launcher
+> that is installed in a lounge is past the point where renaming is free.
+>
+> **How to read this.** It is the plan the project was built from, kept as the
+> record of why things are the way they are rather than rewritten as a spec.
+> Ticks and *settled since* notes mark where reality caught up with it; where
+> a paragraph and the code disagree, the code is right and the paragraph is
+> history. The other documents in this directory describe what exists.
 
 A cross-platform, controller-first game launcher. One grid, every store, pitch
 black, cover art doing the work.
@@ -188,6 +193,12 @@ Mitigations, all of which are cheap if done from the start and expensive later:
   same reason: **the bugs that matter are the ones that only appear on a
   machine you are not sitting at.**
 
+  *Settled since: not built, and something better was.* Screenshot diffing
+  catches a change, not a bug, and every hard bug so far has been silent in a
+  way a screenshot did not show either. The self-check in
+  [DEBUGGING.md](DEBUGGING.md) hit-tests what is painted instead, and runs on
+  the machine that matters.
+
 ---
 
 ## 4. Architecture
@@ -206,7 +217,7 @@ Mitigations, all of which are cheap if done from the start and expensive later:
 │  library    provider registry, scan orchestration     │
 │  store      SQLite (rusqlite, bundled)                │
 │  art        fetch, resize, content-addressed cache    │
-│  meta       Steam CDN / SteamGridDB / IGDB            │
+│  meta       Steam CDN / SteamGridDB                   │
 │  run        process spawn, playtime, session watch    │
 └───────────────────────────────────────────────────────┘
 ```
@@ -245,10 +256,15 @@ carelessly. Non-negotiable rules:
 
 - Resize **on ingest** to exactly the displayed size (and 2×), store on disk,
   never resize at paint time.
-- Serve through a custom `asset://` protocol handler. Never base64 into the
+- Serve through a custom `art://` protocol handler. Never base64 into the
   DOM; never store image bytes in SQLite.
-- Every `<img>` gets explicit `width`/`height`, `loading="lazy"`,
-  `decoding="async"`. `content-visibility: auto` on off-screen rows.
+- Every `<img>` gets explicit `width`/`height` and `decoding="async"`. Not
+  `loading="lazy"` in the grid, though this plan first said so: the grid is
+  virtualised, so only the cards in view exist, and the browser's idea of
+  "near the viewport" comes from layout that pooled, transformed slots do not
+  give it. Covers stayed blank until the hero logo — the one image that was
+  never lazy — had appeared. The picker's thumbnails are lazy; those are in
+  a real scrolling list.
 - The hero backdrop swaps on every selection change: preload neighbours,
   cross-fade with `opacity` only. Compositor-only properties, always.
 - **The film grain must be a static tiled texture.** Not an animated canvas,
@@ -578,8 +594,9 @@ launches a game with a controller. A hand-added executable does the same.
 
 ### Phase 2 — Art, metadata, and the add-a-game flow ✅ *(macOS)*
 
-Steam appdetails and CDN (no keys), SteamGridDB and RAWG (BYO keys). Ingest
-resizing, content-addressed cache, manual override.
+Steam appdetails and CDN (no keys), SteamGridDB (BYO key). RAWG was planned
+here and never needed. Ingest resizing, content-addressed cache, manual
+override.
 
 Plus the matching overlay from §5 — pick an executable, guess a title, search,
 choose from a short list, attach art. Under this scope that flow is not a side
@@ -610,7 +627,9 @@ from Steam's own records without anything watching.
 Plus the thing Phases 1 and 2 deferred and must not defer again: **Windows and
 Linux actually being run.** Everything is written for all three and CI compiles
 all three, but compiling is not running, and §3 is explicit that a pass on one
-engine is not a pass.
+engine is not a pass. *Settled since, half of it:* Windows is where the app
+lives day to day and where most bugs are now reported from. Linux builds and
+is released, and nobody has run it.
 
 The on-screen keyboard landed early, at the end of Phase 2, because without it
 the headline feature of §5 needed a desk — which contradicts the premise.
@@ -665,10 +684,12 @@ either way and the only new part would be where the bytes go.
 
 ### Phase 4 — Release engineering
 
-Deferred while the project is private, but the work is known: Windows code
-signing (or SmartScreen will scare off most users), macOS notarization (needs a
-paid Apple Developer account), Linux packaging (AppImage plus Flatpak), crash
-reporting, and over-the-air updates.
+Mostly done: every merge to `main` builds, signs and publishes installers for
+all three platforms, and installed copies update themselves
+([AUTOMATION.md](AUTOMATION.md), [UPDATES.md](UPDATES.md)). Still open:
+Windows code signing (or SmartScreen will scare off most users), macOS
+notarization (needs a paid Apple Developer account), Flatpak, and crash
+reporting.
 
 **Exit:** somebody who is not us installs it, on a machine we have never
 touched, without instructions.
@@ -680,12 +701,12 @@ keypair, the manifest, the release workflow, and the two policy rules that
 matter more than the plumbing: never interrupt a session, and always say what
 changed and let it be refused.
 
-What remains is not code. The endpoint has to be publicly readable, because a
-private repository's release assets need a token and there is nowhere safe to
-put one in a desktop app. That is the constraint tying updates to the decision
-in §12.3. The private signing key must also be backed up before anything ships:
-lose it and no existing install can ever be updated again, since each one only
-trusts bundles signed by the key it was compiled against.
+The endpoint has to be publicly readable, because a private repository's
+release assets need a token and there is nowhere safe to put one in a desktop
+app; that is one of the reasons the repository is public. The private signing
+key must also be backed up: lose it and no existing install can ever be updated
+again, since each one only trusts bundles signed by the key it was compiled
+against.
 
 Still open, and worth doing before the first real release: running the
 self-check on the first launch after an update and keeping the previous version
@@ -745,25 +766,15 @@ flow has proven annoying for it in practice.
 
 ## 12. Open decisions
 Most of what was open here has been settled: Steam is the only automated
-provider, IGDB is out in favour of key-only sources, the repository stays
-private, and platforms are no longer sequenced.
+provider, IGDB is out in favour of key-only sources, platforms are no longer
+sequenced, the name stayed, and releases are GitHub Releases on a public
+repository because the updater needs an endpoint it can read without a token.
 
 What is left:
 
-1. **Name.** "Marquee" is a placeholder. It costs nothing to change now and it
-   is unfixable once anyone has installed the thing, so decide before the
-   interface starts saying it out loud.
-
-2. **Licence.** Deferred. The repository is private and nothing is published,
-   so this only needs answering if and when it goes public. Both sibling
-   projects are MIT, which is the obvious default if it ever matters.
-
-3. **Where releases are hosted.** Tied to the licence question and forced by
-   the updater, not by the code: a private repository's release assets need a
-   token to download, so an over-the-air update needs either a public
-   repository, public releases on a private one, or a bucket. Phase 4 lays out
-   the three. Nothing depends on it until we want to ship to someone who is not
-   us.
+1. **Licence.** Still not chosen. Both sibling projects are MIT, which is the
+   obvious default; until a `LICENSE` file exists the code is public but not
+   licensed, which means nobody else may legally use it.
 
 *Settled since: the rename UI. It is built -- Rename sits in the game details
 screen, edits the title in place where it is shown, and takes the on-screen

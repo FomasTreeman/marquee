@@ -9,6 +9,11 @@ Produces `src-tauri/target/x86_64-pc-windows-msvc/release/marquee.exe`, around
 6 MB. Copy it to a Windows machine and run it — the interface is compiled into
 the binary, so nothing else travels with it.
 
+Real releases are built on a Windows runner by `release.yml` and arrive as an
+`.msi` and an NSIS `-setup.exe`; this script is for checking a change on the
+Windows half of the code before pushing it, from the machine you are sitting
+at.
+
 ## Setup, once
 
 ```bash
@@ -39,7 +44,8 @@ which is C, and the WebView2 bindings.
 - **An installer.** Tauri's MSI and NSIS bundlers need Windows tooling. This is
   a bare `.exe`, which is what you want for testing anyway.
 - **A signature.** Unsigned binaries get a SmartScreen warning: *More info →
-  Run anyway*. Signing needs a certificate and is a Phase 4 problem.
+  Run anyway*. Signing needs a certificate; see "Still open" in
+  [UPDATES.md](UPDATES.md).
 - **A substitute for testing on Windows.** It proves the code *compiles*, not
   that it *works*. The three webview engines are the defining risk of this
   stack (see [PLAN.md](PLAN.md) §3) and a cross-compiler has no opinion about
@@ -97,17 +103,18 @@ watching it fire.
 
 ## A controller that does not work
 
-**This section used to be wrong, and the wrong version was worse than nothing.**
-It said gilrs reads XInput on Windows, that XInput sees Xbox-compatible devices
-only, and that a PlayStation pad needs Steam Input or DS4Windows. All three
-claims were false, and Settings repeated them, so the app confidently sent
-people off installing drivers they did not need.
+Start from what the backend actually is. gilrs enables its `wgi` backend by
+default, not `xinput` — check `gilrs-core/Cargo.toml` if you doubt it. That
+backend is **Windows.Gaming.Input**, and it enumerates through
+`RawGameController`, which sees *any* HID game controller. A DualSense plugged
+straight in is visible to it. So is a Steam Deck's built-in pad, and so is a
+Razer or 8BitDo dongle.
 
-gilrs enables its `wgi` backend by default, not `xinput` — check
-`gilrs-core/Cargo.toml` if you doubt it. That backend is **Windows.Gaming.Input**,
-and it enumerates through `RawGameController`, which sees *any* HID game
-controller. A DualSense plugged straight in is visible to it. So is a Steam
-Deck's built-in pad, and so is a Razer or 8BitDo dongle.
+An earlier version of this section said the opposite — XInput, Xbox pads
+only, PlayStation needs DS4Windows — and Settings repeated it, so the app
+confidently sent people off installing drivers they did not need. A wrong
+diagnosis in a document is worse than no document; check the dependency's
+source before writing down what it does.
 
 Which leaves the real question: why would a pad not appear?
 
