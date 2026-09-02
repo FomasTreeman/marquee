@@ -440,6 +440,8 @@ mod tests {
             provider_id: appid.into(),
             title: "Test".into(),
             installed: true,
+            update_available: false,
+            updating: false,
             install_dir: None,
             size_bytes: 0,
             last_played: None,
