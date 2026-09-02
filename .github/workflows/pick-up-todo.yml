@@ -24,6 +24,12 @@
 #     issue whose run fails, or whose pull request is closed unmerged, returns
 #     to Todo -- without this two sweeps close together would both offer it.
 #     Three attempts is the bound on the total; this only paces them.
+#   * a few minutes' grace after the `claude` label goes on, inside
+#     `shouldPickUp`. A run that has just been triggered has not yet set
+#     `claude-working`, so for a minute or two the issue reads as Todo with
+#     nobody on it -- and this sweep fires on a run finishing, which is when
+#     triage is labelling the next one. Handing over in that gap started a
+#     second run on the same issue, and one cancelled the other.
 #   * the rule itself is `shouldPickUp` in board.mjs, which is pure and tested
 #     without a network, so what counts as "waiting" cannot drift from what
 #     the board shows.
@@ -111,11 +117,18 @@ jobs:
               const facts = await factsFor(github, owner, repo, issue.number)
               if (!facts) continue
 
-              // When it was last offered, from the marker this workflow leaves.
+              // When it was last offered: the marker this workflow leaves, or
+              // anyone's `@claude`, which starts a run just the same. Only the
+              // marker used to count, so a person's `@claude` seconds before a
+              // sweep was invisible to it and the sweep offered the issue on
+              // top -- the same double start the grace window in
+              // `shouldPickUp` closes for the label route.
               const comments = await github.paginate(github.rest.issues.listComments, {
                 owner, repo, issue_number: issue.number, per_page: 100,
               })
-              const last = comments.filter((c) => (c.body || '').includes(MARKER)).pop()
+              const last = comments
+                .filter((c) => (c.body || '').includes(MARKER) || /@claude\b/.test(c.body || ''))
+                .pop()
               const hours = last
                 ? (Date.now() - new Date(last.created_at)) / 3600000
                 : undefined

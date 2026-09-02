@@ -267,7 +267,11 @@ Each of these exists because the thing it catches happened.
 its trigger — a label event fires once. Four issues sat there for hours while
 the card said "queued". This sweeps after every agent run and hourly, and
 hands the oldest waiting issue over with an `@claude` comment. One per sweep,
-an hour's cooldown per issue, three attempts in total.
+an hour's cooldown per issue, three attempts in total, and a few minutes'
+grace after the `claude` label goes on — a run takes a minute or two to set
+`claude-working`, and a sweep landing in that gap once handed the issue over
+again, so a quarter of all agent runs ended as one of a pair cancelling the
+other.
 
 **`automation-broken.yml`.** A workflow failing on `main` has no branch and no
 pull request, so there was nowhere for a repair to go, and the board failed
@@ -387,6 +391,7 @@ merge, cannot push to `main`, and cannot start a release.
 | Release stays a draft | one platform's build failed; open the run. Drafts are invisible to the updater |
 | App never offers an update | no `latest.json` on the release: `createUpdaterArtifacts` is off or the build did not finish |
 | An automation workflow is red on `main` | an issue has been filed for it; look for `claude` issues titled after the workflow |
+| Agent runs show as *cancelled* in pairs | two triggers reached the same issue within a minute — a label and a comment, say. The `claude-<number>` concurrency group keeps one; the cancelled one did no work and cost nothing. Pairs used to be a quarter of all runs before `pick-up-todo.yml` learned to wait |
 
 ## What this loop is not
 

@@ -85,6 +85,17 @@ check('offered an hour ago, so try again', shouldPickUp(issue({ labels: ['claude
 check('exactly at the boundary counts', shouldPickUp(issue({ labels: ['claude'] }), 6, 6), true)
 check('a longer cooldown holds it back', shouldPickUp(issue({ labels: ['claude'] }), 6, 12), false)
 
+// Triage put the label on eleven seconds ago. A run is starting and has not
+// yet set `claude-working`, so the issue reads as Todo with nobody on it, and
+// a sweep that fires on the previous run finishing lands in exactly that gap.
+// It handed over, a second run started, and the two cancelled each other.
+check('labelled moments ago, so a run is already on its way',
+  shouldPickUp(issue({ labels: ['claude'], minutesSinceTrigger: 0.2 })), false)
+check('labelled a while ago and still nobody on it, so it is really waiting',
+  shouldPickUp(issue({ labels: ['claude'], minutesSinceTrigger: 45 })), true)
+check('the grace window is a parameter, like the cooldown',
+  shouldPickUp(issue({ labels: ['claude'], minutesSinceTrigger: 5 }), undefined, 1, 3), true)
+
 console.log('\nlabels follow the same facts')
 check('a green pull request earns in-review',
   labelsFor(issue({ openPr: 7 })), { add: ['in-review'], remove: [] })
@@ -139,7 +150,7 @@ const pr = (number, over = {}) => ({
   ...over,
 })
 
-const labelled = (name) => ({ __typename: 'LabeledEvent', label: { name } })
+const labelled = (name, createdAt) => ({ __typename: 'LabeledEvent', label: { name }, ...(createdAt ? { createdAt } : {}) })
 const reopened = () => ({ __typename: 'ReopenedEvent' })
 const unlabelled = (name) => ({ __typename: 'UnlabeledEvent', label: { name } })
 
@@ -161,7 +172,8 @@ const fakeGithub = ({ prs = [], events = [] }, spy = {}) => ({
   },
 })
 
-const facts = async (shape, spy) => factsFor(fakeGithub(shape, spy), 'o', 'r', 1)
+const NOW = Date.parse('2026-09-02T12:00:00Z')
+const facts = async (shape, spy) => factsFor(fakeGithub(shape, spy), 'o', 'r', 1, NOW)
 
 console.log('\nreading the pull request for an issue')
 
@@ -222,6 +234,17 @@ check('a label coming off is not a run starting',
 // A timeline is oldest first. `first: 50` on an issue with any history returns
 // the opening chatter and drops the newest labels off the end.
 check('the timeline is read from the newest end', /timelineItems\(last: 50/.test(spy.query), true)
+
+console.log('\nhow recently the agent was asked')
+
+check('never labelled, so no trigger to be recent',
+  (await facts({ events: [labelled('claude-working')] })).minutesSinceTrigger, undefined)
+check('minutes since the label went on',
+  (await facts({ events: [labelled('claude', '2026-09-02T11:58:00Z')] })).minutesSinceTrigger, 2)
+check('the newest time the label went on, not the first',
+  (await facts({ events: [labelled('claude', '2026-09-02T09:00:00Z'), unlabelled('claude'), labelled('claude', '2026-09-02T11:30:00Z')] })).minutesSinceTrigger, 30)
+check('the label event carries its time, or there is nothing to measure',
+  /on LabeledEvent \{ createdAt/.test(spy.query), true)
 
 // ---------------------------------------------------------------------------
 // Reconciling. The hourly sweep visits every open issue whether or not
