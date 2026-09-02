@@ -59,13 +59,24 @@ jobs:
             }
 
             // The template's dropdown, read from the rendered body. A
-            // free-form issue has no such line and gets the safe answer --
-            // unless it says `@claude` itself. claude.yml no longer runs on
-            // `opened` (it double-fired with `labeled`), so the only way an
-            // issue body's `@claude` starts anything is the label this puts
-            // on it.
-            const wantsClaude = /Who should fix this[\s\S]{0,120}?Claude/i.test(body)
+            // free-form issue has no such line, and what it gets depends on
+            // who filed it. From a stranger, the safe answer: the repository
+            // is public and an agent run is subscription usage. From someone
+            // with write access, the agent: an issue the owner types on a
+            // phone with a title and two lines is work they want done, and
+            // `no-ai` on it was a queue nobody was working through. "Me" in
+            // the dropdown is still honoured for anyone.
+            //
+            // `@claude` in the body counts as an answer too. claude.yml no
+            // longer runs on `opened` (it double-fired with `labeled`), so the
+            // only way a body's `@claude` starts anything is the label this
+            // puts on it.
+            const said = (body.match(/Who should fix this[\s\S]{0,120}?\b(Claude|Me)\b/i) || [])[1] || ''
+            const ours = ['OWNER', 'MEMBER', 'COLLABORATOR']
+              .includes(context.payload.issue.author_association)
+            const wantsClaude = /^claude$/i.test(said)
               || /@claude\b/i.test(body)
+              || (ours && !/^me$/i.test(said))
             const label = wantsClaude ? 'claude' : 'no-ai'
 
             await github.rest.issues.addLabels({
