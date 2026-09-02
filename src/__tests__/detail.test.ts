@@ -123,7 +123,7 @@ function findByText(
 describe('createDetail hide button', () => {
   const game: Game = {
     id: 'steam:220', provider: 'steam', providerId: '220', title: 'Half-Life 2',
-    installed: false, installDir: null, sizeBytes: 0, lastPlayed: null,
+    installed: false, updateAvailable: false, updating: false, installDir: null, sizeBytes: 0, lastPlayed: null,
     playtimeMinutes: 0, favourite: false, hidden: false, artAppId: null,
   }
 

@@ -59,6 +59,8 @@ export function SAMPLE_LIBRARY(n: number): Game[] {
       providerId: appId,
       title: round ? `${title} (${round + 1})` : title,
       installed: i % 7 !== 0,
+      updateAvailable: i % 13 === 0,
+      updating: i % 29 === 0,
       installDir: null,
       sizeBytes: (8 + (i * 13) % 90) * 1_073_741_824,
       lastPlayed: i % 3 === 0 ? Math.floor(Date.now() / 1000) - i * 86_400 : null,
