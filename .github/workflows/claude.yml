@@ -1,137 +1,42 @@
 # Hand an issue to Claude Code, get a pull request back.
 #
-# Say `@claude` in an issue, an issue comment, or a review comment on a PR, and
-# this runs Claude Code against the repository with that thread as its brief.
-# It reads CLAUDE.md first, so it works to this project's conventions -- the
-# silence rule, British English, prose commits, proving a test bites -- rather
-# than generic ones.
+# The `claude` label, an `@claude` comment on an issue or a pull request
+# review, or a reply on an issue waiting in Needs Decision starts a run of
+# Claude Code with that thread as its brief. It reads CLAUDE.md first, so it
+# works to this project's conventions -- the silence rule, British English,
+# prose commits, proving a test bites -- rather than generic ones. It opens a
+# branch and a pull request. It does not merge, and it cannot: the review is
+# the point. docs/CONTRIBUTING-AI.md describes the whole loop and its setup.
 #
-# It opens a branch and a pull request. It does not merge, and it cannot: the
-# review is the point. See docs/CONTRIBUTING-AI.md for the whole loop.
+# A run ends in one of three states, and the steps after the agent check
+# which: a pull request that closes the issue (In Review), a question and the
+# `needs-decision` label (Needs Decision), or the issue closed (Done).
+# Anything else stopped early. Three runs had ended with "Running the full
+# test suite now", an unticked "Open PR" and a green job, two of them with the
+# whole change sitting uncommitted in a working tree the action's clean-up
+# then discarded. So whatever was pushed, committed or merely edited becomes
+# the pull request it was one step short of, labelled as salvaged, and only a
+# run with nothing to salvage fails -- at which point pick-up-todo.yml offers
+# the issue again.
 #
-# ---------------------------------------------------------------------------
-# **A run ends in one of three states, and the workflow checks which.**
+# Two tokens, and which one a write goes through is not a detail. GitHub will
+# not run a workflow off an event GITHUB_TOKEN caused, so a handover -- the
+# `claude` label from triage.yml, the `@claude` comment from pick-up-todo.yml,
+# the pushes and the salvaged pull request from here -- must go through
+# CLAUDE_WORKFLOW_TOKEN or it wakes nothing. Everything else -- the
+# `claude-working` label on and off, the "did it deliver" comment, every label
+# board.yml reconciles -- must go through GITHUB_TOKEN or it wakes a run whose
+# only job is to be filtered out by the `if:` below. Measured over forty runs:
+# nine did work, thirty-one existed to be skipped, and because the concurrency
+# group holds one pending run per issue, a spurious one can cancel a real one
+# queued behind it.
 #
-#   a pull request that closes the issue     -> In Review
-#   a question, and `needs-decision`         -> Needs Decision
-#   the issue closed                         -> Done
-#
-# Anything else is a run that stopped early. The steps after the agent do not
-# take that quietly: if it pushed a branch, or committed, or only edited files
-# in the working tree, that work becomes the pull request it was one step
-# short of -- labelled as salvaged, so the reviewer knows the agent did not
-# finish it. Only when there is nothing at all to salvage does the run fail,
-# and pick-up-todo.yml offers the issue again.
-#
-# Three runs had ended with "Running the full test suite now", an unticked
-# "Open PR" and a green job before this existed. Two of them had the whole
-# change sitting uncommitted in the working tree, and the action's own
-# clean-up discarded it because the branch had never been pushed.
-#
-# **Answering a question restarts it.** When the agent stops with
-# `needs-decision`, a comment from you on that issue is the answer, and it
-# starts a run without needing `@claude` in it. `needs-decision` is also what
-# the board applies after three runs with nothing to show, so the same reply
-# resumes those.
-#
-# **Starting an issue that already carries the `claude` label** is what
-# pick-up-todo.yml is for: anything in Todo gets offered on its own. Comment
-# `@claude` to jump the queue. The trigger is the label *event*, not its
-# presence, because reading the presence raced triage.yml on every new issue.
-# ---------------------------------------------------------------------------
-#
-# ---------------------------------------------------------------------------
-# Setup, once. Requires ONE secret, and no Anthropic API billing:
-#
-#   1. On your machine:            claude setup-token
-#      That opens a browser, authorises against your Claude subscription, and
-#      prints a long-lived token. Pro and Max plans can do this; usage counts
-#      against the plan you already pay for rather than API credits.
-#
-#   2. Paste it into:              Settings -> Secrets and variables -> Actions
-#      as CLAUDE_CODE_OAUTH_TOKEN
-#
-#   3. Allow Actions to open PRs:  Settings -> Actions -> General ->
-#      "Allow GitHub Actions to create and approve pull requests"
-#
-# Never paste that token into an issue, a commit, or a chat. It is a
-# credential for your Claude account.
-#
-# ---------------------------------------------------------------------------
-# Optional, and only needed for changes under `.github/workflows/`.
-#
-# GitHub refuses to let GITHUB_TOKEN write a workflow file, whatever is in the
-# `permissions:` block below -- there is no `workflows: write` to grant. The
-# push fails with "refusing to allow a GitHub App to create or update workflow
-# ... without workflows permission", which reads like a bug in the action and
-# is not one. What happened in practice is worse than a failure: the run gave
-# up on the pull request and left its findings as a comment, so a correct fix
-# to this very file arrived as prose for somebody to retype.
-#
-# A personal access token lifts it. The step below takes CLAUDE_WORKFLOW_TOKEN
-# if it exists and GITHUB_TOKEN otherwise.
-#
-# It wants a **fine-grained** token as CLAUDE_WORKFLOW_TOKEN, scoped to this
-# repository alone:
-#
-#     Contents          read and write
-#     Pull requests     read and write
-#     Issues            read and write
-#     Workflows         read and write     <- the one that matters here
-#     Actions           read               <- so it can see why a run failed
-#
-# PROJECT_TOKEN used to sit in that chain and no longer does. It is the board's
-# classic token, scoped to `project` alone -- board.yml's header specifies that
-# and token-check.yml asserts it, checking that the token *cannot* reach the
-# repository and warning when it can. So the better it was scoped the less of
-# this it could do, and being first in the chain it displaced the GITHUB_TOKEN
-# fallback that would have worked. A token that fails is not a fallback.
-#
-# Nothing is lost by dropping it. Even a classic token wide enough to work here
-# would need `repo` as well as `workflow` -- `workflow` alone cannot push -- and
-# `repo` reaches every repository the account can see, while `project` reaches
-# every board. That is a wide reach to hand a run whose brief is issue text
-# written by anyone. A fine-grained token stops at this repository.
-#
-# Actions stays read either way: write would let `gh workflow run release.yml`
-# cut a release, and nothing here needs to start a run.
-#
-# With none of them set everything below behaves exactly as before.
-#
-# Two things change when it is set, both wanted: pull requests and comments
-# come from your account rather than github-actions[bot], and pushes made with
-# it do trigger CI, which GITHUB_TOKEN deliberately does not.
-#
-# ---------------------------------------------------------------------------
-# **Use the PAT for a handover, and GITHUB_TOKEN for everything else.**
-#
-# That second half is easy to miss and it is not a downgrade. GITHUB_TOKEN not
-# waking a workflow is the *useful* property most of the time: a token that
-# can wake one wakes it for every label and every comment it writes, and the
-# run that starts then has nothing to do but be skipped.
-#
-# Measured over forty runs of this workflow: nine did work, thirty-one existed
-# only to be filtered out by the `if:` below. They came from this file's own
-# `claude-working` label going on and coming off again.
-#
-# Worse than the waste, they are not free of consequence. The concurrency
-# group is per issue and does not cancel in progress, so GitHub holds one
-# pending run and cancels any earlier pending one -- a spurious run can
-# therefore cancel a real one that was queued behind it.
-#
-#   handover, so it must wake something        GITHUB_TOKEN would be wrong
-#     triage.yml           the `claude` label
-#     pick-up-todo.yml     the `@claude` comment
-#     automation-broken.yml the issue it files
-#     this file            `github_token:` on the action, so its pushes run CI
-#     this file            the salvaged pull request, so CI and review run on it
-#
-#   bookkeeping, so it must wake nothing       a PAT would be wrong
-#     this file            `claude-working` on and off
-#     this file            the "did it deliver" comment
-#     board.yml            every label it reconciles
-#     automation-broken.yml "failed again" on an issue that already exists
-# ---------------------------------------------------------------------------
+# CLAUDE_WORKFLOW_TOKEN is also what lets a run touch `.github/workflows/`:
+# there is no permission that lets GITHUB_TOKEN write a workflow file, and the
+# push fails naming "workflows permission", which reads like a bug in the
+# action. Issue #1 ended with a correct set of CI fixes posted as a comment for
+# somebody to retype. What each token must be able to do is asserted weekly by
+# token-check.yml rather than remembered here.
 
 name: Claude
 
@@ -250,12 +155,23 @@ jobs:
     # label.
     #
     # `no-ai` keeps an issue off. Some issues are notes to self.
+    #
+    # The label event reads the *issue's* author, because the payload does
+    # not say who applied the label. That was fine while every issue was the
+    # owner's; on a public repository it meant the owner adding `claude` to a
+    # stranger's bug report started nothing, and the issue waited for the
+    # sweep. `sender` is the account that raised the event, so the owner's
+    # click counts on anyone's issue.
     if: |
       !contains(github.event.issue.labels.*.name, 'no-ai') &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
-               github.event.comment.author_association ||
-               github.event.review.author_association ||
-               github.event.issue.author_association) &&
+      (
+        (github.event.action == 'labeled' &&
+         github.event.sender.login == github.repository_owner) ||
+        contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'),
+                 github.event.comment.author_association ||
+                 github.event.review.author_association ||
+                 github.event.issue.author_association)
+      ) &&
       (
         github.event.label.name == 'claude' ||
         contains(github.event.comment.body, '@claude') ||
@@ -299,6 +215,24 @@ jobs:
       actions: read
 
     steps:
+      # A pull request from a fork is somebody else's code, and `@claude` on
+      # it from the owner would check that code out and run it -- `pnpm test`
+      # executes whatever the branch says -- with this repository's tokens in
+      # the environment. Neither payload that reaches here says which side of
+      # the fence the branch is on, so it is asked. First, before the checkout.
+      - name: Refuse a pull request from a fork
+        if: github.event.issue.pull_request || github.event_name == 'pull_request_review'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number || github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ "$(gh pr view "$NUMBER" --json isCrossRepository --jq .isCrossRepository)" = true ]; then
+            echo "::error::#$NUMBER is from a fork. The agent does not run a fork's code with this repository's tokens; bring the branch into this repository first."
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The full history, so it can read why a line is the way it is.
@@ -528,7 +462,16 @@ jobs:
             let why = 'The action left no execution record, so it probably failed before the agent started.'
             const file = process.env.EXECUTION_FILE
             if (file && fs.existsSync(file)) {
-              const result = JSON.parse(fs.readFileSync(file, 'utf8')).find((m) => m.type === 'result')
+              // A record that will not parse -- a run killed at the timeout
+              // can leave it half-written -- is a diagnosis, not a reason to
+              // throw here, because throwing here means the salvage step
+              // below never runs and the branch is lost with the answer.
+              let result
+              try {
+                result = JSON.parse(fs.readFileSync(file, 'utf8')).find((m) => m.type === 'result')
+              } catch (e) {
+                why = `The action's execution record could not be read (${e.message}).`
+              }
               if (result) {
                 const denied = (result.permission_denials || [])
                   .map((d) => `${d.tool_name}: ${JSON.stringify(d.tool_input?.command ?? d.tool_input).slice(0, 120)}`)
@@ -574,6 +517,7 @@ jobs:
           BRANCH: ${{ steps.claude.outputs.branch_name }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          set -euo pipefail
           fail() {
             # The comment is bookkeeping and goes through the token that wakes
             # nothing; a run whose complaint is that it delivered nothing

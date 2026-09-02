@@ -110,7 +110,11 @@ jobs:
 
           at_risk=0
           if [ "$overlap" -gt 0 ]; then
-            at_risk=$(git diff --numstat "$mb..$base" -- $(tr '\n' ' ' < /tmp/overlap.txt) \
+            # One path per argument. Splitting the file on whitespace turned a
+            # path with a space in it into two that do not exist.
+            overlapping=()
+            while IFS= read -r f; do overlapping+=("$f"); done < /tmp/overlap.txt
+            at_risk=$(git diff --numstat "$mb..$base" -- "${overlapping[@]}" \
                         | awk '{n+=$1+$2} END {print n+0}')
           fi
           echo "$overlap file(s) changed on both sides, $at_risk lines of $BASE at risk."
