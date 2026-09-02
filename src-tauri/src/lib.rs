@@ -5,6 +5,7 @@
 //! webview owns the interface and nothing else.
 
 mod art;
+mod autostart;
 mod diag;
 mod input;
 mod library;
@@ -405,7 +406,20 @@ fn get_settings(
         // The version the user last said "not now" to, so the same prompt is
         // not put in front of them on every launch.
         "updateDeclined": store.setting("updateDeclined")?.unwrap_or_default(),
+        // Read live from the registry rather than a stored preference, so this
+        // can never disagree with what Windows will actually do -- including
+        // after someone switches it off from Task Manager's Startup tab.
+        "startOnLogin": autostart::is_enabled(),
     }))
+}
+
+/// Add or remove Marquee from Windows' own startup list.
+///
+/// Windows only: see `autostart.rs` for why the `Run` key rather than a
+/// scheduled task, and why this is not one of the settings in `set_setting`.
+#[tauri::command]
+fn set_autostart(enabled: bool) -> Result<(), String> {
+    autostart::set_enabled(enabled)
 }
 
 /// Set the SteamGridDB key, and re-resolve artwork.
@@ -814,6 +828,7 @@ pub fn run() {
             get_settings,
             set_steamgriddb_key,
             set_setting,
+            set_autostart,
             system_action,
             set_hidden,
             uninstall_game,

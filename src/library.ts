@@ -175,6 +175,9 @@ export interface Settings {
   backgroundStyle: string
   /** The version an update prompt was last refused for. See src/update.ts. */
   updateDeclined: string
+  /** Whether Marquee is registered in Windows' own startup list. Read live
+   *  from the registry, not a stored preference -- see src-tauri/src/autostart.rs. */
+  startOnLogin: boolean
 }
 
 /** Store any single setting. */
@@ -188,9 +191,16 @@ export async function getSettings(): Promise<Settings> {
     return {
       steamgriddbKey: '', sort: 'recent', profileFolder: '',
       minimiseOnLaunch: true, backgroundStyle: 'grain', updateDeclined: '',
+      startOnLogin: false,
     }
   }
   return call<Settings>('get_settings')
+}
+
+/** Windows only -- see src-tauri/src/autostart.rs for why. */
+export async function setAutostart(enabled: boolean): Promise<void> {
+  if (!inApp) return
+  return call<void>('set_autostart', { enabled })
 }
 
 /** Saving also clears the artwork cache, so games that previously found
