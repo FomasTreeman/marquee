@@ -87,13 +87,43 @@
 # Two things change when it is set, both wanted: pull requests and comments
 # come from your account rather than github-actions[bot], and pushes made with
 # it do trigger CI, which GITHUB_TOKEN deliberately does not.
+#
+# ---------------------------------------------------------------------------
+# **Use the PAT for a handover, and GITHUB_TOKEN for everything else.**
+#
+# That second half is easy to miss and it is not a downgrade. GITHUB_TOKEN not
+# waking a workflow is the *useful* property most of the time: a token that
+# can wake one wakes it for every label and every comment it writes, and the
+# run that starts then has nothing to do but be skipped.
+#
+# Measured over forty runs of this workflow: nine did work, thirty-one existed
+# only to be filtered out by the `if:` below. They came from this file's own
+# `claude-working` label going on and coming off again.
+#
+# Worse than the waste, they are not free of consequence. The concurrency
+# group is per issue and does not cancel in progress, so GitHub holds one
+# pending run and cancels any earlier pending one -- a spurious run can
+# therefore cancel a real one that was queued behind it.
+#
+#   handover, so it must wake something        GITHUB_TOKEN would be wrong
+#     triage.yml           the `claude` label
+#     pick-up-todo.yml     the `@claude` comment
+#     automation-broken.yml the issue it files
+#     this file            `github_token:` on the action, so its pushes run CI
+#
+#   bookkeeping, so it must wake nothing       a PAT would be wrong
+#     this file            `claude-working` on and off
+#     this file            the "did it deliver" comment
+#     board.yml            every label it reconciles
 # ---------------------------------------------------------------------------
 
 name: Claude
 
 on:
   issues:
-    types: [opened, assigned, labeled]
+    # Not `assigned`. Nothing in the `if:` below answers to an assignment, so
+    # every one of them started a run that could only ever be skipped.
+    types: [opened, labeled]
   issue_comment:
     types: [created]
   pull_request_review_comment:
@@ -231,7 +261,12 @@ jobs:
       - name: Mark it in progress
         if: github.event.issue.number
         env:
-          GH_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN on purpose, and this is the optimisation rather than a
+          # downgrade. A token that can wake a workflow wakes one for every
+          # label it writes, and `claude-working` is meant to wake nothing --
+          # so each run was starting a second run that existed only to be
+          # skipped. Nine useful runs in the last forty; the rest were this.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NUMBER: ${{ github.event.issue.number }}
         run: |
           # Not fatal -- a label is not worth losing the run over -- but not
@@ -312,7 +347,11 @@ jobs:
           NUMBER: ${{ github.event.issue.number }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
-          github-token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN: this comment is a note for a person, not a handover,
+          # and a comment written with a token that can wake a workflow wakes
+          # one -- which would then be skipped, on an issue whose complaint is
+          # that a run delivered nothing.
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const { owner, repo } = context.repo
             const number = Number(process.env.NUMBER)
@@ -363,7 +402,8 @@ jobs:
       - name: Stop marking it in progress
         if: always() && github.event.issue.number
         env:
-          GH_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
+          # GITHUB_TOKEN, for the reason given on the step above.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NUMBER: ${{ github.event.issue.number }}
         run: |
           # Louder than the one above: a label left on says a run is still
