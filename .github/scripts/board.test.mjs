@@ -133,6 +133,7 @@ const pr = (number, over = {}) => ({
 
 const labelled = (name) => ({ __typename: 'LabeledEvent', label: { name } })
 const reopened = () => ({ __typename: 'ReopenedEvent' })
+const unlabelled = (name) => ({ __typename: 'UnlabeledEvent', label: { name } })
 
 // A fake `github` that records the query it was given and replays the linked
 // pull requests and the label timeline.
@@ -199,6 +200,16 @@ check('a reopen with no run since counts none',
   (await facts({ events: [labelled('claude-working'), reopened()] })).attempts, 0)
 check('reopens are asked for, or nothing separates the old attempts from the new',
   /REOPENED_EVENT/.test(spy.query), true)
+
+// A run that stops to ask a question did its job. The answer is a new brief,
+// and the count starts again from it -- the moment claude.yml takes
+// `needs-decision` off to mark the answering run in progress.
+check('attempts restart when a needs-decision question is answered',
+  (await facts({ events: [labelled('claude-working'), labelled('needs-decision'), unlabelled('needs-decision'), labelled('claude-working')] })).attempts, 1)
+check('taking off some other label restarts nothing',
+  (await facts({ events: [labelled('claude-working'), unlabelled('claude'), labelled('claude-working')] })).attempts, 2)
+check('a label coming off is not a run starting',
+  (await facts({ events: [labelled('claude-working'), unlabelled('claude-working')] })).attempts, 1)
 
 // A timeline is oldest first. `first: 50` on an issue with any history returns
 // the opening chatter and drops the newest labels off the end.

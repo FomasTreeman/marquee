@@ -274,8 +274,12 @@ export async function factsFor(github, owner, repo, number) {
                commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
              }
            }
-           timelineItems(last: 50, itemTypes: [LABELED_EVENT, REOPENED_EVENT]) {
-             nodes { __typename ... on LabeledEvent { label { name } } }
+           timelineItems(last: 50, itemTypes: [LABELED_EVENT, UNLABELED_EVENT, REOPENED_EVENT]) {
+             nodes {
+               __typename
+               ... on LabeledEvent { label { name } }
+               ... on UnlabeledEvent { label { name } }
+             }
            }
          }
        }
@@ -310,18 +314,23 @@ export async function factsFor(github, owner, repo, number) {
     // from an issue nobody has ever touched, which is how a card went
     // backwards from In Progress to Todo.
     //
-    // Counted since the last reopen. An issue reopened because its merged fix
+    // Counted since the brief last changed: a reopen, or a person answering
+    // a `needs-decision` question. An issue reopened because its merged fix
     // did not do what was intended starts a new job, and the run that
     // delivered the first fix was a success, not a failed attempt at this
-    // one -- carrying it over would send the issue to Needs Decision after
-    // two more goes when the rule everywhere else is three.
-    attempts: sinceLastReopen(issue.timelineItems.nodes)
-      .filter((n) => n?.label?.name === CONFIG.labels.working).length,
+    // one. Likewise a run that stopped to ask did what it was told, and the
+    // answer is a new brief -- #91 had one proper stop and one failed run
+    // after the answer, and counting both left it one failure from Needs
+    // Decision when the rule everywhere else is three.
+    attempts: sinceLastRestart(issue.timelineItems.nodes)
+      .filter((n) => n?.__typename === 'LabeledEvent' && n?.label?.name === CONFIG.labels.working).length,
   }
 }
 
-function sinceLastReopen(nodes) {
-  const at = nodes.map((n) => n?.__typename).lastIndexOf('ReopenedEvent')
+function sinceLastRestart(nodes) {
+  const restart = (n) => n?.__typename === 'ReopenedEvent'
+    || (n?.__typename === 'UnlabeledEvent' && n?.label?.name === CONFIG.labels.blocked)
+  const at = nodes.map(restart).lastIndexOf(true)
   return at < 0 ? nodes : nodes.slice(at + 1)
 }
 
