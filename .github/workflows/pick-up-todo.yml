@@ -18,7 +18,7 @@
 # them, and each one is a full run of subscription usage. Three things bound
 # it, and none of them should be removed without replacing it with something:
 #
-#   * ONE issue per sweep, oldest first. A backlog drains at one an hour
+#   * ONE issue per sweep, oldest first. A backlog drains one run at a time
 #     rather than all at once.
 #   * an hour's cooldown per issue, from a marker in the handover comment. An
 #     issue whose run fails, or whose pull request is closed unmerged, returns
@@ -141,8 +141,8 @@ jobs:
               core.notice(
                 `Handed #${issue.number} to Claude` +
                 (hours === undefined ? ' (first offer)' : ` (last offered ${hours.toFixed(1)}h ago)`))
-              // One per sweep. A backlog drains at one an hour rather than
-              // starting a run for everything at once.
+              // One per sweep. A backlog drains one run at a time rather
+              // than starting a run for everything at once.
               return
             }
 

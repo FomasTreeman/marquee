@@ -30,6 +30,15 @@ pub struct Game {
     pub provider_id: String,
     pub title: String,
     pub installed: bool,
+    /// Steam has content queued that has not been downloaded yet -- an update
+    /// to an installed game, distinct from `installed` itself. Always false
+    /// for a manual game: nothing here tracks its own version.
+    #[serde(default)]
+    pub update_available: bool,
+    /// Steam is actively fetching or applying that content right now. See
+    /// `library::steam` for how both of these are read off `StateFlags`.
+    #[serde(default)]
+    pub updating: bool,
     pub install_dir: Option<PathBuf>,
     pub size_bytes: u64,
     /// Unix seconds, or None if the provider does not track it.
