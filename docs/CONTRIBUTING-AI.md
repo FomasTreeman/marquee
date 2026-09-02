@@ -157,6 +157,15 @@ order they have actually gone wrong here:
 3. **Is it the smallest change that works?** Look for scope that crept in.
 4. **Does the comment say why, not what?**
 
+When it is right, **enable auto-merge** — the button on the pull request, or
+`gh pr merge <n> --squash --auto`. That is the whole of the merge step.
+`main` requires a branch to be up to date before it merges, so every merge
+puts the other pull requests behind; `.github/workflows/merge-queue.yml`
+brings the oldest queued one up to date each time `main` moves, CI reruns on
+it, and auto-merge lands it. Queue four and they land one after another
+without further clicks. A branch that conflicts with `main` is handed back to
+the agent to resolve, once per head commit, and stays in the queue.
+
 ## Releasing
 
 Nothing to do. Merging is the release — once CI is green on the merge commit.

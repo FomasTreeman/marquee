@@ -54,6 +54,9 @@ jobs:
       github.event.workflow_run.head_repository.full_name == github.repository &&
       github.event.workflow_run.head_branch != 'main'
     runs-on: ubuntu-latest
+    outputs:
+      stalled: ${{ steps.deliver.outputs.stalled }}
+      attempt: ${{ steps.guard.outputs.attempt }}
     # An agent run plus a full toolchain install. Generous, but bounded:
     # the failure mode of an unattended loop is not one long run, it is a
     # run nobody is watching that never ends.
@@ -141,6 +144,9 @@ jobs:
             echo "go=true"
             echo "pr=$number"
             echo "attempt=$((attempts + 1))"
+            # Counted after the attempt comment, so a comment the agent leaves
+            # is the only thing that can raise it.
+            echo "comments=$(gh pr view "$number" --json comments --jq '.comments | length')"
           } >> "$GITHUB_OUTPUT"
           echo "Repairing #$number, attempt $((attempts + 1))."
 
@@ -187,6 +193,7 @@ jobs:
         if: steps.guard.outputs.go == 'true'
 
       - uses: anthropics/claude-code-action@a874e9ecd7bb36efdad65429c6b35815f5a08f10 # v1.0.210
+        id: claude
         if: steps.guard.outputs.go == 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -240,3 +247,100 @@ jobs:
           claude_args: |
             --allowed-tools "Bash(cd:*),Bash(pnpm:*),Bash(cargo:*),Bash(node:*),Bash(git:*),Bash(tools/:*),Bash(python3:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh workflow view:*)"
             --append-system-prompt-file .github/claude-instructions.md
+
+      # The run above went green on #78 having pushed nothing and said
+      # nothing: twenty-eight turns, six tool calls refused, and a branch left
+      # exactly as red as it found it. Nothing fires again until that branch
+      # changes, so one silent attempt was a permanent stall with two of the
+      # three tries unspent.
+      #
+      # So: whatever it changed is pushed, even uncommitted -- CI on the push
+      # is the next attempt, and a wrong fix that says it is one is cheaper
+      # than a discarded one. A comment without a push is a question, and gets
+      # the label a person reads. Nothing at all is reported on the pull
+      # request with why, and the job fails so the retry below runs.
+      - name: Did it push?
+        id: deliver
+        if: always() && steps.guard.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ steps.guard.outputs.pr }}
+          ATTEMPT: ${{ steps.guard.outputs.attempt }}
+          COMMENTS_BEFORE: ${{ steps.guard.outputs.comments }}
+          START_SHA: ${{ github.event.workflow_run.head_sha }}
+          EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain)" ]; then
+            git add -A
+            git -c user.name='claude[salvage]' -c user.email='noreply@anthropic.com' \
+              commit -q -m "Salvage what repair attempt $ATTEMPT on #$NUMBER had changed when it stopped"
+          fi
+          if [ "$(git rev-parse HEAD)" != "$START_SHA" ]; then
+            # Through the checkout's credentials, which are the PAT when there
+            # is one, so CI runs on it. A push through GITHUB_TOKEN would
+            # sit there unchecked.
+            git push -q origin HEAD
+            echo "Attempt $ATTEMPT pushed $(git rev-parse --short HEAD); CI decides the rest."
+            exit 0
+          fi
+
+          now=$(gh pr view "$NUMBER" --json comments --jq '.comments | length')
+          if [ "$now" -gt "$COMMENTS_BEFORE" ]; then
+            gh pr edit "$NUMBER" --add-label needs-decision
+            echo "Attempt $ATTEMPT stopped to ask; labelled needs-decision."
+            exit 0
+          fi
+
+          why='The action left no execution record, so it probably failed before the agent started.'
+          if [ -n "$EXECUTION_FILE" ] && [ -f "$EXECUTION_FILE" ]; then
+            found=$(jq -r '
+              [.[] | select(.type == "result")][0] // empty
+              | "The agent returned after \(.num_turns) turns"
+                + (if .is_error then " with an error" else " without error" end)
+                + (if (.permission_denials // []) | length > 0
+                   then ", and was refused \(.permission_denials | length) tool call(s):\n"
+                     + ([.permission_denials[] | "  - \(.tool_name): \((.tool_input.command // .tool_input) | tostring | .[0:120])"] | join("\n"))
+                   else ", and was refused nothing." end)
+            ' "$EXECUTION_FILE")
+            if [ -n "$found" ]; then why=$found; fi
+          fi
+          if [ "$ATTEMPT" -ge 3 ]; then
+            next='That was the last of three attempts, so this is now a question for a person.'
+            gh pr edit "$NUMBER" --add-label needs-decision
+          else
+            next='The branch is exactly as it was, so this counts as an attempt and the failed CI run is being retried to start the next one.'
+          fi
+          printf '%s\n\n%s\n\n%s\n' \
+            "**Repair attempt $ATTEMPT pushed nothing and said nothing.** $why" \
+            "$next" \
+            "[This run]($RUN_URL)" > stalled.md
+          gh pr comment "$NUMBER" --body-file stalled.md
+          echo "stalled=true" >> "$GITHUB_OUTPUT"
+          echo "::error::Attempt $ATTEMPT on #$NUMBER pushed nothing and said nothing. $why"
+          exit 1
+
+  # A stalled attempt leaves the branch untouched, and an untouched branch
+  # fires nothing. Re-running the CI run that started this makes it complete
+  # again, which starts the next attempt -- bounded by the three the guard
+  # counts, since the attempt comment was posted before the agent ran.
+  #
+  # A separate job so `actions: write` is a permission the agent's job never
+  # has: `gh workflow run release.yml` cuts a release, and the token that can
+  # do that should not be in the same environment as a prompt read from a
+  # pull request.
+  retry:
+    needs: repair
+    if: always() && needs.repair.outputs.stalled == 'true' && needs.repair.outputs.attempt < 3
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: gh run rerun "$RUN_ID" --failed
