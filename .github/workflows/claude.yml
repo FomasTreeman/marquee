@@ -6,7 +6,7 @@
 # works to this project's conventions -- the silence rule, British English,
 # prose commits, proving a test bites -- rather than generic ones. It opens a
 # branch and a pull request. It does not merge, and it cannot: the review is
-# the point. docs/CONTRIBUTING-AI.md describes the whole loop and its setup.
+# the point. docs/AUTOMATION.md describes the whole loop and its setup.
 #
 # A run ends in one of three states, and the steps after the agent check
 # which: a pull request that closes the issue (In Review), a question and the
