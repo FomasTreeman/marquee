@@ -329,6 +329,8 @@ pub fn spawn(app: AppHandle) -> Enricher {
 
             if let Some(meta) = cached(&app_id) {
                 if !meta.name.is_empty() {
+                    // Both emits: the only listener is the webview, and a
+                    // closed webview is not an error.
                     let _ = app.emit("meta", &meta);
                 }
                 continue;

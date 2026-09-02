@@ -350,24 +350,40 @@ impl LibraryProvider for Steam {
             }
         }
 
-        // Played-but-not-installed games fill out the rest of the library. An
-        // installed manifest is the better record, so it wins on the fields it
-        // has -- but playtime only exists here, so it is merged in either way.
-        for played in Self::played_games(&root) {
-            match games.iter_mut().find(|g| g.id == played.id) {
-                Some(installed) => {
-                    installed.playtime_minutes = played.playtime_minutes;
-                    installed.last_played = installed.last_played.or(played.last_played);
+        Self::merge_played(&mut games, Self::played_games(&root));
+        Ok(games)
+    }
+}
+
+impl Steam {
+    /// Played-but-not-installed games fill out the rest of the library. An
+    /// installed manifest is the better record, so it wins on the fields it
+    /// has -- but playtime only exists in localconfig, so it is merged in
+    /// either way.
+    ///
+    /// By index rather than a search of the list per played game: a couple of
+    /// thousand played against a few hundred installed is a few hundred
+    /// thousand string compares, on every scan.
+    fn merge_played(games: &mut Vec<Game>, played: Vec<Game>) {
+        let mut at: std::collections::HashMap<String, usize> = games
+            .iter()
+            .enumerate()
+            .map(|(i, g)| (g.id.clone(), i))
+            .collect();
+        for p in played {
+            match at.get(&p.id).copied() {
+                Some(i) => {
+                    games[i].playtime_minutes = p.playtime_minutes;
+                    games[i].last_played = games[i].last_played.or(p.last_played);
                 }
+                // The same appid turns up once per Steam account on the
+                // machine, so the first one claims the slot.
                 None => {
-                    if seen.insert(played.id.clone()) {
-                        games.push(played);
-                    }
+                    at.insert(p.id.clone(), games.len());
+                    games.push(p);
                 }
             }
         }
-
-        Ok(games)
     }
 }
 
@@ -397,7 +413,10 @@ mod tests {
 
     #[test]
     fn only_fully_installed_games_are_playable() {
-        let dir = std::env::temp_dir().join("marquee-test-steam/steamapps");
+        // Per process: two checkouts can run `cargo test` at once, and with
+        // one shared directory the first to finish deletes the other's fixture.
+        let base = std::env::temp_dir().join(format!("marquee-test-steam-{}", std::process::id()));
+        let dir = base.join("steamapps");
         std::fs::create_dir_all(&dir).unwrap();
 
         let full = dir.join("appmanifest_365670.acf");
@@ -422,7 +441,46 @@ mod tests {
         assert_eq!(game.title, "Hades");
         assert!(!game.installed, "1026 has no fully-installed bit set");
 
-        std::fs::remove_dir_all(std::env::temp_dir().join("marquee-test-steam")).ok();
+        std::fs::remove_dir_all(base).ok();
+    }
+
+    fn game(id: &str, installed: bool, playtime_minutes: u64) -> Game {
+        Game {
+            id: id.into(),
+            provider: "steam".into(),
+            provider_id: id.trim_start_matches("steam:").into(),
+            title: String::new(),
+            installed,
+            install_dir: None,
+            size_bytes: 0,
+            last_played: None,
+            playtime_minutes,
+            favourite: false,
+            hidden: false,
+            art_app_id: None,
+        }
+    }
+
+    /// Playtime lives only in localconfig.vdf, so a played game that is also
+    /// installed has to come out as one entry carrying both facts -- not two
+    /// entries, and not the installed one showing no hours.
+    #[test]
+    fn playtime_is_merged_into_the_installed_entry() {
+        let mut games = vec![game("steam:1", true, 0), game("steam:2", true, 0)];
+        Steam::merge_played(
+            &mut games,
+            vec![
+                game("steam:2", false, 120),
+                game("steam:3", false, 5),
+                // A second account on the same machine.
+                game("steam:3", false, 7),
+            ],
+        );
+        assert_eq!(games.len(), 3);
+        assert_eq!(games[1].playtime_minutes, 120);
+        assert!(games[1].installed, "the manifest's record wins");
+        assert_eq!(games[2].id, "steam:3");
+        assert!(!games[2].installed);
     }
 
     /// Nobody wants Proton and the Steamworks redistributables in their

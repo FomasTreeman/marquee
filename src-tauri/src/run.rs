@@ -34,7 +34,7 @@ use std::process::Command;
 use serde::Serialize;
 
 use crate::library::Game;
-use crate::{log_info, log_warn};
+use crate::{log_if_err, log_info, log_warn};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum Launch {
@@ -299,7 +299,9 @@ pub fn start(
                         "run",
                         "asking Steam for {title} again, in case the first was early"
                     );
-                    let _ = open_uri(&uri);
+                    // Not a failure to report: the first request already
+                    // went through the same path and was accepted.
+                    log_if_err!("run", open_uri(&uri), "second request for {title}");
                 }
 
                 // Steam owns the game from here, so there is no child to
@@ -373,6 +375,8 @@ pub fn start(
                 // here for the real exit -- not just the startup check above
                 // -- is what makes "quit to desktop" bring Marquee back
                 // instead of leaving it minimised until the next Alt-Tab (#63).
+                // The exit status is the game's business; a crash at the end
+                // of a session is still the end of a session.
                 let _ = child.wait();
                 log_info!("run", "{title} session ended");
                 on_exit();

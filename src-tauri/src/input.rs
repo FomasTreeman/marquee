@@ -440,6 +440,8 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
     let mut xs = AxisState { held: None };
     let mut ys = AxisState { held: None };
 
+    // Both emits: the only listener is the webview, and a closed webview is
+    // not an error.
     let emit = |action: Action, repeat: bool| {
         let _ = app.emit(
             "input",

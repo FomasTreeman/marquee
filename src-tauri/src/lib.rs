@@ -62,7 +62,7 @@ struct Library(Mutex<Vec<library::Game>>);
 /// "handing off to Steam" rather than a generic spinner -- and so the log
 /// records the exact URI or executable.
 #[tauri::command]
-fn launch_game(
+async fn launch_game(
     app: tauri::AppHandle,
     window: tauri::Window,
     id: String,
@@ -74,6 +74,22 @@ fn launch_game(
         games.iter().find(|g| g.id == id).cloned()
     };
     let game = game.ok_or_else(|| format!("no game with id {id}"))?;
+    // Off the thread that paints. Asking whether Steam is running spawns
+    // `pgrep` on macOS and Linux, and spawning the game is not free either;
+    // a synchronous command would run both on the interface's thread.
+    let store = store.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || launch(app, window, game, &store))
+        .await
+        .map_err(|e| format!("the launch thread died: {e}"))?
+}
+
+fn launch(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+    game: library::Game,
+    store: &store::Store,
+) -> Result<String, String> {
+    let id = game.id.clone();
     // A game that dies on startup is reported after the fact, because spawn()
     // succeeding says nothing about whether the thing actually ran.
     let title = game.title.clone();
@@ -83,8 +99,9 @@ fn launch_game(
         // back before telling the interface.
         let window = window.clone();
         move |detail: String| {
-            let _ = window.unminimize();
-            let _ = window.set_focus();
+            log_if_err!("run", window.unminimize(), "restoring the window");
+            log_if_err!("run", window.set_focus(), "focusing the window");
+            // The only listener is the webview; a closed one is not an error.
             let _ = app.emit(
                 "launch-failed",
                 serde_json::json!({ "title": title, "detail": detail }),
@@ -97,8 +114,8 @@ fn launch_game(
     let on_exit = {
         let window = window.clone();
         move || {
-            let _ = window.unminimize();
-            let _ = window.set_focus();
+            log_if_err!("run", window.unminimize(), "restoring the window");
+            log_if_err!("run", window.set_focus(), "focusing the window");
         }
     };
     // Checked before launching so the interface can say how long this will
@@ -123,7 +140,9 @@ fn launch_game(
     match run::start(&game, notify, on_exit) {
         Ok(run::Launch::Uri(uri)) => {
             if minimise {
-                let _ = window.minimize();
+                // Refused, Marquee stays in front of the game it just started,
+                // which is the exact symptom minimising exists to prevent.
+                log_if_err!("run", window.minimize(), "minimising for the launch");
             }
             Ok(if steam_cold {
                 format!("{uri} (starting Steam first)")
@@ -142,7 +161,7 @@ fn launch_game(
                 }
             }
             if minimise {
-                let _ = window.minimize();
+                log_if_err!("run", window.minimize(), "minimising for the launch");
             }
             Ok(program.display().to_string())
         }
@@ -230,9 +249,15 @@ async fn search_artwork(
     store: tauri::State<'_, std::sync::Arc<store::Store>>,
 ) -> Result<Vec<search::SearchHit>, String> {
     let key = store.setting(sgdb::SETTING_KEY)?.filter(|k| !k.is_empty());
+    // Steam is the secondary source here, so its failure narrows the answer
+    // rather than replacing it -- but a search that silently returns half of
+    // what it could is the kind of bug nobody reports.
     let steam = search::search_steam_hits(term.clone())
         .await
-        .unwrap_or_default();
+        .unwrap_or_else(|e| {
+            log_warn!("art", "Steam search for {term:?} failed: {e}");
+            Vec::new()
+        });
 
     let Some(key) = key else {
         if steam.is_empty() {
@@ -285,6 +310,8 @@ fn diagnostic_report(
     let mut out = String::new();
     let pad = input::pad_status(status);
 
+    // Every `let _` below discards `fmt::Result` from writing into a String,
+    // which cannot fail.
     let _ = writeln!(out, "Marquee {}", app.package_info().version);
     let _ = writeln!(
         out,
@@ -421,17 +448,23 @@ fn set_autostart(enabled: bool) -> Result<(), String> {
 /// that previously found nothing has a recorded miss, and without clearing them
 /// a new key would visibly do nothing for exactly the games it was added for.
 #[tauri::command]
-fn set_steamgriddb_key(
+async fn set_steamgriddb_key(
     key: String,
     store: tauri::State<'_, std::sync::Arc<store::Store>>,
 ) -> Result<(), String> {
     store.set_setting(sgdb::SETTING_KEY, &key)?;
-    profile_changed(&store);
-    match art::clear_cache() {
-        Ok(()) => log_info!("art", "artwork cache cleared after a source change"),
-        Err(e) => log_warn!("art", "could not clear the artwork cache: {e}"),
-    }
-    Ok(())
+    let store = store.inner().clone();
+    // Deleting a cache of a few thousand files takes long enough to notice
+    // on the thread that paints, and the settings screen is still open.
+    tauri::async_runtime::spawn_blocking(move || {
+        profile_changed(&store);
+        match art::clear_cache() {
+            Ok(()) => log_info!("art", "artwork cache cleared after a source change"),
+            Err(e) => log_warn!("art", "could not clear the artwork cache: {e}"),
+        }
+    })
+    .await
+    .map_err(|e| format!("the cache-clearing thread died: {e}"))
 }
 
 /// Quit, minimise, restart or shut down.
@@ -689,20 +722,21 @@ pub fn run() {
         // Asynchronous because the first request for an asset goes out to the
         // CDN, and a blocking handler would stall the webview.
         .register_asynchronous_uri_scheme_protocol("art", |app, request, responder| {
-            // Read per request rather than captured: the key can be set while
-            // the app is running, and artwork should start using it at once.
-            let sgdb_key = app
-                .app_handle()
-                .try_state::<std::sync::Arc<store::Store>>()
-                .and_then(|s: tauri::State<'_, std::sync::Arc<store::Store>>| {
-                    s.setting(sgdb::SETTING_KEY).ok().flatten()
-                });
-
             // `art://localhost/<source>-<id>/<kind>`, where source is `steam`
             // or `sgdb`. Source-qualified because a game can borrow artwork
             // from a SteamGridDB entry that has no Steam appid at all.
             let path = request.uri().path().trim_matches('/').to_string();
-            std::thread::spawn(move || {
+            let app = app.app_handle().clone();
+            // Nothing above this line touches the disk: this closure runs on
+            // the thread that paints, and a scroll makes hundreds of these
+            // requests. Pooled rather than a thread each for the same reason.
+            tauri::async_runtime::spawn_blocking(move || {
+                // Read per request rather than captured: the key can be set
+                // while the app is running, and artwork should use it at once.
+                let sgdb_key = app
+                    .try_state::<std::sync::Arc<store::Store>>()
+                    .and_then(|s| s.setting(sgdb::SETTING_KEY).ok().flatten());
+
                 let mut parts = path.split('/');
                 let key = parts.next().and_then(art::SourceKey::parse);
                 let kind = parts.next().and_then(art::Kind::parse);
@@ -726,6 +760,8 @@ pub fn run() {
                         .status(400)
                         .body(Vec::new()),
                 };
+                // The builder only fails on a malformed header, and every
+                // header above is a constant.
                 if let Ok(response) = response {
                     responder.respond(response);
                 }
@@ -764,10 +800,12 @@ pub fn run() {
                     .flatten()
                     .is_some_and(|v| v == "0");
                 if windowed {
-                    let _ = w.set_fullscreen(false);
+                    log_if_err!("window", w.set_fullscreen(false), "leaving fullscreen");
                 }
-                let _ = w.show();
-                let _ = w.set_focus();
+                // A window that will not show is a blank screen with no log
+                // line, on a machine with no keyboard to find out why.
+                log_if_err!("window", w.show(), "showing the window");
+                log_if_err!("window", w.set_focus(), "focusing the window");
 
                 // Hold the display awake only while focused, and only when a
                 // pad is connected: with a keyboard and mouse the OS already

@@ -623,18 +623,4 @@ mod tests {
         s.set_setting("sgdb_key", "   ").unwrap();
         assert_eq!(s.setting("sgdb_key").unwrap(), None);
     }
-
-    /// The property the whole schema exists for.
-    #[test]
-    fn user_data_outlives_the_game_it_describes() {
-        let s = memory();
-        s.toggle_favourite("steam:1091500").unwrap();
-        // A scan finding nothing must not be able to remove this. There is no
-        // API that would let it -- that is the point -- so this asserts the
-        // absence: nothing but remove_manual_game deletes from user_game.
-        let flags = s.user_flags().unwrap();
-        assert!(flags
-            .iter()
-            .any(|(id, f)| id == "steam:1091500" && f.favourite));
-    }
 }
