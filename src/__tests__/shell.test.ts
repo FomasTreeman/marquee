@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { legendFor, type LegendActions } from '../shell'
+import { legendFor, searchIconBBox, SEARCH_ICON, type LegendActions } from '../shell'
 import type { Device } from '../input'
 
 const DEVICES: Device[] = ['pad', 'keyboard', 'mouse']
@@ -81,5 +81,37 @@ describe('legendFor', () => {
     // Every pad row names a physical button. A pill you can only click is
     // useless to someone holding a controller on a sofa.
     for (const hint of legendFor('pad', spies())) expect(hint.key).toBeTruthy()
+  })
+})
+
+/**
+ * The search icon read visibly low even after it was redrawn as an SVG
+ * (#87): centring the icon's own box only centres the 24x24 viewBox, and a
+ * magnifying glass's circle-plus-handle shape is not itself symmetric within
+ * that box, so a geometrically centred box still holds off-centre ink. There
+ * is no DOM here to hit-test, so this checks the same thing the eye would:
+ * the stroked shape's bounding box, computed from the coordinates the icon
+ * is actually drawn with, has to be centred on the viewBox's own centre.
+ */
+describe('search icon', () => {
+  it('centres its ink within the viewBox, not just its box', () => {
+    const box = searchIconBBox()
+    const mid = SEARCH_ICON.viewBox / 2
+    expect((box.minX + box.maxX) / 2).toBeCloseTo(mid, 6)
+    expect((box.minY + box.maxY) / 2).toBeCloseTo(mid, 6)
+  })
+
+  it('would not pass with the textbook (unshifted) magnifying-glass coordinates', () => {
+    // The shape most icon sets ship -- circle at 11,11, handle from 21,21 --
+    // reads low for the same geometric reason. Asserting it fails here is
+    // what makes the test above load-bearing rather than tautological.
+    const strokeWidth = 2
+    const half = strokeWidth / 2
+    const circle = { cx: 11, cy: 11, r: 7 }
+    const handle = { x1: 21, y1: 21, x2: 16.65, y2: 16.65 }
+    const xs = [circle.cx - circle.r - half, circle.cx + circle.r + half, handle.x1 - half, handle.x1 + half, handle.x2 - half, handle.x2 + half]
+    const minX = Math.min(...xs)
+    const maxX = Math.max(...xs)
+    expect((minX + maxX) / 2).not.toBeCloseTo(12, 6)
   })
 })
