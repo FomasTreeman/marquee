@@ -17,6 +17,11 @@ export interface Game {
    *  is still arriving instead of showing something wrong. */
   title: string
   installed: boolean
+  /** Steam has a newer version of this game queued. Always false for a
+   *  manual game -- nothing here tracks its own version. */
+  updateAvailable: boolean
+  /** Steam is downloading or applying that update right now. */
+  updating: boolean
   installDir: string | null
   sizeBytes: number
   lastPlayed: number | null
@@ -266,6 +271,13 @@ export async function setHidden(gameId: string, hidden: boolean): Promise<void> 
  *  it lives. Returns a description of what happened. */
 export async function uninstallGame(id: string): Promise<string> {
   return call<string>('uninstall_game', { id })
+}
+
+/** Ask Steam to download a pending update. Marquee never fetches anything
+ *  itself, docs/PLAN.md §1 -- this only hands the appid to the client that
+ *  already owns the files. Returns the URI it was handed. */
+export async function updateGame(id: string): Promise<string> {
+  return call<string>('update_game', { id })
 }
 
 /** Toggle fullscreen, returning the new state. Remembered across launches. */

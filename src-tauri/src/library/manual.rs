@@ -42,6 +42,8 @@ impl LibraryProvider for Manual<'_> {
                 title: m.title,
                 // "Installed" here means playable: we know where it is.
                 installed: m.executable.is_some(),
+                update_available: false,
+                updating: false,
                 install_dir: m.executable.map(PathBuf::from),
                 size_bytes: 0,
                 last_played: m.last_played.and_then(|t| u64::try_from(t).ok()),
