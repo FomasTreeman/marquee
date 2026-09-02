@@ -43,14 +43,10 @@ a token without workflow permission from writing there, and the error mentions
 `workflows permission` rather than anything about you. `CLAUDE_WORKFLOW_TOKEN`
 in the repository secrets lifts it — see the header of `.github/workflows/claude.yml`.
 
-Name the branch so nobody has to guess whose it is or what it is for:
-
-```
-claude/issue-<number>-<two-or-three-words>
-```
-
-`claude/issue-42-rocket-league-search`, not `fix` or `patch-1`. The person
-reading the branch list is deciding what to review next.
+The run has already made a branch named `claude/issue-<number>-<timestamp>`
+and checked it out. Stay on it: commit there and `git push -u origin HEAD`. An
+earlier version of this file asked for a hand-named branch, which contradicted
+the run's own brief and left agents deciding which to obey.
 
 ## The board looks after itself
 
@@ -74,8 +70,25 @@ In that case:
 
 1. Comment on the issue with what you found, what you tried, and the specific
    question you need answered. One question, not a list of five.
-2. Label it: `gh issue edit <number> --add-label needs-decision --remove-label claude-working`
+2. Label it: `gh issue edit <number> --add-label needs-decision`
 3. Stop. Do not open a speculative pull request.
+
+Leave `claude-working` alone; the workflow clears it when you finish. The
+person's reply on the issue starts a new run with the thread as its brief, so
+write the question the way you would want to read the answer.
+
+## Do not stop anywhere else
+
+Every run ends in one of three states: a pull request, a `needs-decision`
+question, or the issue closed. The workflow checks which, after you return.
+A run that ends with an unticked "Open PR" and nothing pushed is the failure
+this repository has had most often — three of them in two days — and it is
+worse than a red pull request, because the work is discarded with it.
+
+If you are out of time or stuck part-way, commit and push what you have and
+open the pull request anyway, with the body saying what is missing and that
+the suite did not run. The workflow will do the same with whatever you leave
+in the working tree, but you know what is missing and it does not.
 
 ## Scope
 

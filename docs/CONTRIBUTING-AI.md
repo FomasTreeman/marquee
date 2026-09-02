@@ -103,7 +103,8 @@ wrong thing. What earns a good patch:
   silent on screen and loud in the log — that is deliberate, so use it.
 
 Then either put `@claude` in the body, comment `@claude` on it later, or add
-the **`claude`** label. Any of the three starts a run.
+the **`claude`** label. Any of the three starts a run (the first through
+triage, which turns it into the label).
 
 ## What happens
 
@@ -115,6 +116,16 @@ here: **a fix is not finished until something fails when it regresses.**
 
 It opens a branch and a pull request. It cannot merge, and it is not asked to.
 Progress is ticked off in the issue thread as it goes.
+
+A run ends in one of three states, and the board column says which: a pull
+request (In Review), a question it could not answer itself (Needs Decision,
+with the `needs-decision` label), or the issue closed because there was
+nothing to do (Done). A run that stops anywhere else — out of turns, a tool it
+was not allowed — has whatever it pushed turned into a pull request marked as
+salvaged, so the work is somewhere you can see it rather than gone.
+
+Answering the question is enough. A reply from someone with write access on
+a `needs-decision` issue restarts it; you do not need to write `@claude`.
 
 You can keep talking to it. `@claude` in a review comment on the PR, and it
 picks up from there with the review as context.
