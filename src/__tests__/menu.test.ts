@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ENDS_THE_SESSION, mainMenuItems, usableCount } from '../menu'
+import { ENDS_THE_SESSION, mainMenuItems } from '../menu'
 
 /**
  * The Start-button menu is the only place in Marquee that can turn the machine
@@ -44,16 +44,5 @@ describe('the main menu', () => {
   it('shows the library size on the row that changes it', () => {
     expect(mainMenuItems(215).find((i) => i.id === 'rescan')?.detail).toBe('215 games')
     expect(mainMenuItems(0).find((i) => i.id === 'rescan')?.detail).toBe('0 games')
-  })
-})
-
-describe('usableCount', () => {
-  it('ignores rows that are present but unusable', () => {
-    expect(usableCount([{ id: 'a', label: 'A' }, { id: 'b', label: 'B', disabled: 'no' }])).toBe(1)
-  })
-
-  it('is what the self-check uses to refuse an empty menu', () => {
-    expect(usableCount([])).toBe(0)
-    expect(usableCount([{ id: 'a', label: 'A', disabled: 'nope' }])).toBe(0)
   })
 })

@@ -1,4 +1,5 @@
 import type { Device } from './input'
+import { el } from './dom'
 /**
  * The application shell.
  *
@@ -14,16 +15,11 @@ import type { Device } from './input'
  */
 
 /**
- * Geometry for the search icon: a magnifying glass drawn instead of the
- * Unicode glyph '⌕' it replaced (see .search-icon in app.css). Kept as data,
- * not just inline SVG markup, so `searchIconBBox` below can compute its
- * stroked bounding box and a test can catch it drifting off-centre again --
- * the glyph it replaced was centred by CSS but still read low, because a
- * character's own ink can sit anywhere within its line box. The same is true
- * of a hand-picked path: a magnifying glass's circle-plus-handle shape is not
- * symmetric, so centring its 24x24 viewBox does not centre its ink. The
- * circle here is offset -0.5,-0.5 from the textbook version of this icon
- * (cx/cy 11, handle from 21,21) for exactly that reason.
+ * The search icon, kept as data so `searchIconBBox` can assert its ink is
+ * centred. The '⌕' glyph it replaced read low because a character's ink can
+ * sit anywhere in its line box; a magnifying glass is asymmetric in its
+ * viewBox for the same reason, hence the circle nudged -0.5,-0.5 from the
+ * textbook coordinates.
  */
 export const SEARCH_ICON = {
   viewBox: 24,
@@ -32,7 +28,7 @@ export const SEARCH_ICON = {
   handle: { x1: 20.5, y1: 20.5, x2: 16.15, y2: 16.15 },
 }
 
-export function searchIconMarkup(): string {
+function searchIconMarkup(): string {
   const { viewBox, strokeWidth, circle, handle } = SEARCH_ICON
   return (
     `<svg class="search-icon" viewBox="0 0 ${viewBox} ${viewBox}" fill="none" ` +
@@ -76,17 +72,6 @@ export interface Shell {
 
 /** The design is tuned at 1080px tall, the height Playnite's canvas used. */
 const DESIGN_HEIGHT = 1080
-
-function el<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  className?: string,
-  parent?: HTMLElement,
-): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag)
-  if (className) node.className = className
-  parent?.appendChild(node)
-  return node
-}
 
 /**
  * Keep `--s` in step with the window.
@@ -192,14 +177,6 @@ export interface Hint {
   onClick?: () => void
 }
 
-/**
- * The legend along the bottom.
- *
- * Rebuilt whenever the input device changes, because telling someone to press A
- * while they are holding a mouse is worse than telling them nothing. Each entry
- * is clickable where there is something to click, which is what makes sort,
- * search and the menus reachable without learning a binding.
- */
 /** The actions a legend can offer, whatever the device. */
 export interface LegendActions {
   play(): void

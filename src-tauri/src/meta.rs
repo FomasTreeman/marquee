@@ -255,10 +255,15 @@ pub fn fetch_one(client: &reqwest::blocking::Client, app_id: &str) -> Fetched {
 }
 
 /// A client configured the way every request in this app should be: bounded,
-/// and identifying itself honestly.
+/// and identifying itself honestly (docs/PLAN.md §11: a public endpoint,
+/// called at a human rate, by something that says who it is).
 pub fn http_client() -> Option<reqwest::blocking::Client> {
+    http_client_with(Duration::from_secs(20))
+}
+
+pub fn http_client_with(timeout: Duration) -> Option<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(20))
+        .timeout(timeout)
         .user_agent(concat!(
             "Marquee/",
             env!("CARGO_PKG_VERSION"),
@@ -285,26 +290,40 @@ impl Enricher {
 /// Runs at its own pace and emits a `meta` event per game as it lands, so the
 /// interface fills in progressively instead of waiting on a batch. Never
 /// blocks the scan, never blocks the UI.
+/// Back of the queue, not the front: a game that cannot be fetched right now
+/// must not block every game behind it. But not forever -- appid 0, which a
+/// manual game with no Steam entry produced, retried every twelve seconds for
+/// as long as the app was open and filled a debug report so completely that
+/// the controller diagnosis it was meant to carry was three lines at the
+/// bottom of a hundred and twenty.
+///
+/// Giving up is for this session only; nothing is written to the cache.
+/// Recording a miss here made an offline first launch permanent: four failed
+/// sends in the first minute wrote "no store page" for every game, and
+/// nothing ever asked again.
+fn requeue(
+    app_id: String,
+    attempts: &mut HashMap<String, u32>,
+    queue: &mut VecDeque<String>,
+) -> bool {
+    let tries = attempts.entry(app_id.clone()).or_insert(0);
+    *tries += 1;
+    if *tries > MAX_RETRIES {
+        log_debug!("meta", "giving up on {app_id} after {tries} tries");
+        return false;
+    }
+    log_debug!("meta", "will retry {app_id} ({tries})");
+    queue.push_back(app_id);
+    true
+}
+
 pub fn spawn(app: AppHandle) -> Enricher {
     let (tx, rx) = mpsc::channel::<Vec<String>>();
 
     std::thread::spawn(move || {
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(20))
-            // Identify honestly. docs/PLAN.md §11: stay on the right side of
-            // "calling a public endpoint at a human rate".
-            .user_agent(concat!(
-                "Marquee/",
-                env!("CARGO_PKG_VERSION"),
-                " (game launcher)"
-            ))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                log_warn!("meta", "no HTTP client, metadata disabled: {e}");
-                return;
-            }
+        let Some(client) = http_client() else {
+            log_warn!("meta", "no HTTP client, metadata disabled");
+            return;
         };
 
         let mut queue: VecDeque<String> = VecDeque::new();
@@ -337,6 +356,8 @@ pub fn spawn(app: AppHandle) -> Enricher {
 
             if let Some(meta) = cached(&app_id) {
                 if !meta.name.is_empty() {
+                    // Both emits: the only listener is the webview, and a
+                    // closed webview is not an error.
                     let _ = app.emit("meta", &meta);
                 }
                 continue;
@@ -352,26 +373,9 @@ pub fn spawn(app: AppHandle) -> Enricher {
                 }
                 Fetched::NoStorePage => log_debug!("meta", "no store page for {app_id}"),
                 Fetched::Retry => {
-                    // Back of the queue, not the front: a game that cannot be
-                    // fetched right now must not block every game behind it.
-                    //
-                    // But not forever. Appid 0 -- which a manual game with no
-                    // Steam entry produces -- retried every twelve seconds for
-                    // as long as the app was open, writing a line each time.
-                    // It never succeeded and never could, and it filled a
-                    // debug report so completely that the controller
-                    // diagnosis it was meant to carry was three lines at the
-                    // bottom of a hundred and twenty.
-                    let tries = attempts.entry(app_id.clone()).or_insert(0);
-                    *tries += 1;
-                    if *tries > MAX_RETRIES {
-                        log_debug!("meta", "giving up on {app_id} after {tries} tries");
-                        store_miss(&app_id);
-                        continue;
+                    if requeue(app_id, &mut attempts, &mut queue) {
+                        std::thread::sleep(BACKOFF);
                     }
-                    log_debug!("meta", "will retry {app_id} ({tries})");
-                    queue.push_back(app_id);
-                    std::thread::sleep(BACKOFF);
                 }
             }
         }
@@ -516,6 +520,25 @@ mod tests {
         let got = cached("99002").expect("the miss was written");
         assert!(got.name.is_empty(), "a miss is an entry with no name");
         std::fs::remove_file(&path).ok();
+    }
+
+    /// Offline is not "no such game". The give-up path must leave nothing on
+    /// disk, or the next launch inherits an empty library's worth of misses.
+    #[test]
+    fn giving_up_on_a_transient_failure_leaves_no_cache_entry() {
+        // A previous run that failed this test leaves the entry behind.
+        std::fs::remove_file(cache_path("99005")).ok();
+        let mut attempts = HashMap::new();
+        let mut queue = VecDeque::new();
+        for _ in 0..=MAX_RETRIES {
+            queue.clear();
+            requeue("99005".into(), &mut attempts, &mut queue);
+        }
+        assert!(queue.is_empty(), "dropped after the last try");
+        assert!(
+            cached("99005").is_none(),
+            "a transient failure must not become a recorded miss"
+        );
     }
 
     #[test]

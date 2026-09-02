@@ -38,20 +38,36 @@ function nearestHz(medianMs: number): number {
   return rates.reduce((a, b) => (Math.abs(b - measured) < Math.abs(a - measured) ? b : a))
 }
 
+/**
+ * Measures only between start() and stop(). It used to run from creation for
+ * the life of the process, a callback every frame in every release build for
+ * a readout nobody had opened; the HUD starts it when shown.
+ */
 export function createFrameMeter(windowSize = 180) {
   const times: number[] = []
-  let last = performance.now()
+  let last = 0
   let raf = 0
 
   function tick(now: number) {
-    times.push(now - last)
+    // The first frame after a start only sets the clock: measured from the
+    // moment of the call it would report the wait as a dropped frame.
+    if (last) times.push(now - last)
     last = now
     if (times.length > windowSize) times.shift()
     raf = requestAnimationFrame(tick)
   }
-  raf = requestAnimationFrame(tick)
 
   return {
+    start() {
+      if (raf) return
+      times.length = 0
+      last = 0
+      raf = requestAnimationFrame(tick)
+    },
+    stop() {
+      cancelAnimationFrame(raf)
+      raf = 0
+    },
     read(): FrameStats {
       if (times.length < 8) return { fps: 0, p99: 0, worst: 0, hz: 0, peakHz: 0, dropped: 0 }
       const sorted = [...times].sort((a, b) => a - b)
@@ -73,7 +89,6 @@ export function createFrameMeter(windowSize = 180) {
         dropped: times.filter((t) => t > interval * 1.5).length,
       }
     },
-    stop() { cancelAnimationFrame(raf) },
   }
 }
 
