@@ -100,14 +100,17 @@ pub fn open_uri(uri: &str) -> Result<(), String> {
         return Err(format!("refusing to open an unexpected URI scheme: {uri}"));
     }
 
-    // And guard the characters, because of how Windows opens a URI.
+    // And guard the characters, because of how Windows used to open a URI.
     //
-    // There is no Win32 call here that takes a URI directly without pulling in
-    // another dependency, so this goes through `cmd /C start` -- and cmd.exe
-    // re-parses its own command line after Rust has quoted it. Rust's quoting
-    // is built for CreateProcess, not for cmd, so a `&`, `|`, `^`, `<`, `>` or
-    // `"` inside an argument can escape it and be run as a command. That is
-    // the BatBadBut class of bug (CVE-2024-24576).
+    // This went through `cmd /C start` for a long time, and cmd.exe re-parses
+    // its own command line after Rust has quoted it. Rust's quoting is built
+    // for CreateProcess, not for cmd, so a `&`, `|`, `^`, `<`, `>` or `"`
+    // inside an argument could escape it and be run as a command -- the
+    // BatBadBut class of bug (CVE-2024-24576). Windows now goes through
+    // ShellExecuteW, which takes the URI as a single string and parses no
+    // command line, so the shell is out of the picture. The guard stays: it
+    // costs nothing, and the next platform-specific opener may not be as
+    // careful.
     //
     // Nothing reaches here with such a character today: the appid is checked
     // for digits in `plan`. This is the second lock, for the caller who adds a
@@ -122,31 +125,77 @@ pub fn open_uri(uri: &str) -> Result<(), String> {
         return Err(format!("refusing a URI containing {bad:?}: {uri}"));
     }
 
-    #[cfg(target_os = "macos")]
-    let mut cmd = {
-        let mut c = Command::new("open");
-        c.arg(uri);
-        c
-    };
-
     #[cfg(target_os = "windows")]
-    let mut cmd = {
-        // `cmd /C start` needs an empty title argument or it treats the URI as
-        // the window title and does nothing at all.
-        let mut c = Command::new("cmd");
-        c.args(["/C", "start", "", uri]);
-        c
-    };
+    {
+        shell_execute(uri)
+    }
 
-    #[cfg(target_os = "linux")]
-    let mut cmd = {
-        let mut c = Command::new("xdg-open");
-        c.arg(uri);
-        c
-    };
+    #[cfg(not(target_os = "windows"))]
+    {
+        #[cfg(target_os = "macos")]
+        let mut cmd = {
+            let mut c = Command::new("open");
+            c.arg(uri);
+            c
+        };
 
-    cmd.spawn()
-        .map_err(|e| format!("could not open {uri}: {e}"))?;
+        #[cfg(target_os = "linux")]
+        let mut cmd = {
+            let mut c = Command::new("xdg-open");
+            c.arg(uri);
+            c
+        };
+
+        cmd.spawn()
+            .map_err(|e| format!("could not open {uri}: {e}"))?;
+        Ok(())
+    }
+}
+
+/// Ask the shell to open a URI with whatever is registered for it.
+///
+/// This used to be `cmd /C start "" uri`, which works, and also opens a
+/// console window for the instant cmd.exe takes to run -- a black rectangle
+/// flashing over a fullscreen launcher on every Play. `ShellExecuteW` is what
+/// `start` calls underneath, minus the console and minus cmd.exe's parsing of
+/// the command line, which is what the character guard in `open_uri` was
+/// defending against.
+#[cfg(target_os = "windows")]
+fn shell_execute(uri: &str) -> Result<(), String> {
+    use windows_sys::Win32::UI::Shell::ShellExecuteW;
+
+    /// `SW_SHOWNORMAL`. Steam decides what its own window does with this; the
+    /// value only matters for handlers that open a window of their own.
+    const SHOW_NORMAL: i32 = 1;
+    /// The documented threshold: anything at or below is an `SE_ERR_*` code,
+    /// not an instance handle.
+    const LARGEST_ERROR: isize = 32;
+
+    fn wide(s: &str) -> Vec<u16> {
+        s.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+    let verb = wide("open");
+    let file = wide(uri);
+
+    // SAFETY: both strings are NUL-terminated and outlive the call; the null
+    // parameters are the documented "none" for window, arguments and folder.
+    let result = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            file.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null(),
+            SHOW_NORMAL,
+        )
+    };
+    if result as isize <= LARGEST_ERROR {
+        return Err(format!(
+            "could not open {uri}: ShellExecuteW returned {} ({})",
+            result as isize,
+            std::io::Error::last_os_error()
+        ));
+    }
     Ok(())
 }
 
@@ -400,12 +449,13 @@ pub fn start(
 mod tests {
     use super::*;
 
-    /// Opening a URI on Windows goes through `cmd /C start`, and cmd.exe
-    /// re-parses the command line after Rust has quoted it for CreateProcess.
-    /// A shell metacharacter that survives that is a command, not an argument
-    /// (CVE-2024-24576). Nothing builds such a URI today; this is the lock for
-    /// the caller who adds a provider later and builds one from a name read
-    /// off the disk.
+    /// Opening a URI on Windows went through `cmd /C start` until it went
+    /// through ShellExecuteW, and cmd.exe re-parses the command line after
+    /// Rust has quoted it for CreateProcess. A shell metacharacter that
+    /// survives that is a command, not an argument (CVE-2024-24576). Nothing
+    /// builds such a URI today and nothing hands one to a shell any more;
+    /// this is the lock for the caller who adds a provider later and builds
+    /// one from a name read off the disk.
     #[test]
     fn a_uri_carrying_a_shell_metacharacter_is_refused() {
         for evil in [

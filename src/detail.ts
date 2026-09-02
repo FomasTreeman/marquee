@@ -189,7 +189,10 @@ export function createDetail(hooks: DetailHooks): DetailView {
   const body = el('div', 'detail-body', scroll)
 
   // Top right, away from the primary actions: these are the two things nobody
-  // should reach for by accident.
+  // should reach for by accident. Away, not unreachable: `left`/`right` run
+  // on past the end of the action row into here, because a pad had no route
+  // to Hide or Uninstall at all until it did -- they were mouse-only for as
+  // long as the row was the only thing the pad could move along.
   const corner = el('div', 'detail-corner', root)
 
   const logo = el('img', 'detail-logo', body)
@@ -221,6 +224,12 @@ export function createDetail(hooks: DetailHooks): DetailView {
   /** The game on screen, so the rename knows what it is renaming. */
   let current: Game | undefined
   let renaming = false
+
+  /** Everything a pad can land on, in the order `right` visits it: the action
+   *  row, then the corner. */
+  function ring(): HTMLElement[] {
+    return [...actions.children, ...corner.children] as HTMLElement[]
+  }
 
   function endRename(): void {
     if (renaming) onTextFieldClosed?.()
@@ -308,7 +317,7 @@ export function createDetail(hooks: DetailHooks): DetailView {
       // user had already moved to would silently lose focus back to the
       // first one the moment the report landed.
       const priorActionFocus = wasOpen
-        ? Array.from(actions.children).indexOf(document.activeElement as HTMLElement)
+        ? ring().indexOf(document.activeElement as HTMLElement)
         : -1
       open = true
       root.hidden = false
@@ -495,7 +504,7 @@ export function createDetail(hooks: DetailHooks): DetailView {
       // and WebKit will not honour focus() on an element revealed in the same
       // tick as the call -- revealThenFocus above and settings.ts's open()
       // hit the same thing and defer for it too.
-      const actionButtons = Array.from(actions.children) as HTMLElement[]
+      const actionButtons = ring()
       if (wasOpen) {
         if (priorActionFocus >= 0) {
           actionButtons[Math.min(priorActionFocus, actionButtons.length - 1)]?.focus()
@@ -523,7 +532,7 @@ export function createDetail(hooks: DetailHooks): DetailView {
       if (action === 'b' || action === 'y') { close(); return true }
       if (action === 'up') { scroll.scrollBy({ top: -220, behavior: 'smooth' }); return true }
       if (action === 'down') { scroll.scrollBy({ top: 220, behavior: 'smooth' }); return true }
-      const buttons = Array.from(actions.children) as HTMLElement[]
+      const buttons = ring()
       if (action === 'a') {
         const active = document.activeElement
         // Whichever button has focus; the first one if a race with the
