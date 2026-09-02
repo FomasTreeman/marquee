@@ -154,6 +154,19 @@ rule.
 | [docs/AUTOMATION.md](docs/AUTOMATION.md) | How it is maintained: issue → agent → pull request → CI → review → merge queue → release |
 | [docs/WINDOWS.md](docs/WINDOWS.md) | Cross-compiling from a Mac, and what to read when a pad does nothing on Windows |
 
+## Licence
+
+[PolyForm Strict 1.0.0](LICENSE.md). You may run it, read it and learn from
+it; you may not distribute it or ship something built from it. That is a
+source-available licence, not an open-source one, chosen deliberately: the
+code is public so that the updater has an endpoint it can read and so that
+the reasoning in the documents is there for anyone, not so that the launcher
+gets forked into a product. GitHub's own terms still allow the on-site fork
+button; the licence governs what may be done with the copy.
+
+The licensor is Thomas Freeman. Contributions are welcome under the same
+terms — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Why
 
 [Playnite](https://playnite.link) is the reference and it is excellent: one

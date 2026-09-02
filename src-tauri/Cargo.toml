@@ -2,6 +2,7 @@
 name = "marquee"
 version = "0.2.2"
 description = "A controller-first game launcher"
+license = "PolyForm-Strict-1.0.0"
 edition = "2021"
 rust-version = "1.77"
 
