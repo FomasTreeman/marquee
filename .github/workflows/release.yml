@@ -506,11 +506,6 @@ jobs:
 
             Installed copies will offer this version shortly after their next
             launch. Or ask now: Settings → Updates → Check for updates.
-          # Published, not a draft. The human gate moved earlier: the change
-          # was reviewed as a pull request, which is a better place to catch
-          # something than a release page. A draft here would also mean the
-          # updater never sees it, since /releases/latest ignores drafts --
-          # which is the shape of the bug this file just replaced.
           # A draft until every platform is in.
           #
           # tauri-action publishes as it goes, so the release went live the

@@ -63,8 +63,8 @@ concurrency:
 jobs:
   reconcile:
     runs-on: ubuntu-latest
-    # Two GraphQL calls per issue. The hourly sweep over every open issue
-    # is the long case and it is seconds, not minutes.
+    # A few API calls per issue. The hourly sweep over every open issue is
+    # the long case and it is seconds, not minutes.
     timeout-minutes: 10
     steps:
       # No `ref:`, and that omission is load-bearing.

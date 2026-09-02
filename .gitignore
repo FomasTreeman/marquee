@@ -9,3 +9,6 @@ src-tauri/gen/
 # never be committed: every install only trusts bundles signed by it.
 *.key
 *.key.pub
+
+# Worktrees the agent tooling checks out beside the repository.
+.claude/worktrees/
