@@ -16,14 +16,18 @@
 //! Restoring the window Marquee minimised for the game is a different
 //! problem, and playtime's own answer does not solve it: nothing reads
 //! `localconfig.vdf` until the *next* scan, which can be minutes away. On
-//! Windows, Steam also keeps the running appid live in the registry -- the
-//! same key `Steam::is_running` already reads -- updated the instant a game
-//! starts or stops, so `start` polls that to know when a hand-off session
-//! ends. macOS and Linux have no equivalent live signal, so a Steam launch
-//! there still leaves Marquee minimised until the user switches back by hand.
-//! Before this, *no* Steam launch on any platform brought the window back --
-//! only a manually-added game did, because the first attempt at this (#63)
-//! only ever watched a child process we owned (#90).
+//! Windows, Steam also keeps the running appid live in the registry --
+//! updated the instant a game starts or stops -- so `start` polls that to
+//! know when a hand-off session ends. macOS and Linux have no equivalent
+//! live signal, so a Steam launch there still leaves Marquee minimised until
+//! the user switches back by hand. Before this, *no* Steam launch on any
+//! platform brought the window back -- only a manually-added game did,
+//! because the first attempt at this (#63) only ever watched a child process
+//! we owned (#90). The first attempt at fixing *that* (#94) read the appid
+//! from the wrong registry key -- nested under `ActiveProcess`, by analogy
+//! with the pid `Steam::is_running` reads there -- so it still never fired
+//! against a real session; see `Steam::running_app_id` for where it actually
+//! lives.
 //!
 //! **Manual** games spawn directly, so we own the child and can time the
 //! session exactly.
@@ -252,15 +256,21 @@ fn watch_steam_session(
     mut running_app_id: impl FnMut() -> Option<u32>,
 ) {
     let start_deadline = std::time::Instant::now() + start_timeout;
-    while running_app_id() != Some(appid) {
+    let mut last_seen = running_app_id();
+    while last_seen != Some(appid) {
         if std::time::Instant::now() >= start_deadline {
+            // Logged with what was actually last read, not just that it gave
+            // up: #94 gave up on every session because the registry read was
+            // wrong and always came back empty, and "never showed up" alone
+            // looked identical to a game that was merely slow to start.
             log_info!(
                 "run",
-                "{title} never showed up as Steam's running game; not tracking its session"
+                "{title} never showed up as Steam's running game (last read {last_seen:?}, wanted {appid}); not tracking its session"
             );
             return;
         }
         std::thread::sleep(poll);
+        last_seen = running_app_id();
     }
     log_info!(
         "run",
