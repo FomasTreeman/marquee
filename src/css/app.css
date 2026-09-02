@@ -777,7 +777,11 @@ html[data-background="blur"] .backdrop-img {
    only centres the glyph's line box, not the ink inside it -- a symbol
    character's font-defined descent still pushes it down within that line.
    An SVG has no descent to allocate, so display: block plus this fixed
-   square is centred by geometry rather than by a font's metrics. */
+   square is centred by geometry rather than by a font's metrics. That still
+   was not enough on its own: a magnifying glass's circle-plus-handle shape
+   is not symmetric within its own viewBox, so the icon's coordinates in
+   shell.ts (SEARCH_ICON) also needed nudging so the drawn ink, not just the
+   box around it, sits on centre. */
 .search-icon {
   display: block;
   width: calc(17px * var(--s));
