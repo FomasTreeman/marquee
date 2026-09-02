@@ -646,7 +646,12 @@ mod tests {
         )
         .unwrap();
 
-        let ended = exit_rx.recv_timeout(std::time::Duration::from_secs(4));
+        // Generous, because this is a test of whether the end is reported,
+        // not of how quickly. With four seconds it failed on a macOS runner
+        // that took longer than that to run a one-second script: the first
+        // execution of a freshly written file there waits on the system's
+        // malware scan, and a busy runner makes that wait unbounded.
+        let ended = exit_rx.recv_timeout(std::time::Duration::from_secs(30));
         let _ = std::fs::remove_file(&script);
         assert!(
             ended.is_ok(),
