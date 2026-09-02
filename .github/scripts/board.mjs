@@ -131,8 +131,16 @@ export function statusFor(facts) {
  * #76 failed in four seconds on a workflow bug and then sat for six hours
  * waiting to be allowed another go, which read as the loop having died.
  */
-export function shouldPickUp(facts, hoursSinceHandover, cooldownHours = 1) {
+export function shouldPickUp(facts, hoursSinceHandover, cooldownHours = 1, graceMinutes = 10) {
   if (statusFor(facts) !== CONFIG.status.todo) return false
+  // The label went on moments ago, so a run is already starting -- it just
+  // has not set `claude-working` yet. Those seconds between the trigger and
+  // the run's first label write are the only time an issue is in Todo *and*
+  // spoken for, and this sweep fires on every run finishing, which is exactly
+  // when triage tends to be labelling the next one. Handing over here started
+  // a second run that then cancelled the first, or the other way round: a
+  // quarter of all agent runs ended "cancelled" that way.
+  if (facts.minutesSinceTrigger !== undefined && facts.minutesSinceTrigger < graceMinutes) return false
   // Never handed over, so this is the first offer.
   if (hoursSinceHandover === undefined || hoursSinceHandover === null) return true
   return hoursSinceHandover >= cooldownHours
@@ -246,7 +254,7 @@ export async function loadProject(project, owner, number) {
  * depend on -- and it means a missed event costs nothing, because the next run
  * for any reason puts the card right.
  */
-export async function factsFor(github, owner, repo, number) {
+export async function factsFor(github, owner, repo, number, now = Date.now()) {
   // The pull request *for* an issue is one that closes it -- `Closes #N` in
   // the body, or a link made in the Development sidebar -- and that is what
   // `closedByPullRequestsReferences` holds. This used to scan the timeline
@@ -277,7 +285,7 @@ export async function factsFor(github, owner, repo, number) {
            timelineItems(last: 50, itemTypes: [LABELED_EVENT, UNLABELED_EVENT, REOPENED_EVENT]) {
              nodes {
                __typename
-               ... on LabeledEvent { label { name } }
+               ... on LabeledEvent { createdAt label { name } }
                ... on UnlabeledEvent { label { name } }
              }
            }
@@ -324,7 +332,25 @@ export async function factsFor(github, owner, repo, number) {
     // Decision when the rule everywhere else is three.
     attempts: sinceLastRestart(issue.timelineItems.nodes)
       .filter((n) => n?.__typename === 'LabeledEvent' && n?.label?.name === CONFIG.labels.working).length,
+
+    // How long ago the agent label last went on, or undefined if it never
+    // has. A label event is a run starting, and a run takes a minute or two
+    // to set `claude-working`; `shouldPickUp` needs to know it is inside that
+    // window rather than looking at an issue nobody has started.
+    minutesSinceTrigger: minutesSince(newestTrigger(issue.timelineItems.nodes), now),
   }
+}
+
+function newestTrigger(nodes) {
+  return nodes
+    .filter((n) => n?.__typename === 'LabeledEvent' && n?.label?.name === CONFIG.labels.agent && n?.createdAt)
+    .pop()
+}
+
+function minutesSince(event, now) {
+  if (!event) return undefined
+  const at = Date.parse(event.createdAt)
+  return Number.isNaN(at) ? undefined : (now - at) / 60000
 }
 
 function sinceLastRestart(nodes) {

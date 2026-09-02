@@ -42,6 +42,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 BRIEFS = {
     "claude.yml": [ROOT / "CLAUDE.md", ROOT / ".github" / "claude-instructions.md"],
     "ci-repair.yml": [ROOT / ".github" / "workflows" / "ci-repair.yml"],
+    "review.yml": [ROOT / ".github" / "workflows" / "review.yml"],
 }
 
 # What the loop depends on that no fenced block spells out.
@@ -63,6 +64,12 @@ REQUIRED = {
     "ci-repair.yml": [
         "git",               # it pushes to an existing branch
         "gh pr comment",     # how it says which it concluded and why
+    ],
+    # The review's brief was "post ONE comment" and its tool list was `git`.
+    # Sixty-nine runs, every one reported success, not one comment posted:
+    # the agent was refused, gave up, and the run had nothing to fail on.
+    "review.yml": [
+        "gh pr comment",     # the whole job, per its own prompt
     ],
 }
 

@@ -66,7 +66,6 @@ jobs:
       contents: write
       pull-requests: write
       issues: write
-      id-token: write
       # Read, not write. Reading the failed run is the whole job; starting one
       # is not, and `gh workflow run release.yml` cuts a release.
       actions: read

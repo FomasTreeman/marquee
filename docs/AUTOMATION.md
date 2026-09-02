@@ -140,7 +140,11 @@ Two things have already happened by the time you open the pull request.
 `review.yml` has left a comment: a fresh agent run with no memory of writing
 the change, reading only the diff. It does not approve or block; it tells you
 where to look, so you do not arrive at three hundred lines cold at eleven at
-night.
+night. If there is no comment, that is the workflow having failed, and a
+comment saying so should be there instead — for its first sixty-nine runs it
+had no tool it was allowed to post with, gave up quietly every time and
+reported success, and every pull request in that period went out with a green
+"review" tick and no review.
 
 CI has run on Linux, Windows and macOS with warnings as errors, plus the
 silence check, the workflow lint and every test suite. **Green means it
@@ -267,7 +271,11 @@ Each of these exists because the thing it catches happened.
 its trigger — a label event fires once. Four issues sat there for hours while
 the card said "queued". This sweeps after every agent run and hourly, and
 hands the oldest waiting issue over with an `@claude` comment. One per sweep,
-an hour's cooldown per issue, three attempts in total.
+an hour's cooldown per issue, three attempts in total, and a few minutes'
+grace after the `claude` label goes on — a run takes a minute or two to set
+`claude-working`, and a sweep landing in that gap once handed the issue over
+again, so a quarter of all agent runs ended as one of a pair cancelling the
+other.
 
 **`automation-broken.yml`.** A workflow failing on `main` has no branch and no
 pull request, so there was nowhere for a repair to go, and the board failed
@@ -387,6 +395,8 @@ merge, cannot push to `main`, and cannot start a release.
 | Release stays a draft | one platform's build failed; open the run. Drafts are invisible to the updater |
 | App never offers an update | no `latest.json` on the release: `createUpdaterArtifacts` is off or the build did not finish |
 | An automation workflow is red on `main` | an issue has been filed for it; look for `claude` issues titled after the workflow |
+| A pull request has a green Review check and no review comment | the reviewer could not post. It now leaves a comment saying so; if even that is missing, `pull-requests: write` has gone from `review.yml` |
+| Agent runs show as *cancelled* in pairs | two triggers reached the same issue within a minute — a label and a comment, say. The `claude-<number>` concurrency group keeps one; the cancelled one did no work and cost nothing. Pairs used to be a quarter of all runs before `pick-up-todo.yml` learned to wait |
 
 ## What this loop is not
 

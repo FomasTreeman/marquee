@@ -21,7 +21,6 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
-  id-token: write
 
 concurrency:
   group: review-${{ github.event.pull_request.number }}
@@ -53,6 +52,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      # So the check at the end can tell this run's comment from an older one.
+      - id: started
+        run: echo "at=$(date -u +%FT%TZ)" >> "$GITHUB_OUTPUT"
 
       - uses: anthropics/claude-code-action@a874e9ecd7bb36efdad65429c6b35815f5a08f10 # v1.0.210
         with:
@@ -88,8 +91,50 @@ jobs:
             Do not approve, do not request changes, do not push commits. A
             comment is the whole job.
 
-            You have `git` and nothing else. This job is a checkout with no
-            toolchain, so read the diff and the history -- do not try to run the
-            suite, and do not claim a change passes or fails as though you had.
+            You have `git`, `gh pr view`, `gh pr diff` and `gh pr comment`, and
+            nothing else. This job is a checkout with no toolchain, so read the
+            diff and the history -- do not try to run the suite, and do not
+            claim a change passes or fails as though you had.
+
+            Post the comment with:
+
+            ```bash
+            gh pr comment ${{ github.event.pull_request.number }} --body-file review.md
+            ```
+
+          # `gh pr comment` is the deliverable and it was not granted. For its
+          # first sixty-nine runs this workflow had `git` alone, the agent was
+          # refused every way it tried to post, gave up, and the run reported
+          # success -- so every pull request went out "reviewed" with no
+          # review on it, and nothing anywhere said so. tools/check-agent-tools.py
+          # now holds this list to the prompt above, and the step below holds
+          # the run to having posted.
           claude_args: |
-            --allowed-tools "Bash(git:*)"
+            --allowed-tools "Bash(git:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*)"
+
+      # A review that posted nothing is the failure this workflow had for two
+      # days without anyone noticing, so it says so where the review should
+      # have been. A comment rather than a red job: nothing gates on this
+      # workflow, and the board reads a failed check on the head commit as
+      # the pull request's CI failing, which would be a second wrong signal.
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        env:
+          STARTED: ${{ steps.started.outputs.at }}
+        with:
+          script: |
+            const { owner, repo } = context.repo
+            const number = context.payload.pull_request.number
+            const since = Date.parse(process.env.STARTED)
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: number, per_page: 100,
+            })
+            const posted = comments.some((c) =>
+              c.user?.type === 'Bot' && Date.parse(c.created_at) >= since)
+            if (posted) return
+            core.warning(`The review ran and posted nothing on #${number}.`)
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: number,
+              body: '<!-- review-missing -->\n'
+                + 'The review ran and posted nothing. That is the workflow failing, not the pull'
+                + ` request passing: ${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`,
+            })
