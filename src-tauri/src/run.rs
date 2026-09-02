@@ -262,7 +262,10 @@ fn watch_steam_session(
         }
         std::thread::sleep(poll);
     }
-    log_info!("run", "Steam reports {title} running; waiting for it to end");
+    log_info!(
+        "run",
+        "Steam reports {title} running; waiting for it to end"
+    );
     while running_app_id() == Some(appid) {
         std::thread::sleep(poll);
     }
