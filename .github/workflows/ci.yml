@@ -139,6 +139,14 @@ jobs:
         shell: bash
         run: python3 tools/check-workflows.py
 
+      # Being refused a tool is not an error -- the agent is told no, carries
+      # on without it, and reports success having delivered nothing. Three
+      # separate stalls came from an instruction the tool list forbade.
+      - name: The agent can run what it is told to run
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: python3 tools/check-agent-tools.py
+
       - if: matrix.os == 'ubuntu-latest'
         run: pnpm exec tsc --noEmit
 
