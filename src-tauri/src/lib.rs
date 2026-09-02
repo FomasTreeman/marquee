@@ -83,6 +83,49 @@ async fn launch_game(
         .map_err(|e| format!("the launch thread died: {e}"))?
 }
 
+/// How long to give the restore before looking at whether it took.
+///
+/// Both calls in `restore_window` are queued to the interface's thread, not
+/// done where they are called, so a second is for that queue to drain and
+/// for Windows to finish handing the foreground back from the game that
+/// just closed.
+const RESTORE_CHECK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Bring the window back from the minimised state a launch put it in, and
+/// say whether it came back.
+///
+/// `unminimize` and `set_focus` return Ok the moment the request is queued
+/// to the interface's thread; nothing about the window has happened yet.
+/// That made "the window stays minimised" (#63, then #90 twice) impossible
+/// to read from the log: a session watcher that never fired and a restore
+/// the platform refused both left exactly the same "restoring the window"
+/// line, or none at all. So this looks a moment later and writes down what
+/// it saw -- and has one more go, because the moment a fullscreen game
+/// tears down is the moment Windows is least willing to hand the
+/// foreground to anyone.
+fn restore_window(window: &tauri::Window) {
+    log_info!("run", "restoring the window");
+    for attempt in 1..=2 {
+        log_if_err!("run", window.unminimize(), "restoring the window");
+        log_if_err!("run", window.set_focus(), "focusing the window");
+        std::thread::sleep(RESTORE_CHECK);
+        match window.is_minimized() {
+            Ok(false) => {
+                log_info!("run", "the window is back (attempt {attempt})");
+                return;
+            }
+            Ok(true) => log_warn!(
+                "run",
+                "the window is still minimised after asking to restore it (attempt {attempt})"
+            ),
+            Err(e) => {
+                log_warn!("run", "could not tell whether the window came back: {e}");
+                return;
+            }
+        }
+    }
+}
+
 fn launch(
     app: tauri::AppHandle,
     window: tauri::Window,
@@ -96,16 +139,15 @@ fn launch(
     let notify = {
         // The window may already be minimised for this launch (see below), and
         // a failure toast behind a minimised window is never seen -- bring it
-        // back before telling the interface.
+        // back as well as telling the interface.
         let window = window.clone();
         move |detail: String| {
-            log_if_err!("run", window.unminimize(), "restoring the window");
-            log_if_err!("run", window.set_focus(), "focusing the window");
             // The only listener is the webview; a closed one is not an error.
             let _ = app.emit(
                 "launch-failed",
                 serde_json::json!({ "title": title, "detail": detail }),
             );
+            restore_window(&window);
         }
     };
     // Marquee minimised itself to get out of the game's way; nothing else
@@ -113,10 +155,7 @@ fn launch(
     // forever instead of coming back the way a console does (#63).
     let on_exit = {
         let window = window.clone();
-        move || {
-            log_if_err!("run", window.unminimize(), "restoring the window");
-            log_if_err!("run", window.set_focus(), "focusing the window");
-        }
+        move || restore_window(&window)
     };
     // Checked before launching so the interface can say how long this will
     // take. A cold Steam is several seconds; a warm one is instant, and telling

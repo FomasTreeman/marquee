@@ -52,6 +52,19 @@ television, and an unbounded log is a slow leak.
 Logging never throws and never awaits. Logging that can fail turns one
 diagnosable bug into two, and the second hides the first.
 
+**If Marquee stays minimised after a game closes**, the log says which half
+failed, and they need different fixes. Marquee only knows a session has ended
+by watching it: a process it spawned for a hand-added game, or on Windows
+the appid Steam reports as running. So look for `session ended` -- if it is
+missing, the watching is what failed, and the line before it says why:
+`exited immediately, cleanly -- probably a launcher stub` means the executable
+handed off to a store client and there was never a process to watch, and
+`never showed up as Steam's running game` means Steam never reported the
+game starting. If `session ended` is there, the restore is what failed, and
+`restoring the window` is followed by either `the window is back` or `still
+minimised after asking to restore it`. Three rounds of #90 went by on a guess
+each because the log could not tell those apart.
+
 ## Failures that are visible on screen
 
 - **Fatal startup errors** render a legible panel with the message, the stack

@@ -231,8 +231,15 @@ const STEAM_SESSION_POLL: std::time::Duration = std::time::Duration::from_millis
 /// but never actually starts -- Steam offering to install it instead, say --
 /// so this thread does not sit polling forever for a session that was never
 /// going to happen.
+///
+/// Generous, because giving up is the one outcome that leaves Marquee
+/// minimised for good. Steam does not report a game as running while it
+/// downloads the update it insists on first, or while a first launch runs
+/// the redistributable installers, and either takes longer than the two
+/// minutes this used to be. The cost of waiting is a thread reading two
+/// registry values twice a second.
 #[cfg(target_os = "windows")]
-const STEAM_SESSION_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+const STEAM_SESSION_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
 /// Make sure Steam is up, without showing its window.
 ///
@@ -303,8 +310,9 @@ fn watch_steam_session(
             // Logged with what was actually last read, not just that it gave
             // up: #94 gave up on every session because the registry read was
             // wrong and always came back empty, and "never showed up" alone
-            // looked identical to a game that was merely slow to start.
-            log_info!(
+            // looked identical to a game that was merely slow to start. A
+            // warning, because from here on the window stays minimised.
+            log_warn!(
                 "run",
                 "{title} never showed up as Steam's running game (last read {last_seen:?}, wanted {appid}); not tracking its session"
             );
@@ -638,7 +646,12 @@ mod tests {
         )
         .unwrap();
 
-        let ended = exit_rx.recv_timeout(std::time::Duration::from_secs(4));
+        // Generous, because this is a test of whether the end is reported,
+        // not of how quickly. With four seconds it failed on a macOS runner
+        // that took longer than that to run a one-second script: the first
+        // execution of a freshly written file there waits on the system's
+        // malware scan, and a busy runner makes that wait unbounded.
+        let ended = exit_rx.recv_timeout(std::time::Duration::from_secs(30));
         let _ = std::fs::remove_file(&script);
         assert!(
             ended.is_ok(),
