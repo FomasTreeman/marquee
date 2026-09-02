@@ -96,6 +96,12 @@ export function createShell(root: HTMLElement): Shell {
   const searchButton = el('button', 'search-button', search)
   searchButton.type = 'button'
   searchButton.setAttribute('aria-label', 'Search')
+  // Drawn, not the Unicode '⌕' this replaced -- see .search-icon in app.css
+  // for why that glyph read as vertically low rather than centred.
+  searchButton.innerHTML =
+    '<svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.35-4.35"></path></svg>'
 
   // Hidden until there is a query. A search box occupying the top bar
   // permanently would be a desktop habit imposed on a television.
