@@ -13,6 +13,51 @@ import type { Device } from './input'
  * being a special case.
  */
 
+/**
+ * Geometry for the search icon: a magnifying glass drawn instead of the
+ * Unicode glyph '⌕' it replaced (see .search-icon in app.css). Kept as data,
+ * not just inline SVG markup, so `searchIconBBox` below can compute its
+ * stroked bounding box and a test can catch it drifting off-centre again --
+ * the glyph it replaced was centred by CSS but still read low, because a
+ * character's own ink can sit anywhere within its line box. The same is true
+ * of a hand-picked path: a magnifying glass's circle-plus-handle shape is not
+ * symmetric, so centring its 24x24 viewBox does not centre its ink. The
+ * circle here is offset -0.5,-0.5 from the textbook version of this icon
+ * (cx/cy 11, handle from 21,21) for exactly that reason.
+ */
+export const SEARCH_ICON = {
+  viewBox: 24,
+  strokeWidth: 2,
+  circle: { cx: 10.5, cy: 10.5, r: 7 },
+  handle: { x1: 20.5, y1: 20.5, x2: 16.15, y2: 16.15 },
+}
+
+export function searchIconMarkup(): string {
+  const { viewBox, strokeWidth, circle, handle } = SEARCH_ICON
+  return (
+    `<svg class="search-icon" viewBox="0 0 ${viewBox} ${viewBox}" fill="none" ` +
+    `stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" ` +
+    `stroke-linejoin="round" aria-hidden="true">` +
+    `<circle cx="${circle.cx}" cy="${circle.cy}" r="${circle.r}"></circle>` +
+    `<path d="M${handle.x1} ${handle.y1}L${handle.x2} ${handle.y2}"></path></svg>`
+  )
+}
+
+/**
+ * The stroked bounding box of {@link SEARCH_ICON}, conservative about the
+ * round line cap (it extends a capped endpoint by the full half-stroke-width
+ * in both axes, which is where a cap's own bounding box actually reaches,
+ * not just along the line's direction). Centring the icon means this box's
+ * centre lands on the viewBox's own centre.
+ */
+export function searchIconBBox(): { minX: number; maxX: number; minY: number; maxY: number } {
+  const { strokeWidth, circle, handle } = SEARCH_ICON
+  const half = strokeWidth / 2
+  const xs = [circle.cx - circle.r - half, circle.cx + circle.r + half, handle.x1 - half, handle.x1 + half, handle.x2 - half, handle.x2 + half]
+  const ys = [circle.cy - circle.r - half, circle.cy + circle.r + half, handle.y1 - half, handle.y1 + half, handle.y2 - half, handle.y2 + half]
+  return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) }
+}
+
 export interface Shell {
   hero: HTMLElement
   presets: HTMLElement
@@ -96,12 +141,9 @@ export function createShell(root: HTMLElement): Shell {
   const searchButton = el('button', 'search-button', search)
   searchButton.type = 'button'
   searchButton.setAttribute('aria-label', 'Search')
-  // Drawn, not the Unicode '⌕' this replaced -- see .search-icon in app.css
-  // for why that glyph read as vertically low rather than centred.
-  searchButton.innerHTML =
-    '<svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
-    'stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    '<circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.35-4.35"></path></svg>'
+  // Drawn, not the Unicode '⌕' this replaced -- see SEARCH_ICON above for why
+  // even a drawn icon needed its coordinates nudged to actually centre.
+  searchButton.innerHTML = searchIconMarkup()
 
   // Hidden until there is a query. A search box occupying the top bar
   // permanently would be a desktop habit imposed on a television.
