@@ -536,10 +536,7 @@ fn uninstall_game(
 /// that is a hundred gigabytes behind should not be a surprise at the moment
 /// someone presses Play.
 #[tauri::command]
-fn update_game(
-    id: String,
-    library: tauri::State<'_, Library>,
-) -> Result<String, String> {
+fn update_game(id: String, library: tauri::State<'_, Library>) -> Result<String, String> {
     let game = {
         let games = library.0.lock().map_err(|_| "library state is poisoned")?;
         games.iter().find(|g| g.id == id).cloned()

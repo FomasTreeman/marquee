@@ -490,7 +490,10 @@ mod tests {
         .unwrap();
         let game = Steam::read_manifest(&downloading).unwrap();
         assert!(game.update_available, "1026 still has the required bit set");
-        assert!(game.updating, "1024 (Update Started) is in the updating mask");
+        assert!(
+            game.updating,
+            "1024 (Update Started) is in the updating mask"
+        );
 
         std::fs::remove_dir_all(std::env::temp_dir().join("marquee-test-steam-update")).ok();
     }
