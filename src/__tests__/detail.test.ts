@@ -147,6 +147,50 @@ describe('createDetail hide button', () => {
     expect(view.isOpen).toBe(false)
     expect(onChanged).toHaveBeenCalledOnce()
   })
+
+  /**
+   * Hide and Uninstall sit in the corner, outside the action row, and the pad
+   * only ever moved along the row -- so for a long while they were reachable
+   * with a mouse and nothing else, on a launcher whose whole premise is a
+   * sofa. `left` from the first action wraps onto the corner, and `a` presses
+   * whatever the pad landed on.
+   */
+  it('reaches Hide from the pad, by wrapping left off the action row', async () => {
+    const body = fakeElement()
+    const doc: Record<string, unknown> = {
+      createElement: () => {
+        const node = fakeElement()
+        node.focus = () => { doc.activeElement = node }
+        return node
+      },
+      body,
+      activeElement: undefined,
+    }
+    vi.stubGlobal('document', doc)
+    vi.stubGlobal('window', { setTimeout: (cb: () => void, ms: number) => setTimeout(cb, ms) })
+    vi.stubGlobal('requestAnimationFrame', (cb: () => void) => { cb(); return 0 })
+    // `handle('a')` checks `instanceof HTMLElement` before clicking.
+    vi.stubGlobal('HTMLElement', class {
+      static [Symbol.hasInstance](o: unknown) { return typeof o === 'object' && o !== null }
+    })
+
+    const onChanged = vi.fn()
+    const view = createDetail({ onPlay: vi.fn(), onChanged, onFindArtwork: vi.fn() })
+    view.open(game, undefined, {})
+
+    const root = (body.children as Record<string, unknown>[])[0]
+    const hide = findByText(root, 'Hide this game')
+    expect(doc.activeElement).not.toBe(hide)
+
+    view.handle('left')
+    expect(doc.activeElement).toBe(hide)
+
+    hide!.click = hide!.onclick
+    view.handle('a')
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(view.isOpen).toBe(false)
+    expect(onChanged).toHaveBeenCalledOnce()
+  })
 })
 
 /**

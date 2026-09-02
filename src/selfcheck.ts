@@ -18,7 +18,12 @@
  * the same log as everything else -- which means they can be read from a
  * terminal without anyone looking at the window.
  *
- * Runs in development, or with ?check=1. Never in a release build.
+ * Runs in development, or with ?check=1. That flag is compiled into release
+ * bundles too, and deliberately: an installed copy loads its frontend from
+ * the bundle with no query string, so nothing on a user's machine can turn it
+ * on, while `vite preview` of a production build can -- which is the only way
+ * to run these checks against the code that actually ships rather than the
+ * dev server's version of it.
  */
 import { logInfo, logError, logWarn } from './log'
 

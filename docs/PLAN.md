@@ -645,9 +645,11 @@ without touching a keyboard.
 
 ### Phase 3.5 — Profiles and synced settings  ✅ *(option 1, done)*
 
-Carry a configuration between machines: the SteamGridDB key, sort order,
-favourites, hidden games, artwork corrections and hand-added games, so a second
-machine is set up by signing in rather than by repeating the work.
+Carry a configuration between machines: sort order, favourites, hidden games,
+artwork corrections and hand-added games, so a second machine is set up by
+signing in rather than by repeating the work. *(The SteamGridDB key was in the
+file at first and is not now: a profile is written to be copied about, and a
+credential should not travel with every copy. It is pasted in again.)*
 
 **Everything needed is already in the right shape.** `user_game`, `manual_game`,
 `game_root` and `setting` are exactly the tables that would sync, and they are

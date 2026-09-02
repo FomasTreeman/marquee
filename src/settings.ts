@@ -396,13 +396,14 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
   importButton.textContent = 'Import…'
   const folderButton = el('button', 'action action-primary', profile.controls)
   const folderStatus = el('p', 'settings-status', profile.root)
-  // The exported file contains the SteamGridDB key. Small stakes -- it is a
-  // free, per-user, rate-limited key -- but somebody sharing a profile should
-  // know what is in it rather than find out.
+  // The file used to carry the SteamGridDB key, with a note here saying so.
+  // It no longer does: a profile exists to be copied about, and a secret in
+  // it travels with every copy. Said out loud, because a key that quietly
+  // failed to arrive on the new machine would look like artwork breaking.
   const profileWarning = el('p', 'settings-status', profile.root)
   profileWarning.textContent =
-    'The file includes your SteamGridDB key, so it moves to a new machine with ' +
-    'everything else. Worth knowing before sharing one.'
+    'Your SteamGridDB key is not in the file, so a new machine needs it pasted ' +
+    'in again. Everything else moves with the profile.'
 
   let open = false
   let saving = false
