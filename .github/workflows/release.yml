@@ -183,7 +183,12 @@ jobs:
           # -- leaves this alone.
           state=$(gh release view "v$VERSION" --json isDraft --jq .isDraft 2>/dev/null || echo none)
           if [ "$state" = "true" ]; then
-            gh release delete "v$VERSION" --yes --cleanup-tag
+            # No `--cleanup-tag`. A draft has no tag -- that is the whole
+            # reason this step exists -- and asking gh to delete one anyway
+            # deleted the draft, then failed on "Reference does not exist",
+            # which failed the job. The one time this path ran for real, the
+            # recovery from a failed release was itself the failed release.
+            gh release delete "v$VERSION" --yes
             echo "::warning::Deleted a leftover draft v$VERSION from an earlier attempt. Rebuilding it."
           else
             echo "No draft v$VERSION to clear (found: $state)."
