@@ -8,7 +8,7 @@
 use std::path::{Path, PathBuf};
 
 use super::{Game, LibraryProvider};
-use crate::vdf;
+use crate::{log_warn, vdf};
 
 /// Steam sets bit 2 on a fully installed app. A manifest can exist for a game
 /// that is only queued or partially downloaded, and those should not appear as
@@ -183,8 +183,18 @@ impl Steam {
         let Ok(text) = std::fs::read_to_string(&file) else {
             return out;
         };
-        let Ok(parsed) = vdf::parse(&text) else {
-            return out;
+        // Loud, because the failure looks like a small library rather than
+        // a broken one: every game on the second drive is simply absent.
+        let parsed = match vdf::parse(&text) {
+            Ok(p) => p,
+            Err(e) => {
+                log_warn!(
+                    "steam",
+                    "{}: {e}; only the install drive is scanned",
+                    file.display()
+                );
+                return out;
+            }
         };
         let Some(folders) = parsed.root_child() else {
             return out;
@@ -232,7 +242,7 @@ impl Steam {
                 continue;
             };
             let Ok(parsed) = vdf::parse(&text) else {
-                crate::log_warn!("steam", "could not parse {}", file.display());
+                log_warn!("steam", "could not parse {}", file.display());
                 continue;
             };
             let Some(apps) = parsed
@@ -279,7 +289,14 @@ impl Steam {
 
     fn read_manifest(path: &Path) -> Option<Game> {
         let text = std::fs::read_to_string(path).ok()?;
-        let app = vdf::parse(&text).ok()?.root_child()?.clone();
+        let app = match vdf::parse(&text) {
+            Ok(v) => v.root_child()?.clone(),
+            Err(e) => {
+                // One missing game with no trace is the silent kind of bug.
+                log_warn!("steam", "{}: {e}; skipped", path.display());
+                return None;
+            }
+        };
 
         let appid = app.str_at("appid")?.trim().to_string();
         let title = app.str_at("name").unwrap_or_default().trim().to_string();
