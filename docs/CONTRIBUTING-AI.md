@@ -202,6 +202,29 @@ Every bundle is verified against the public key compiled into the copy already
 running, so a release that fails its signature check will not install.
 `docs/UPDATES.md` has the detail.
 
+## When the fix did not work
+
+Nothing broke, CI stayed green, the release installed — and the thing the
+issue described is still happening. No workflow can notice that; you do.
+
+**Reopen the issue, and say in a comment what is still wrong.** That is the
+whole of it. Reopening a `claude` issue starts a run, and because the issue
+already has a merged pull request the brief tells the agent so: start from
+that diff rather than from the issue text, and amend it rather than revert
+it. The new pull request goes through review, the queue and a release like
+any other, and the issue closes again when it merges.
+
+Do not file a new issue for it. A new issue loses the link to the fix that
+did not work, so the agent starts from scratch and, as often as not,
+rediscovers the same fix.
+
+The three-attempt count starts again from the reopen: the run that shipped
+the first fix was not a failed attempt at this one.
+
+If the fix made things worse rather than merely not better, say so in the
+comment and ask for the revert — that is the one case where the agent is
+told not to guess.
+
 ## What this loop is not
 
 **It is not a licence to skip review.** The whole arrangement is one where a

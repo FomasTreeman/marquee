@@ -131,7 +131,8 @@ const pr = (number, over = {}) => ({
   ...over,
 })
 
-const labelled = (name) => ({ label: { name } })
+const labelled = (name) => ({ __typename: 'LabeledEvent', label: { name } })
+const reopened = () => ({ __typename: 'ReopenedEvent' })
 
 // A fake `github` that records the query it was given and replays the linked
 // pull requests and the label timeline.
@@ -188,6 +189,16 @@ console.log('\ncounting attempts off the timeline')
 check('no runs yet', (await facts({})).attempts, 0)
 check('each time the working label goes on is a run',
   (await facts({ events: [labelled('claude-working'), labelled('claude'), labelled('claude-working')] })).attempts, 2)
+
+// A fix merged, the issue closed, and a person reopened it because the fix
+// did not do what was intended. The run that delivered that fix was not a
+// failed attempt at the amendment, so it does not count towards the three.
+check('attempts restart when the issue is reopened',
+  (await facts({ events: [labelled('claude-working'), labelled('claude-working'), reopened(), labelled('claude-working')] })).attempts, 1)
+check('a reopen with no run since counts none',
+  (await facts({ events: [labelled('claude-working'), reopened()] })).attempts, 0)
+check('reopens are asked for, or nothing separates the old attempts from the new',
+  /REOPENED_EVENT/.test(spy.query), true)
 
 // A timeline is oldest first. `first: 50` on an issue with any history returns
 // the opening chatter and drops the newest labels off the end.
