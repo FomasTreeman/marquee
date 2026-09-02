@@ -513,6 +513,8 @@ mod tests {
             provider_id: id.trim_start_matches("steam:").into(),
             title: String::new(),
             installed,
+            update_available: false,
+            updating: false,
             install_dir: None,
             size_bytes: 0,
             last_played: None,
