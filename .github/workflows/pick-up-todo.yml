@@ -20,9 +20,10 @@
 #
 #   * ONE issue per sweep, oldest first. A backlog drains at one an hour
 #     rather than all at once.
-#   * a six-hour cooldown per issue, from a marker in the handover comment. An
+#   * an hour's cooldown per issue, from a marker in the handover comment. An
 #     issue whose run fails, or whose pull request is closed unmerged, returns
-#     to Todo -- without this it would be offered again every hour, forever.
+#     to Todo -- without this two sweeps close together would both offer it.
+#     Three attempts is the bound on the total; this only paces them.
 #   * the rule itself is `shouldPickUp` in board.mjs, which is pure and tested
 #     without a network, so what counts as "waiting" cannot drift from what
 #     the board shows.
