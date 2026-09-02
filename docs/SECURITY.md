@@ -35,17 +35,20 @@ platform. The appid is checked to be ASCII digits before the URI is built, and
 `open_uri` then refuses any URI that is not `steam://` *and* contains any
 character outside `[A-Za-z0-9/:._-]`.
 
-That second check exists because of how Windows opens a URI. There is no Win32
-call available here that takes a URI directly without another dependency, so it
-goes through `cmd /C start` — and **cmd.exe re-parses its command line after
-Rust has quoted it**. Rust's quoting targets `CreateProcess`, not `cmd`, so a
-`&`, `|`, `^`, `<`, `>` or `"` surviving into an argument stops being an
+That second check exists because of how Windows used to open a URI. For a long
+time it went through `cmd /C start` — and **cmd.exe re-parses its command line
+after Rust has quoted it**. Rust's quoting targets `CreateProcess`, not `cmd`,
+so a `&`, `|`, `^`, `<`, `>` or `"` surviving into an argument stops being an
 argument and becomes a command. That is the BatBadBut class of bug,
-CVE-2024-24576.
+CVE-2024-24576. Windows now calls `ShellExecuteW` directly, which takes the
+URI as one string and parses no command line, so no shell sees it; the change
+was made for the console window `cmd` flashed up on every Play, and closed
+this off as a side effect.
 
-Nothing builds such a URI today. The allowlist is the second lock, for whoever
-adds a provider later and constructs a URI from a name read off the disk. It is
-tested against the metacharacters that matter.
+Nothing builds such a URI today and nothing hands one to a shell any more.
+The allowlist stays as the second lock, for whoever adds a provider later and
+constructs a URI from a name read off the disk. It is tested against the
+metacharacters that matter.
 
 **Everything else** is a path the user chose in a native file dialog, spawned
 with `Command::new(path)` and no arguments. No shell is involved, so nothing in

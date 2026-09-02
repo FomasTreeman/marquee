@@ -2,6 +2,7 @@
 name = "marquee"
 version = "0.2.2"
 description = "A controller-first game launcher"
+license = "PolyForm-Strict-1.0.0"
 edition = "2021"
 rust-version = "1.77"
 
@@ -66,7 +67,12 @@ tauri-plugin-process = "2"
 [target.'cfg(windows)'.dependencies]
 # Only for SetThreadExecutionState, to stop the screen blanking while someone
 # is browsing with a controller. See src/screen.rs.
-windows-sys = { version = "0.59", features = ["Win32_System_Power"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_System_Power",
+    # ShellExecuteW, for opening steam:// without a console window flashing
+    # up. See run::shell_execute.
+    "Win32_UI_Shell",
+] }
 # Steam records its own install path in the registry. Reading it beats
 # guessing Program Files, because a lot of people move Steam to another drive.
 winreg = "0.52"

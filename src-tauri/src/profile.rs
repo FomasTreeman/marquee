@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::sgdb;
 use crate::store::{ManualGame, Store};
 use crate::{log_info, log_warn};
 
@@ -80,6 +81,18 @@ pub fn collect(store: &Store) -> Result<Profile, String> {
         })
         .collect();
 
+    // The SteamGridDB key stays out. A profile is made to be copied about --
+    // into a synced folder, onto a second drive, to a friend -- and it used to
+    // carry the key with it, so anyone handed the file was handed the
+    // credential too. It is a free, per-user key, but a secret in a file whose
+    // whole purpose is to travel is still a secret in the wrong place, and
+    // pasting it again on a new machine costs seconds.
+    let settings = store
+        .all_settings()?
+        .into_iter()
+        .filter(|(key, _)| key != sgdb::SETTING_KEY)
+        .collect();
+
     Ok(Profile {
         format: FORMAT,
         exported_at: std::time::SystemTime::now()
@@ -87,7 +100,7 @@ pub fn collect(store: &Store) -> Result<Profile, String> {
             .map(|d| d.as_secs())
             .unwrap_or(0),
         source: std::env::consts::OS.to_string(),
-        settings: store.all_settings()?,
+        settings,
         games,
         manual: store.manual_games()?,
         roots: store.game_roots()?,
@@ -296,6 +309,25 @@ mod tests {
         assert_eq!(loaded.games.len(), exported.games.len());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The one setting that is a credential. A profile is written to be
+    /// carried between machines and handed around, and it used to carry the
+    /// SteamGridDB key with it.
+    #[test]
+    fn a_profile_leaves_the_steamgriddb_key_behind() {
+        let a = store();
+        a.set_setting(sgdb::SETTING_KEY, "0123456789abcdef")
+            .unwrap();
+        a.set_setting("sort", "name").unwrap();
+
+        let exported = collect(&a).unwrap();
+        let text = serde_json::to_string(&exported).unwrap();
+        assert!(!text.contains("0123456789abcdef"), "{text}");
+        assert!(exported
+            .settings
+            .iter()
+            .any(|(k, v)| k == "sort" && v == "name"));
     }
 
     /// Importing twice must not produce two of every hand-added game. Rows are

@@ -645,9 +645,11 @@ without touching a keyboard.
 
 ### Phase 3.5 — Profiles and synced settings  ✅ *(option 1, done)*
 
-Carry a configuration between machines: the SteamGridDB key, sort order,
-favourites, hidden games, artwork corrections and hand-added games, so a second
-machine is set up by signing in rather than by repeating the work.
+Carry a configuration between machines: sort order, favourites, hidden games,
+artwork corrections and hand-added games, so a second machine is set up by
+signing in rather than by repeating the work. *(The SteamGridDB key was in the
+file at first and is not now: a profile is written to be copied about, and a
+credential should not travel with every copy. It is pasted in again.)*
 
 **Everything needed is already in the right shape.** `user_game`, `manual_game`,
 `game_root` and `setting` are exactly the tables that would sync, and they are
@@ -770,11 +772,17 @@ provider, IGDB is out in favour of key-only sources, platforms are no longer
 sequenced, the name stayed, and releases are GitHub Releases on a public
 repository because the updater needs an endpoint it can read without a token.
 
-What is left:
+What is left: nothing on this list.
 
-1. **Licence.** Still not chosen. Both sibling projects are MIT, which is the
-   obvious default; until a `LICENSE` file exists the code is public but not
-   licensed, which means nobody else may legally use it.
+*Settled since: the licence. Both sibling projects are MIT and that was the
+obvious default, but the intent here was always "use it, do not copy it", and
+MIT is precisely the opposite. It is [PolyForm Strict 1.0.0](../LICENSE.md):
+run it, read it, learn from it; no redistribution and no derived works. That
+is source-available rather than open source, and the trade is understood --
+a contributor's work lands under terms that give them no right to their own
+fork, which is a reason some people will not contribute. The code is public
+because the updater needs an endpoint it can read without a token and because
+the documents are worth reading, not to seed a fork.*
 
 *Settled since: the rename UI. It is built -- Rename sits in the game details
 screen, edits the title in place where it is shown, and takes the on-screen
