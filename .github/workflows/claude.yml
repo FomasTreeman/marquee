@@ -284,7 +284,7 @@ jobs:
           # rather than a spinner.
           track_progress: true
           claude_args: |
-            --allowed-tools "Bash(pnpm:*),Bash(cargo:*),Bash(node:*),Bash(git:*),Bash(tools/:*),Bash(python3:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh workflow list:*),Bash(gh workflow view:*)"
+            --allowed-tools "Bash(cd:*),Bash(pnpm:*),Bash(cargo:*),Bash(node:*),Bash(git:*),Bash(tools/:*),Bash(python3:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh workflow list:*),Bash(gh workflow view:*)"
             --append-system-prompt-file .github/claude-instructions.md
 
       # `always()`, because the interesting case is the run that failed or was
@@ -293,6 +293,73 @@ jobs:
       #
       # board.yml then decides where the card actually goes, on the labels and
       # pull requests that exist once this has finished.
+      # A run that delivered nothing should not report success.
+      #
+      # This is the whole complaint: #76 worked for sixteen minutes, hit
+      # thirteen permission denials, stopped on "Running the full test suite
+      # and clippy now", left "Open PR" unticked -- and the job went green.
+      # Being refused a tool is not an error, so `is_error` was false and
+      # nothing anywhere said the work had not landed. Four issues went stale
+      # that way before anyone noticed there were no pull requests.
+      #
+      # The contract is the one claude-instructions.md already states: a run
+      # ends with a pull request to review, or with a question and
+      # `needs-decision`, or with the issue closed because there was nothing to
+      # do. Anything else is a run that stopped early, and it says so here.
+      - name: Did it deliver?
+        if: always() && github.event.issue.number
+        env:
+          NUMBER: ${{ github.event.issue.number }}
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo
+            const number = Number(process.env.NUMBER)
+
+            const q = await github.graphql(
+              `query($owner: String!, $repo: String!, $number: Int!) {
+                 repository(owner: $owner, name: $repo) {
+                   issue(number: $number) {
+                     state
+                     labels(first: 50) { nodes { name } }
+                     timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT]) {
+                       nodes {
+                         ... on CrossReferencedEvent { source { ... on PullRequest { number state } } }
+                         ... on ConnectedEvent { subject { ... on PullRequest { number state } } }
+                       }
+                     }
+                   }
+                 }
+               }`, { owner, repo, number })
+
+            const issue = q.repository.issue
+            const labels = issue.labels.nodes.map((l) => l.name)
+            const pr = issue.timelineItems.nodes
+              .map((n) => n.source || n.subject)
+              .find((s) => s && s.number && s.state === 'OPEN')
+
+            if (pr) return core.info(`#${number}: pull request #${pr.number} is open.`)
+            if (labels.includes('needs-decision')) return core.info(`#${number}: stopped and asked.`)
+            if (issue.state === 'CLOSED') return core.info(`#${number}: closed, nothing to review.`)
+
+            // Not fatal to the issue, but the run is not a success. The board
+            // counts this as an attempt; three of them is a question for a
+            // person, which is board.mjs's rule and not this step's to apply.
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: number,
+              body:
+                "This run ended without a pull request and without asking anything, "
+                + "so it stopped early rather than finishing. Nothing here is lost — "
+                + "the issue stays queued and will be picked up again — but the run "
+                + "itself is marked failed so it is not mistaken for work that landed.\n\n"
+                + "The usual cause is a tool the run needed and was not granted; "
+                + "`tools/check-agent-tools.py` checks for that case.",
+            })
+            core.setFailed(
+              `#${number}: no pull request, no needs-decision, still open. `
+              + 'The run stopped early.')
+
       - name: Stop marking it in progress
         if: always() && github.event.issue.number
         env:
