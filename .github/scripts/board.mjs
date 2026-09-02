@@ -121,10 +121,17 @@ export function statusFor(facts) {
  *
  * The cooldown is what keeps this from becoming one. An issue whose run fails,
  * or whose pull request is closed unmerged, returns to Todo and would
- * otherwise be picked up again on the next sweep, forever, at a full run of
+ * otherwise be picked up again on the next sweep, at a full run of
  * subscription usage each time.
+ *
+ * An hour, down from six. Six was set when the sweep was the only bound and
+ * a failing issue could be offered forever; now three attempts send it to
+ * Needs Decision, so the most a broken issue can cost is three runs, and the
+ * cooldown only decides whether those happen this afternoon or over two days.
+ * #76 failed in four seconds on a workflow bug and then sat for six hours
+ * waiting to be allowed another go, which read as the loop having died.
  */
-export function shouldPickUp(facts, hoursSinceHandover, cooldownHours = 6) {
+export function shouldPickUp(facts, hoursSinceHandover, cooldownHours = 1) {
   if (statusFor(facts) !== CONFIG.status.todo) return false
   // Never handed over, so this is the first offer.
   if (hoursSinceHandover === undefined || hoursSinceHandover === null) return true

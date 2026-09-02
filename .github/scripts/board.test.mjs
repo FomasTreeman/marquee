@@ -69,11 +69,11 @@ check('a pull request is already open', shouldPickUp(issue({ openPr: 7 })), fals
 check('a red pull request is still not ours', shouldPickUp(issue({ openPr: 7, prFailing: true })), false)
 check('closed', shouldPickUp(issue({ state: 'CLOSED' })), false)
 
-// The cooldown is the whole safety of this. An issue whose run failed, or
-// whose pull request was closed unmerged, lands back in Todo and would
-// otherwise be offered again every sweep, forever, at a full run each time.
-check('offered an hour ago, so not again yet', shouldPickUp(issue({ labels: ['claude'] }), 1), false)
-check('offered six hours ago, so try again', shouldPickUp(issue({ labels: ['claude'] }), 6), true)
+// The cooldown is what stops a sweep re-offering the same failing issue
+// every time it runs. It is short, because three attempts already bound the
+// cost; it exists so two sweeps in quick succession do not both offer it.
+check('offered twenty minutes ago, so not again yet', shouldPickUp(issue({ labels: ['claude'] }), 0.33), false)
+check('offered an hour ago, so try again', shouldPickUp(issue({ labels: ['claude'] }), 1), true)
 check('exactly at the boundary counts', shouldPickUp(issue({ labels: ['claude'] }), 6, 6), true)
 check('a longer cooldown holds it back', shouldPickUp(issue({ labels: ['claude'] }), 6, 12), false)
 

@@ -156,6 +156,12 @@ on:
     # start a run was the hourly sweep, with a brief that never mentioned the
     # fix that had already landed. So it starts one now, and the step below
     # names the merged pull request as the starting point.
+    #
+    # Not by running the action on the reopen event: it refuses that one --
+    # "Unsupported issue action: reopened", on #76, four seconds in -- and
+    # supports `labeled` and comments. So the reopen is turned into the
+    # comment pick-up-todo.yml would have written, through the token that
+    # wakes this workflow, and the run that follows is an ordinary one.
     types: [labeled, reopened]
   issue_comment:
     types: [created]
@@ -171,6 +177,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # A reopen becomes a handover comment, because the action cannot take the
+  # reopen itself. The comment carries pick-up-todo.yml's marker so its
+  # cooldown counts from here, and goes through CLAUDE_WORKFLOW_TOKEN because
+  # a comment GITHUB_TOKEN writes wakes nothing -- which would be this whole
+  # trigger reduced to a note on the issue.
+  reopened:
+    if: |
+      github.event_name == 'issues' && github.event.action == 'reopened' &&
+      contains(github.event.issue.labels.*.name, 'claude') &&
+      !contains(github.event.issue.labels.*.name, 'no-ai')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.issue.number }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::CLAUDE_WORKFLOW_TOKEN is not set, so a comment posted here would start nothing. #$NUMBER was reopened and nobody is coming; pick-up-todo.yml will offer it on its next sweep."
+            exit 1
+          fi
+          printf '%s\n%s\n' \
+            '<!-- handed-over -->' \
+            '@claude this was reopened, so the fix that closed it did not do what was intended. Read the newest comments for what is still wrong and amend the merged pull request rather than starting over.' \
+            > reopened.md
+          gh issue comment "$NUMBER" --body-file reopened.md
+          echo "::notice::#$NUMBER reopened; handed to the agent."
+
   claude:
     # An issue is picked up when it carries the `claude` label. triage.yml
     # applies that from the template's dropdown, so a new issue still starts on
@@ -220,8 +258,6 @@ jobs:
                github.event.issue.author_association) &&
       (
         github.event.label.name == 'claude' ||
-        (github.event.action == 'reopened' &&
-         contains(github.event.issue.labels.*.name, 'claude')) ||
         contains(github.event.comment.body, '@claude') ||
         contains(github.event.review.body, '@claude') ||
         (
