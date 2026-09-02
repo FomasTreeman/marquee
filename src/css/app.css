@@ -772,7 +772,17 @@ html[data-background="blur"] .backdrop-img {
   font: inherit;
   flex: none;
 }
-.search-button::before { content: '⌕'; font-size: calc(17px * var(--s)); line-height: 1; }
+/* Drawn rather than the glyph '⌕' it replaced: that glyph sat visibly low
+   in the button on Windows, because centring the button's own box (above)
+   only centres the glyph's line box, not the ink inside it -- a symbol
+   character's font-defined descent still pushes it down within that line.
+   An SVG has no descent to allocate, so display: block plus this fixed
+   square is centred by geometry rather than by a font's metrics. */
+.search-icon {
+  display: block;
+  width: calc(17px * var(--s));
+  height: calc(17px * var(--s));
+}
 .search-button:hover { color: var(--fg1); border-color: var(--focusBorder); }
 .search-button:focus-visible { outline: 2px solid var(--focusBorder); outline-offset: 2px; }
 /* A query in flight is state, not decoration -- the same treatment the active
