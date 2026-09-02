@@ -273,6 +273,26 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          # What it was refused, from the action's record, logged whether or
+          # not it delivered. Two of #78's attempts were refused six and then
+          # eighteen calls and only the stalled report would have said which;
+          # an allowlist tuned only from failures never learns what the
+          # successful runs kept bumping into.
+          why='The action left no execution record, so it probably failed before the agent started.'
+          if [ -n "$EXECUTION_FILE" ] && [ -f "$EXECUTION_FILE" ]; then
+            found=$(jq -r '
+              [.[] | select(.type == "result")][0] // empty
+              | "The agent returned after \(.num_turns) turns"
+                + (if .is_error then " with an error" else " without error" end)
+                + (if (.permission_denials // []) | length > 0
+                   then ", and was refused \(.permission_denials | length) tool call(s):\n"
+                     + ([.permission_denials[] | "  - \(.tool_name): \((.tool_input.command // .tool_input) | tostring | .[0:120])"] | join("\n"))
+                   else ", and was refused nothing." end)
+            ' "$EXECUTION_FILE")
+            if [ -n "$found" ]; then why=$found; fi
+          fi
+          echo "$why"
+
           if [ -n "$(git status --porcelain)" ]; then
             git add -A
             git -c user.name='claude[salvage]' -c user.email='noreply@anthropic.com' \
@@ -294,19 +314,6 @@ jobs:
             exit 0
           fi
 
-          why='The action left no execution record, so it probably failed before the agent started.'
-          if [ -n "$EXECUTION_FILE" ] && [ -f "$EXECUTION_FILE" ]; then
-            found=$(jq -r '
-              [.[] | select(.type == "result")][0] // empty
-              | "The agent returned after \(.num_turns) turns"
-                + (if .is_error then " with an error" else " without error" end)
-                + (if (.permission_denials // []) | length > 0
-                   then ", and was refused \(.permission_denials | length) tool call(s):\n"
-                     + ([.permission_denials[] | "  - \(.tool_name): \((.tool_input.command // .tool_input) | tostring | .[0:120])"] | join("\n"))
-                   else ", and was refused nothing." end)
-            ' "$EXECUTION_FILE")
-            if [ -n "$found" ]; then why=$found; fi
-          fi
           if [ "$ATTEMPT" -ge 3 ]; then
             next='That was the last of three attempts, so this is now a question for a person.'
             gh pr edit "$NUMBER" --add-label needs-decision
