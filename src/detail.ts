@@ -12,7 +12,7 @@
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import {
   setManualExecutable, removeManualGame, findExecutable, setHidden, uninstallGame,
-  setCustomTitle,
+  setCustomTitle, updateGame,
   type ArtworkManifest, type Game, type Meta, type Artwork,
 } from './library'
 import { toast } from './toast'
@@ -422,6 +422,23 @@ export function createDetail(hooks: DetailHooks): DetailView {
         play.onclick = onPlay
       }
 
+      // Steam already knows an update is queued -- that is what
+      // `updateAvailable` means -- so this only starts the download, rather
+      // than being how the state is discovered. Hidden while Steam is already
+      // fetching it: there is nothing left to trigger.
+      if (game.provider === 'steam' && game.updateAvailable && !game.updating) {
+        const update = el('button', 'action', actions)
+        update.textContent = 'Update'
+        update.onclick = () => {
+          void updateGame(game.id)
+            .then(() => {
+              toast(`Handed ${game.title} to Steam to update.`, 'info', 6000)
+              onChanged()
+            })
+            .catch((e) => toast(`Could not start that update. ${String(e)}`, 'error', 6000))
+        }
+      }
+
       // Artwork can be re-matched for any game, not just hand-added ones: a
       // Steam release can have no cover on the CDN, or be listed there under a
       // different name, and until now there was no way back from that.
@@ -461,7 +478,11 @@ export function createDetail(hooks: DetailHooks): DetailView {
       addFact('Developer', (meta?.developers ?? []).join(', '))
       addFact('Publisher', (meta?.publishers ?? []).join(', '))
       addFact('Score', meta?.score ? `${meta.score} / 100` : '')
-      addFact('Status', game.installed ? 'Installed' : 'Not installed')
+      addFact('Status', game.updating
+        ? 'Updating…'
+        : game.updateAvailable
+          ? 'Update available'
+          : game.installed ? 'Installed' : 'Not installed')
       addFact('Store', game.provider === 'steam' ? 'Steam' : 'Added by hand')
       addFact('Executable', game.installDir ?? '')
       // Where the artwork came from, stated rather than left to be guessed

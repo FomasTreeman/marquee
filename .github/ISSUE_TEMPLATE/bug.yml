@@ -5,8 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        The failure mode is not Claude refusing — it is Claude confidently
-        fixing the wrong thing. The fields below are what stops that.
+        Most fixes here are written by an agent from what this form says, and
+        its failure mode is not refusing — it is confidently fixing the wrong
+        thing. The fields below are what stops that.
 
   - type: dropdown
     id: who
@@ -16,6 +17,8 @@ body:
         Answered here so the issue arrives already routed. An issue that
         reaches the board with neither answer sits in a queue nobody is
         working through, which is how a to-do list quietly becomes a graveyard.
+        Only the maintainer's answer starts a run; anyone else's issue waits
+        for a maintainer to hand it over.
       options:
         - Claude — pick it up now and open a pull request
         - Claude — but read the thread first, there is context above

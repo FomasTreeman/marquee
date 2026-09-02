@@ -8,7 +8,7 @@ UI framework. Read `docs/PLAN.md` for why any of it is the way it is.
 ## Before you finish
 
 ```bash
-pnpm test          # silence check, frontend tests, tsc, cargo test
+pnpm test          # silence, workflow and board checks, vitest, tsc, cargo test
 cd src-tauri && cargo clippy --all-targets -- -D warnings
 ```
 

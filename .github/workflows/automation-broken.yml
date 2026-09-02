@@ -32,7 +32,10 @@ name: Automation broken
 
 on:
   workflow_run:
-    workflows: [Board, Release, Token check]
+    # Pick up Todo, Merge queue and Triage failing on main have the same
+    # shape: no branch, no pull request, nobody looking. A queue that stopped
+    # draining is the failure this repository is worst at noticing.
+    workflows: [Board, Release, Token check, Pick up Todo, Merge queue, Triage]
     types: [completed]
 
 permissions:

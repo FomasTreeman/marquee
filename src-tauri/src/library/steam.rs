@@ -15,6 +15,26 @@ use crate::vdf;
 /// playable.
 const STATE_FULLY_INSTALLED: u64 = 4;
 
+/// Steam sets this bit when the local content is out of date and needs
+/// downloading before the game will run -- separate from whether it is
+/// currently doing that download, which is `STATE_UPDATING_MASK` below.
+const STATE_UPDATE_REQUIRED: u64 = 2;
+
+/// Every bit observed set while Steam is actively fetching or applying an
+/// update. `StateFlags` is undocumented, like everything else this file reads
+/// off Valve -- docs/PLAN.md §11 -- so this is a best effort checked against a
+/// real captured manifest (`appmanifest_partial.acf`, 1026 = update required
+/// + update started) rather than a specification.
+const STATE_UPDATING_MASK: u64 = 0x100 // Update Running
+    | 0x200 // Update Paused
+    | 0x400 // Update Started
+    | 0x8000 // Validating
+    | 0x10000 // Adding Files
+    | 0x20000 // Preallocating
+    | 0x40000 // Downloading
+    | 0x80000 // Staging
+    | 0x100000; // Committing
+
 /// Valve's own tools and runtimes have appmanifests like any game. Nobody
 /// wants Proton in their library.
 fn is_tool(appid: &str, name: &str) -> bool {
@@ -115,21 +135,42 @@ impl Steam {
 
     /// The appid Steam currently reports as running, if any.
     ///
-    /// Lives in the same registry key as the pid `is_running` reads, and
-    /// Steam updates it the instant a game starts or stops. It is the only
-    /// live signal available for when a `steam://` hand-off session ends: the
-    /// game belongs to Steam's process tree from the moment the URI is
-    /// opened, not ours, so there is no child of our own to wait on -- see
-    /// `run`'s module doc, which is why `run::start` polls this.
+    /// Steam updates it the instant a game starts or stops, and it is the
+    /// only live signal available for when a `steam://` hand-off session
+    /// ends: the game belongs to Steam's process tree from the moment the
+    /// URI is opened, not ours, so there is no child of our own to wait on
+    /// -- see `run`'s module doc, which is why `run::start` polls this.
+    ///
+    /// #94 first put this under `ActiveProcess`, by analogy with the `pid`
+    /// `is_running` reads there -- but a real Steam session never made it
+    /// fire, because `RunningAppID` is a client-wide flag, not part of the
+    /// process bookkeeping `ActiveProcess` holds (`pid`, `ActiveUser`, the
+    /// client DLL paths); it sits directly under the `Steam` key. Checked
+    /// there first, with the original `ActiveProcess` location as a fallback
+    /// in case a different Steam version does shape it the other way -- one
+    /// extra registry read, only on the miss.
+    #[cfg(target_os = "windows")]
+    fn running_app_id_from(steam: &winreg::RegKey) -> Option<u32> {
+        steam
+            .get_value::<u32, _>("RunningAppID")
+            .ok()
+            .or_else(|| {
+                steam
+                    .open_subkey("ActiveProcess")
+                    .and_then(|k| k.get_value::<u32, _>("RunningAppID"))
+                    .ok()
+            })
+            .filter(|id| *id != 0)
+    }
+
     #[cfg(target_os = "windows")]
     pub fn running_app_id() -> Option<u32> {
         use winreg::enums::HKEY_CURRENT_USER;
         use winreg::RegKey;
         RegKey::predef(HKEY_CURRENT_USER)
-            .open_subkey("Software\\Valve\\Steam\\ActiveProcess")
-            .and_then(|k| k.get_value::<u32, _>("RunningAppID"))
+            .open_subkey("Software\\Valve\\Steam")
             .ok()
-            .filter(|id| *id != 0)
+            .and_then(|k| Self::running_app_id_from(&k))
     }
 
     /// Start Steam without showing its window.
@@ -264,6 +305,8 @@ impl Steam {
                     // arriving instead of showing something wrong.
                     title: String::new(),
                     installed: false,
+                    update_available: false,
+                    updating: false,
                     install_dir: None,
                     size_bytes: 0,
                     last_played,
@@ -302,6 +345,8 @@ impl Steam {
             provider_id: appid,
             title,
             installed: flags & STATE_FULLY_INSTALLED != 0,
+            update_available: flags & STATE_UPDATE_REQUIRED != 0,
+            updating: flags & STATE_UPDATING_MASK != 0,
             install_dir,
             size_bytes: app.u64_at("SizeOnDisk").unwrap_or(0),
             last_played,
@@ -424,6 +469,56 @@ mod tests {
         std::fs::remove_dir_all(std::env::temp_dir().join("marquee-test-steam")).ok();
     }
 
+    /// `StateFlags` mixes "installed" with "needs an update" and "is
+    /// currently downloading one" in the same bitfield, and each of the three
+    /// example manifests here isolates one of those states.
+    #[test]
+    fn update_state_is_read_from_state_flags() {
+        let dir = std::env::temp_dir().join("marquee-test-steam-update/steamapps");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // StateFlags 4 -- fully installed, nothing pending.
+        let current = dir.join("appmanifest_365670.acf");
+        std::fs::write(
+            &current,
+            include_str!("../../tests/fixtures/appmanifest_365670.acf"),
+        )
+        .unwrap();
+        let game = Steam::read_manifest(&current).unwrap();
+        assert!(game.installed);
+        assert!(!game.update_available, "4 has no update-required bit");
+        assert!(!game.updating);
+
+        // StateFlags 6 (4 + 2) -- installed, but Steam wants to update it and
+        // has not started.
+        let waiting = dir.join("appmanifest_367520.acf");
+        std::fs::write(
+            &waiting,
+            include_str!("../../tests/fixtures/appmanifest_update_available.acf"),
+        )
+        .unwrap();
+        let game = Steam::read_manifest(&waiting).unwrap();
+        assert!(game.installed, "still playable while an update only waits");
+        assert!(game.update_available, "6 sets the update-required bit");
+        assert!(!game.updating, "nothing is downloading yet");
+
+        // StateFlags 1026 (1024 + 2) -- update required and already under way.
+        let downloading = dir.join("appmanifest_1145360.acf");
+        std::fs::write(
+            &downloading,
+            include_str!("../../tests/fixtures/appmanifest_partial.acf"),
+        )
+        .unwrap();
+        let game = Steam::read_manifest(&downloading).unwrap();
+        assert!(game.update_available, "1026 still has the required bit set");
+        assert!(
+            game.updating,
+            "1024 (Update Started) is in the updating mask"
+        );
+
+        std::fs::remove_dir_all(std::env::temp_dir().join("marquee-test-steam-update")).ok();
+    }
+
     /// Nobody wants Proton and the Steamworks redistributables in their
     /// library, and they have appmanifests exactly like games do.
     #[test]
@@ -456,6 +551,54 @@ mod tests {
         let second = Steam::running_app_id();
         assert_eq!(first, second, "detection should not flap");
         println!("  steam running appid on this machine: {first:?}");
+    }
+
+    /// #90's real bug: `running_app_id` looked only under `ActiveProcess`,
+    /// which never fired against a live Steam session, so a Steam-launched
+    /// game never brought Marquee's window back. This pins the actual shape
+    /// -- `RunningAppID` directly under the `Steam` key -- against a scratch
+    /// registry tree rather than a real Steam install, so it does not depend
+    /// on this machine having Steam, and does not touch a real one's state.
+    ///
+    /// Reverting `running_app_id_from` to check only `ActiveProcess` makes
+    /// the second assertion here fail, which is what shipped in #94.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn running_app_id_is_read_from_the_steam_key_not_only_active_process() {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+
+        let scratch = format!(
+            "Software\\MarqueeTest\\running_app_id\\{}",
+            std::process::id()
+        );
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (steam, _) = hkcu.create_subkey(&scratch).expect("create scratch key");
+
+        // The shape #94 shipped: only reachable under ActiveProcess, next to
+        // pid. Must still be found, in case some Steam version does shape it
+        // this way.
+        let (active_process, _) = steam
+            .create_subkey("ActiveProcess")
+            .expect("create ActiveProcess subkey");
+        active_process.set_value("RunningAppID", &4321u32).unwrap();
+        assert_eq!(
+            Steam::running_app_id_from(&steam),
+            Some(4321),
+            "must still find it nested under ActiveProcess as a fallback"
+        );
+
+        // The shape a real session actually uses: directly under the Steam
+        // key, sibling to ActiveProcess rather than inside it.
+        steam.delete_subkey_all("ActiveProcess").unwrap();
+        steam.set_value("RunningAppID", &1234u32).unwrap();
+        assert_eq!(
+            Steam::running_app_id_from(&steam),
+            Some(1234),
+            "must find it directly under the Steam key -- this is the case #94 missed"
+        );
+
+        hkcu.delete_subkey_all(&scratch).ok();
     }
 
     #[test]

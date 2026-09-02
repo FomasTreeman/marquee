@@ -9,9 +9,12 @@
 # different question: not "where does this belong" but "whose is it".
 #
 # ---------------------------------------------------------------------------
-# This is the only thing that decides whether Claude picks an issue up.
+# This is the only thing that decides whether Claude picks an issue up, and
+# the only place that asks who filed it. Everything downstream -- the label
+# event, the Todo sweep, the `@claude` handover comment -- trusts the label,
+# so the gate on strangers has to be here or it is nowhere.
 #
-# It did not used to be. claude.yml also woke on `issues: opened`, and its
+# It did not used to be the only thing. claude.yml also woke on `issues: opened`, and its
 # opt-out read `github.event.issue.labels` -- the labels in the *event
 # payload*, which at open time hold only what the template applied. The label
 # this workflow was in the middle of writing was not among them, both
@@ -58,25 +61,26 @@ jobs:
               return
             }
 
-            // The template's dropdown, read from the rendered body. A
-            // free-form issue has no such line, and what it gets depends on
-            // who filed it. From a stranger, the safe answer: the repository
-            // is public and an agent run is subscription usage. From someone
-            // with write access, the agent: an issue the owner types on a
-            // phone with a title and two lines is work they want done, and
-            // `no-ai` on it was a queue nobody was working through. "Me" in
-            // the dropdown is still honoured for anyone.
+            // Who filed it decides, before what they asked for. The repository
+            // is public and an agent run is subscription usage, so the answer
+            // from a stranger is `no-ai` whatever the dropdown says -- the
+            // template offered "Claude" to anyone, and an issue that took it
+            // up landed in Todo, where pick-up-todo.yml hands it over with the
+            // owner's token. Anyone with a GitHub account could start a run.
             //
-            // `@claude` in the body counts as an answer too. claude.yml no
-            // longer runs on `opened` (it double-fired with `labeled`), so the
-            // only way a body's `@claude` starts anything is the label this
-            // puts on it.
+            // From someone with write access, the agent: an issue the owner
+            // types on a phone with a title and two lines is work they want
+            // done, and `no-ai` on it was a queue nobody was working through.
+            // "Me" in the dropdown is honoured for them too.
+            //
+            // claude.yml no longer runs on `opened` (it double-fired with
+            // `labeled`), so the label this puts on is the only thing that
+            // starts anything.
             const said = (body.match(/Who should fix this[\s\S]{0,120}?\b(Claude|Me)\b/i) || [])[1] || ''
             const ours = ['OWNER', 'MEMBER', 'COLLABORATOR']
               .includes(context.payload.issue.author_association)
-            const wantsClaude = /^claude$/i.test(said)
-              || /@claude\b/i.test(body)
-              || (ours && !/^me$/i.test(said))
+            const askedForClaude = /^claude$/i.test(said) || /@claude\b/i.test(body)
+            const wantsClaude = ours && !/^me$/i.test(said)
             const label = wantsClaude ? 'claude' : 'no-ai'
 
             await github.rest.issues.addLabels({
@@ -86,16 +90,22 @@ jobs:
             })
             core.info(`#${context.payload.issue.number} -> ${label}`)
 
-            // Say so when the safe answer was a guess. Silently deciding that
-            // nobody will work on something is worse than asking.
+            // Say so whenever the answer was not the one asked for. Silently
+            // deciding that nobody will work on something is worse than
+            // asking, and a stranger who ticked "Claude" deserves to know the
+            // agent does not take requests from the internet.
             if (!wantsClaude) {
+              const why = askedForClaude
+                ? 'Thanks. The agent here only takes work handed over by a maintainer, '
+                  + 'so this is labelled `no-ai` for now; a maintainer will swap that '
+                  + 'for `claude` if it is something for it to do.'
+                : 'Filed without saying who should fix it, so it is labelled '
+                  + '`no-ai` and will wait for a person. Swap that for `claude` '
+                  + 'to hand it over.'
               await github.rest.issues.createComment({
                 ...context.repo,
                 issue_number: context.payload.issue.number,
-                body:
-                  'Filed without saying who should fix it, so it is labelled ' +
-                  '`no-ai` and will wait for a person. Swap that for `claude` ' +
-                  'to hand it over.',
+                body: why,
               })
               return
             }

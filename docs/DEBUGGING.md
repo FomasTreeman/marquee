@@ -25,7 +25,7 @@ Everything lands in one file, in order, with a source tag:
 |---|---|
 | macOS | `~/Library/Logs/Marquee/marquee.log` |
 | Windows | `%LOCALAPPDATA%\Marquee\logs\marquee.log` |
-| Linux | `$XDG_STATE_HOME/marquee/marquee.log` |
+| Linux | `$XDG_STATE_HOME/marquee/marquee.log`, so `~/.local/state/marquee/marquee.log` by default |
 
 ```bash
 pnpm logs        # tail it
@@ -94,7 +94,7 @@ tolerance and add the sentence.
 **This is the part that matters, because error handling does not catch the
 bugs this project actually has.**
 
-Three real bugs so far, and all three were silent:
+Four real bugs so far, and all four were silent:
 
 1. `contain: paint` on the card clipped the focus ring, which is drawn outset
    by design. No error. The ring was simply never visible.
@@ -123,7 +123,7 @@ So `src/selfcheck.ts` asserts the invariants that would have failed, and it
   most load-bearing rule, and the one a report like "the card is halfway down
   on the right" is describing.
 - The hero identifies the selected game and shows its facts. Bug 4, asserted.
-- No more cards are visible than there are items. Bug 5, asserted.
+- No more cards are visible than there are items. Bug 3, asserted.
 - Exactly one filter preset is active — zero means the pills are decoration,
   two means the bar is claiming a different filter than the grid is showing.
 - The **focused** card is on screen, not merely some card.
@@ -188,15 +188,16 @@ having if it grows with the interface.
 ## Driving the interface from a console
 
 In a development build, `window.__marquee` exposes the running interface:
-`games`, `focused`, `scan`, `meta`, `grid`, `add`, `detail`, `play`,
-`favourite`, `reloadLibrary`, and `selfCheck()`.
+`games`, `focused`, `scan`, `meta`, `grid`, `picker`, `detail`, `menu`, the
+`open*` functions for each overlay, `play`, `favourite`, `reloadLibrary`, and
+`selfCheck()`.
 
 It exists because overlays are otherwise reachable only through real input,
 which makes them awkward to inspect from a console or a driven browser — and
 an overlay nobody can open is an overlay nobody can check.
 
 ```js
-__marquee.add.open()                    // the add-a-game overlay
+__marquee.openAdd()                     // the add-a-game overlay
 __marquee.detail.open(__marquee.games[0], undefined, {})
 await __marquee.selfCheck()             // the invariants, as data
 ```
@@ -253,8 +254,10 @@ is the right shape.** Each of those rejected something real:
 ## Measuring
 
 `pnpm app` shows a HUD: webview, refresh rate, frame rate, p99, dropped
-frames, IPC round trip, pad status, input latency. `?hud=0` hides it, as does
-**Y** on the pad. Budgets and their rationale are in [PLAN.md](PLAN.md) §2.
+frames, IPC round trip, pad status, input latency. `?hud=0` hides it and **P**
+toggles it at any time — keyboard only, because a development tool does not
+deserve a face button. In a release build it is off unless `?hud=1`. Budgets
+and their rationale are in [PLAN.md](PLAN.md) §2.
 
 Two rules learned the hard way:
 
@@ -265,6 +268,33 @@ Two rules learned the hard way:
   worst frame in three seconds, and one frame of `requestAnimationFrame`
   jitter is ordinary in every engine, so that number sits just above the
   refresh interval no matter how little the page does.
+
+### Where the frame time went, the first time
+
+The first measurement of the 2,000-card grid failed its budget: 18 ms
+stationary, 22–25 ms navigating. The stationary figure was the tell — a grid
+where nothing moves should cost nothing, so a p99 above one frame while idle
+meant something was doing work that had no business existing. Four causes,
+none of them Tauri or the webview:
+
+1. **The instrument was most of the cost.** The HUD above, before it was
+   rewritten.
+2. **Two renders per keypress.** `setFocus` rendered synchronously *and*
+   scrolled, and the scroll event scheduled a second render for the next
+   frame. Everything now goes through `requestAnimationFrame`.
+3. **Forced synchronous layout on every focus move.** `scrollIntoView` read
+   `scrollTop` and `clientHeight` and then wrote `scrollTop` in the same turn.
+   Both are now tracked in JavaScript; the scroll listener keeps one honest,
+   the other only changes on resize.
+4. **49 redundant DOM writes per frame.** `transform` and `data-focus` were
+   written unconditionally for every pooled slot, when at most a handful of
+   transforms and exactly two focus attributes ever change. Both are compared
+   before writing.
+
+After the fixes: 0–2 dropped frames in 180, and a p99 that barely moved,
+because it was never going to — which is how the budget in PLAN.md §2 became
+refresh-relative and dropped-frame based. They are the ordinary ways a grid
+gets slow, and they were found because the number was on screen.
 
 ## Non-findings
 
