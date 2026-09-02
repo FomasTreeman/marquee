@@ -59,8 +59,13 @@ jobs:
             }
 
             // The template's dropdown, read from the rendered body. A
-            // free-form issue has no such line and gets the safe answer.
+            // free-form issue has no such line and gets the safe answer --
+            // unless it says `@claude` itself. claude.yml no longer runs on
+            // `opened` (it double-fired with `labeled`), so the only way an
+            // issue body's `@claude` starts anything is the label this puts
+            // on it.
             const wantsClaude = /Who should fix this[\s\S]{0,120}?Claude/i.test(body)
+              || /@claude\b/i.test(body)
             const label = wantsClaude ? 'claude' : 'no-ai'
 
             await github.rest.issues.addLabels({

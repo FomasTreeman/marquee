@@ -141,6 +141,7 @@ export function shouldPickUp(facts, hoursSinceHandover, cooldownHours = 6) {
  */
 export function labelsFor(facts) {
   const { labels } = CONFIG
+  const has = (name) => facts.labels.includes(name)
   const add = []
   const remove = []
   const want = (name, yes) => (yes ? add : remove).push(name)
@@ -152,6 +153,14 @@ export function labelsFor(facts) {
   // cannot: whether it is still going. Only cleared here, never set.
   if (closed || facts.openPr) remove.push(labels.working)
   if (closed) remove.push(labels.blocked)
+  // Three runs with nothing to show is a question for a person, and the
+  // column said so while the label did not. The label is what claude.yml
+  // reads to let a reply restart the issue without `@claude`, so a card in
+  // Needs Decision with no label was one a reply could not resume. Added
+  // only, never removed short of closing: the agent sets it too, at fewer
+  // than three, and that one is not the board's to clear.
+  if (!closed && !facts.openPr && !has(labels.working) && !has(labels.human)
+      && facts.attempts >= 3) add.push(labels.blocked)
 
   return {
     add: add.filter((l) => !facts.labels.includes(l)),
@@ -231,33 +240,35 @@ export async function loadProject(project, owner, number) {
  * for any reason puts the card right.
  */
 export async function factsFor(github, owner, repo, number) {
-  // `last`, not `first`. A timeline is oldest first, so `first: 50` on an
-  // issue with any history returns the opening chatter and drops the newest
-  // pull request off the end -- which is the one the card depends on.
+  // The pull request *for* an issue is one that closes it -- `Closes #N` in
+  // the body, or a link made in the Development sidebar -- and that is what
+  // `closedByPullRequestsReferences` holds. This used to scan the timeline
+  // for any CrossReferencedEvent, which is any pull request that so much as
+  // mentions the number: three unrelated pull requests cited #76 in their
+  // commit messages, so #76 sat In Review with no pull request of its own,
+  // and nothing was going to pick it up while any of them stayed open.
   //
-  // Both item types are read, which they were not. The query asked for
-  // CONNECTED_EVENT and then only ever destructured `source`, a field that
-  // exists on CrossReferencedEvent alone, so every connected event came back,
-  // mapped to undefined and was filtered away. That is not a spare belt: a
-  // pull request linked through the Development sidebar rather than by being
-  // mentioned raises a ConnectedEvent and nothing else, and its issue's card
-  // never moved.
+  // `includeClosedPrs` so a merged one is visible too. It is not used for the
+  // column yet, but a merged pull request whose `Closes` never fired -- it
+  // happens when the base was another branch -- is the case to add next.
+  //
+  // `last`, not `first`, on the timeline. It is oldest first, so `first: 50`
+  // on an issue with any history returned the opening chatter and dropped
+  // the newest labels off the end -- which are the ones the count depends on.
   const q = await github.graphql(
-    `fragment pr on PullRequest {
-       number state isDraft
-       commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
-     }
-     query($owner: String!, $repo: String!, $number: Int!) {
+    `query($owner: String!, $repo: String!, $number: Int!) {
        repository(owner: $owner, name: $repo) {
          issue(number: $number) {
            id state
            labels(first: 50) { nodes { name } }
-           timelineItems(last: 50, itemTypes: [CROSS_REFERENCED_EVENT, CONNECTED_EVENT, LABELED_EVENT]) {
+           closedByPullRequestsReferences(first: 20, includeClosedPrs: true) {
              nodes {
-               ... on CrossReferencedEvent { source { ...pr } }
-               ... on ConnectedEvent { subject { ...pr } }
-               ... on LabeledEvent { label { name } }
+               number state
+               commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
              }
+           }
+           timelineItems(last: 50, itemTypes: [LABELED_EVENT]) {
+             nodes { ... on LabeledEvent { label { name } } }
            }
          }
        }
@@ -267,15 +278,11 @@ export async function factsFor(github, owner, repo, number) {
   const issue = q.repository?.issue
   if (!issue) return undefined
 
-  // One pull request can raise both kinds of event, so the same number can
-  // arrive twice.
-  const seen = new Set()
-  const prs = issue.timelineItems.nodes
-    .map((n) => n.source || n.subject)
-    .filter((s) => s && s.number && s.state === 'OPEN')
-    .filter((s) => !seen.has(s.number) && seen.add(s.number))
   // The newest, not the oldest. Where an issue has had a pull request
   // abandoned and reopened, the later one is the live one.
+  const prs = issue.closedByPullRequestsReferences.nodes
+    .filter((p) => p.state === 'OPEN')
+    .sort((a, b) => a.number - b.number)
   const openPr = prs[prs.length - 1]
   const rollup = openPr?.commits?.nodes?.[0]?.commit?.statusCheckRollup?.state
 
