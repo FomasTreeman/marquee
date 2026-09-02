@@ -4,7 +4,8 @@ How Marquee updates itself, why each piece is there, and what to do when it is
 time to actually cut a release.
 
 Written for a developer reading this cold — including whoever picks it up in
-six months, which is probably us.
+six months, which is probably us. How a merge becomes a release is in
+[AUTOMATION.md](AUTOMATION.md); this is the updater's side of it.
 
 ## Why this exists at all
 
@@ -22,14 +23,14 @@ Five pieces. Four of them are configuration; only one is code we wrote.
 ```
   you                     GitHub                      a running Marquee
   ───                     ──────                      ─────────────────
-  git tag v0.2.0
-  git push --tags
+  merge a pull request
         │
-        └──► release.yml
-               builds .msi / .dmg / .AppImage
+        └──► release.yml, once CI is green on main
+               decides the version from the PR's labels
+               builds .msi / .dmg / .AppImage / .deb / .rpm
                signs each with the PRIVATE key
                writes latest.json
-               attaches all of it to a Release
+               attaches all of it to a draft, then publishes
                               │
                               │   latest.json
                               └──────────────────────►  check()
@@ -62,7 +63,7 @@ That writes two files:
 
 | file | what it is | where it goes |
 |---|---|---|
-| `~/.tauri/marquee.key` | the **private** key | a password manager, and repository secrets. Never the repo. |
+| `~/.tauri/marquee.key` | the **private** key | a password manager, and the `release` environment's secrets. Never the repo. |
 | `~/.tauri/marquee.key.pub` | the **public** key | `tauri.conf.json` → `plugins.updater.pubkey`, committed |
 
 This has already been done for Marquee; the public half is in the config.
@@ -173,13 +174,14 @@ Three notes:
 
 - **`/releases/latest/download/`** always resolves to the newest published
   release, so the endpoint never needs editing. Draft releases are invisible to
-  it, which is why `release.yml` produces a draft — nothing reaches any user
-  until a human presses publish.
+  it, and `release.yml` leans on that: the release is a draft until every
+  platform's bundle is attached, and a final job publishes it. Before that it
+  published as it went, so for the twenty-five minutes Windows took to build
+  the manifest listed one platform and Windows machines were told they were up
+  to date.
 - **The endpoint must be publicly readable.** A private repository's release
   assets need a token, and there is nowhere safe to put one in a desktop app.
-  This is the constraint that ties updates to the repository being public; the
-  alternatives are publishing releases from a private repo, or hosting the
-  manifest and bundles in a bucket.
+  That is one of the reasons the repository is public.
 - **`installMode: "passive"`** shows a progress bar and no wizard. The
   alternative, `"quiet"`, is fully silent, which is the wrong default for
   something that replaces an executable on your machine.
@@ -226,11 +228,12 @@ and therefore reports whatever happens, including "up to date".
 
 You do not. Merging a pull request is the release.
 
-The Release workflow decides the version from the merged pull request's labels
-(`breaking` major, `enhancement` minor, otherwise patch, `no-release` to skip),
-writes it into `tauri.conf.json`, `package.json` and `Cargo.toml`, commits,
-tags, builds all four targets, signs them, writes `latest.json` and publishes.
-`docs/WORKFLOW.md` walks it through.
+The Release workflow waits for CI to pass on the merge commit, decides the
+version from the merged pull request's labels (`breaking` major, `enhancement`
+or `feature` minor, otherwise patch, `no-release` to skip), injects it into
+the working copy, builds all four targets, signs them, writes `latest.json`
+and publishes once every bundle is attached. [AUTOMATION.md](AUTOMATION.md)
+walks it through.
 
 Two things about the shape of that workflow, both learned by getting them
 wrong:
@@ -253,27 +256,29 @@ the version in the file or the newest tag, so it cannot produce a tag that
 already exists. The first attempt trusted a hand-typed tag and immediately
 produced `v0.2.0` against a `tauri.conf.json` saying `0.0.1`.
 
+A consequence worth knowing before it surprises you: **the version in the
+files is not the version.** `tauri.conf.json`, `package.json` and `Cargo.toml`
+say `0.2.2` and will go on saying it, because nothing commits the bump; the
+tags are the record, and `git tag -l 'v*'` is where to look. Bumping the files
+by hand does nothing except move the floor the next computation starts from.
+
 **`bundle.createUpdaterArtifacts` must stay `true`.** Without it Tauri builds
 installers and no updater artifacts -- no `.sig` files, nothing for
 `latest.json` to point at. The release page looks perfectly healthy and no
 installed copy ever finds an update.
 
-## Before the first real release
+## Still open
 
 Ordered by how annoying they are to fix later:
 
-1. **Back up the private key.** See above. This is the irreversible one.
-2. **Make the repository, or at least its releases, public.** The endpoint
-   cannot authenticate.
-3. **Decide on `0.1.0`.** The version has been `0.0.1` since the first commit
-   because nothing depended on it. The updater compares versions, so it becomes
-   real state the moment this ships.
-4. **Code signing is a separate problem.** The update signature proves the
+1. **Back up the private key.** See above. This is the irreversible one, and
+   it does not stop being true after the thirtieth release.
+2. **Code signing is a separate problem.** The update signature proves the
    bundle came from us; it does nothing about SmartScreen on Windows or
    Gatekeeper on macOS, which want a certificate from Microsoft or Apple. An
-   unsigned installer still works — it just shows a frightening dialog first.
-   Phase 4 in `docs/PLAN.md`.
-5. **Consider what happens if an update is bad.** An update that installs and
+   unsigned installer still works — it just shows a frightening dialog first,
+   and on macOS the first launch needs a right-click → Open.
+3. **Consider what happens if an update is bad.** An update that installs and
    then will not start is the worst outcome, because the machine is in the
    lounge. The self-check already asserts the invariants that would catch it;
    running it on the first launch after an update, and keeping the previous
@@ -288,8 +293,10 @@ What you can do:
 
 - **Settings → Check for updates** exercises the whole client path — endpoint,
   manifest parse, version compare — and reports what it finds.
-- Publish a `v0.0.2` from a scratch branch with `workflow_dispatch`, install
-  `v0.0.1` locally, and watch it offer the upgrade. This is worth doing once.
+- **Actions → Release → Run workflow** with a bump chosen publishes a release
+  from `main` as it stands, which is the way to watch an installed copy take
+  an update without merging anything. It is a real release; the installed
+  copies will take it.
 - Point `endpoints` at a local file server serving a hand-written
   `latest.json` to test the refusal path: a bundle signed with the wrong key
   must fail to install, and the error must reach the user rather than

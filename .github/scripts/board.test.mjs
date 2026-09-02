@@ -40,6 +40,11 @@ check('a red pull request is not review-ready even while working',
   statusFor(issue({ openPr: 7, prFailing: true, labels: ['claude-working'] })), S.inProgress)
 check('a pull request outranks a stale working label',
   statusFor(issue({ openPr: 7, labels: ['claude-working'] })), S.inReview)
+// Both mean "waiting on a person", and the question is the more specific of
+// the two: a `no-ai` issue that the agent was nonetheless asked about, and
+// stopped to ask on, is a card someone has to answer, not one to file away.
+check('a question outranks the human queue',
+  statusFor(issue({ labels: ['no-ai', 'needs-decision'] })), S.needsDecision)
 
 console.log('\nthe card never goes backwards')
 // `claude-working` comes off when a run ends. With no pull request the answer
@@ -62,6 +67,9 @@ check('a human queue is not pushed to Needs Decision',
 
 console.log('\nwho gets picked up out of Todo')
 check('queued for the agent, never offered', shouldPickUp(issue({ labels: ['claude'] })), true)
+// The sweep passes whatever it computed, and "no handover comment" has been
+// both `undefined` and `null` depending on who wrote the caller.
+check('null for never offered means the same', shouldPickUp(issue({ labels: ['claude'] }), null), true)
 check('queued for a person is not ours', shouldPickUp(issue({ labels: ['no-ai'] })), false)
 check('already running', shouldPickUp(issue({ labels: ['claude-working'] })), false)
 check('waiting on a person', shouldPickUp(issue({ labels: ['needs-decision'] })), false)
@@ -227,11 +235,11 @@ const project = {
 }
 
 // Records every call so a run that should be silent can be shown to be silent.
-function harness({ column, labels = [], prs = [pr(7)] }) {
+function harness({ column, labels = [], prs = [pr(7)], card = true, gone = false }) {
   const calls = { mutations: [], labelWrites: [], logs: [] }
   const github = {
     graphql: async () => ({
-      repository: { issue: {
+      repository: { issue: gone ? null : {
         id: 'I_1', state: 'OPEN',
         labels: { nodes: labels.map((name) => ({ name })) },
         closedByPullRequestsReferences: { nodes: prs },
@@ -245,11 +253,11 @@ function harness({ column, labels = [], prs = [pr(7)] }) {
   }
   const projectApi = async (query) => {
     if (query.includes('projectItems')) {
-      return { node: { projectItems: { nodes: [{
+      return { node: { projectItems: { nodes: card ? [{
         id: 'PI_1',
         project: { id: 'P_1' },
         fieldValueByName: { nodes: [{ name: column, field: { id: 'F_1' } }] },
-      }] } } }
+      }] : [] } } }
     }
     calls.mutations.push(query.includes('updateProjectV2ItemFieldValue') ? 'update' : 'add')
     return { addProjectV2ItemById: { item: { id: 'PI_1' } } }
@@ -278,6 +286,20 @@ await relabelRun.run()
 check('a correct column with a missing label still writes the label',
   relabelRun.calls.labelWrites, ['+in-review'])
 check('but does not rewrite the column', relabelRun.calls.mutations, [])
+
+// An issue with no card yet: the `issues: opened` path, and what the hourly
+// sweep does for an issue that was filed while the board was broken.
+const newRun = harness({ column: undefined, labels: [], card: false })
+await newRun.run()
+check('an issue with no card is added and then placed', newRun.calls.mutations, ['add', 'update'])
+
+// A number that no longer resolves -- transferred, deleted, or a pull
+// request's number handed to the issue path by mistake -- must write nothing
+// rather than add a card for it.
+const goneRun = harness({ column: S.todo, gone: true })
+await goneRun.run()
+check('an issue that is not there writes nothing', goneRun.calls.mutations, [])
+check('and touches no labels', goneRun.calls.labelWrites, [])
 
 // ---------------------------------------------------------------------------
 // The queries themselves, read from the source.

@@ -278,6 +278,11 @@ jobs:
           # eighteen calls and only the stalled report would have said which;
           # an allowlist tuned only from failures never learns what the
           # successful runs kept bumping into.
+          #
+          # A record that will not parse -- a run killed at the timeout can
+          # leave it half-written -- must not abort this step: what follows
+          # is the push that keeps the branch, and the diagnosis is worth
+          # less than the branch.
           why='The action left no execution record, so it probably failed before the agent started.'
           if [ -n "$EXECUTION_FILE" ] && [ -f "$EXECUTION_FILE" ]; then
             found=$(jq -r '
@@ -288,7 +293,8 @@ jobs:
                    then ", and was refused \(.permission_denials | length) tool call(s):\n"
                      + ([.permission_denials[] | "  - \(.tool_name): \((.tool_input.command // .tool_input) | tostring | .[0:120])"] | join("\n"))
                    else ", and was refused nothing." end)
-            ' "$EXECUTION_FILE")
+            ' "$EXECUTION_FILE") \
+              || found="The action's execution record could not be read."
             if [ -n "$found" ]; then why=$found; fi
           fi
           echo "$why"

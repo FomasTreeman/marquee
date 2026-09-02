@@ -117,7 +117,10 @@ jobs:
                 # conflict it fails to resolve is not handed over again every
                 # time main moves.
                 head=$(gh pr view "$n" --json headRefOid --jq .headRefOid)
-                if gh pr view "$n" --json comments --jq '.comments[].body' | grep -q "<!-- conflict:$head -->"; then
+                # jq rather than `grep -q`: grep exits on its first match and
+                # closes the pipe, gh dies of SIGPIPE, and under pipefail a
+                # marker that *was* there read as absent.
+                if [ "$(gh pr view "$n" --json comments --jq "any(.comments[].body; contains(\"<!-- conflict:$head -->\"))")" = true ]; then
                   echo "::warning::#$n conflicts with main and was already handed over at $head; skipping."
                   continue
                 fi

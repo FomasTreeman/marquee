@@ -5,7 +5,7 @@ import type { Game } from '../library'
 function game(over: Partial<Game> = {}): Game {
   return {
     id: 'steam:1', provider: 'steam', providerId: '1', title: 'A Game',
-    installed: true, installDir: null, sizeBytes: 0,
+    installed: true, updateAvailable: false, updating: false, installDir: null, sizeBytes: 0,
     lastPlayed: null, playtimeMinutes: 0, favourite: false, hidden: false,
     artAppId: null,
     ...over,

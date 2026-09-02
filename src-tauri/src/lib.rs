@@ -525,6 +525,33 @@ fn uninstall_game(
     }
 }
 
+/// Ask Steam to download a pending update.
+///
+/// Steam treats "owned but out of date" the same download queue as "owned but
+/// not installed", so this is `steam://install/<appid>` -- the same hand-off
+/// `uninstall_game` makes in the other direction. Marquee never downloads
+/// anything itself (docs/PLAN.md §1); it only tells the client that already
+/// owns the files to catch them up, which is why this exists at all rather
+/// than being a silent thing Steam is left to notice on its own -- a game
+/// that is a hundred gigabytes behind should not be a surprise at the moment
+/// someone presses Play.
+#[tauri::command]
+fn update_game(id: String, library: tauri::State<'_, Library>) -> Result<String, String> {
+    let game = {
+        let games = library.0.lock().map_err(|_| "library state is poisoned")?;
+        games.iter().find(|g| g.id == id).cloned()
+    }
+    .ok_or_else(|| format!("no game with id {id}"))?;
+
+    if game.provider != "steam" {
+        return Err(format!("cannot update a {} game", game.provider));
+    }
+    let uri = format!("steam://install/{}", game.provider_id);
+    run::open_uri(&uri)?;
+    log_info!("run", "handed {} to Steam to update", game.title);
+    Ok(uri)
+}
+
 /// Keep the configured copy of the profile current.
 ///
 /// Called by every command that changes it. Silent when no folder is
@@ -832,6 +859,7 @@ pub fn run() {
             system_action,
             set_hidden,
             uninstall_game,
+            update_game,
             export_profile,
             import_profile,
             find_profile,
