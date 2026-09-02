@@ -164,6 +164,7 @@ fn roots() -> Vec<PathBuf> {
         out.push(h.join("GOG Games"));
     }
 
+    // Only some platforms' arms read it.
     let _ = &home;
     out.retain(|p| p.is_dir());
     out
@@ -264,14 +265,16 @@ pub async fn find_executable(
     title: String,
     store: tauri::State<'_, std::sync::Arc<crate::store::Store>>,
 ) -> Result<Option<String>, String> {
-    let learned = store.game_roots().unwrap_or_default();
-    Ok(
-        tauri::async_runtime::spawn_blocking(move || find(&title, &learned))
-            .await
-            .ok()
-            .flatten()
-            .map(|p| p.display().to_string()),
-    )
+    // Without the learned roots the search still runs, over the default
+    // folders only -- but "not found" then means something else.
+    let learned = store.game_roots().unwrap_or_else(|e| {
+        crate::log_warn!("locate", "could not read the learned game roots: {e}");
+        Vec::new()
+    });
+    let found = tauri::async_runtime::spawn_blocking(move || find(&title, &learned))
+        .await
+        .map_err(|e| format!("the search thread died: {e}"))?;
+    Ok(found.map(|p| p.display().to_string()))
 }
 
 #[cfg(test)]

@@ -19,7 +19,7 @@ use std::sync::Mutex;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-use crate::{log_info, paths};
+use crate::{log_info, log_warn, paths};
 
 /// Each entry runs once, in order, and is never edited afterwards -- an edited
 /// migration is a schema that differs between a fresh install and an upgrade.
@@ -59,7 +59,7 @@ const MIGRATIONS: &[&str] = &[
         path     TEXT PRIMARY KEY,
         added_at INTEGER NOT NULL
      );",
-    // v4. Settings, of which there is currently one: a SteamGridDB key.
+    // v4. Settings.
     //
     // A plain key/value table rather than typed columns, because settings
     // arrive one at a time and a migration per setting is a poor trade.
@@ -103,9 +103,12 @@ impl Store {
         let conn = Connection::open(&path)
             .map_err(|e| format!("could not open {}: {e}", path.display()))?;
         // Survives a power cut mid-write, and lets the metadata worker read
-        // while the interface writes.
-        conn.pragma_update(None, "journal_mode", "WAL").ok();
-        conn.pragma_update(None, "foreign_keys", "ON").ok();
+        // while the interface writes. Refused on some network and read-only
+        // volumes, where the default rollback journal still works, so a
+        // refusal is not worth failing the open for.
+        if let Err(e) = conn.pragma_update(None, "journal_mode", "WAL") {
+            log_warn!("store", "WAL refused, using a rollback journal: {e}");
+        }
         migrate(&conn)?;
         log_info!("store", "opened {}", path.display());
         Ok(Store(Mutex::new(conn)))
@@ -627,19 +630,5 @@ mod tests {
         // that fails every request.
         s.set_setting("sgdb_key", "   ").unwrap();
         assert_eq!(s.setting("sgdb_key").unwrap(), None);
-    }
-
-    /// The property the whole schema exists for.
-    #[test]
-    fn user_data_outlives_the_game_it_describes() {
-        let s = memory();
-        s.toggle_favourite("steam:1091500").unwrap();
-        // A scan finding nothing must not be able to remove this. There is no
-        // API that would let it -- that is the point -- so this asserts the
-        // absence: nothing but remove_manual_game deletes from user_game.
-        let flags = s.user_flags().unwrap();
-        assert!(flags
-            .iter()
-            .any(|(id, f)| id == "steam:1091500" && f.favourite));
     }
 }

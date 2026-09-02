@@ -248,24 +248,13 @@ fn path_for(slug: &str, kind: Kind) -> PathBuf {
     ))
 }
 
-/// Fetch, resize and store. Returns the bytes ready to serve.
 /// Build a portrait cover out of a game's other artwork.
 ///
-/// Some games publish no box art anywhere: not on Steam, not on SteamGridDB.
-/// The previous answer was to letterbox the wide capsule into the card, which
-/// looked exactly as broken as it sounds. Every card should carry a real
-/// portrait image, so when none exists, one is made.
-///
-/// A heavily blurred, darkened fill of the game's own key art, with its
-/// wordmark centred on top. It reads as deliberate rather than as a fallback,
-/// and it is built from the game's own colours so it sits correctly beside
-/// real covers.
-///
-/// **A wordmark is required.** Composing without one produces a handsome
-/// abstract blur that identifies nothing -- which is worse than the plain
-/// tinted card carrying the game's name in text, because a launcher's job is
-/// letting you find a game at a glance. So when there is no wordmark, this is
-/// not used and the card falls back to type.
+/// No portrait art anywhere -- Steam or SteamGridDB -- used to mean the wide
+/// capsule letterboxed into the card. Instead: the key art blurred and
+/// darkened with the wordmark centred, in the game's own colours, so it sits
+/// beside real covers. A wordmark is required; without one the result is an
+/// anonymous blur, which identifies less than the typed card it replaces.
 fn compose_cover(hero: &image::DynamicImage, logo: &image::DynamicImage) -> image::DynamicImage {
     use image::imageops;
 
@@ -341,7 +330,10 @@ pub enum Source {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
-    pub app_id: String,
+    /// `steam-1091500` or `sgdb-8452`: the cache key, not an appid. Named
+    /// `appId` on the wire because the interface already reads it as such.
+    #[serde(rename = "appId")]
+    pub slug: String,
     pub cover: Source,
     pub hero: Source,
     pub logo: Source,
@@ -381,10 +373,7 @@ fn usable(
     }
     let bytes = response.bytes().ok()?;
     let img = image::load_from_memory(&bytes).ok()?;
-    if is_placeholder(&img) {
-        log_debug!("art", "{url}: placeholder");
-        return None;
-    }
+    // Shape first: two comparisons, against a scan of every pixel.
     if !right_shape(kind, img.width(), img.height()) {
         log_debug!(
             "art",
@@ -392,6 +381,10 @@ fn usable(
             img.width(),
             img.height()
         );
+        return None;
+    }
+    if is_placeholder(&img) {
+        log_debug!("art", "{url}: placeholder");
         return None;
     }
     Some((bytes, img))
@@ -406,10 +399,9 @@ fn steam_urls(app_id: &str, kind: Kind) -> Vec<String> {
 
 /// Which catalogue a game's artwork is being looked up in.
 ///
-/// Previously everything was keyed by Steam appid, which meant the artwork
-/// picker could only ever re-point a game at a *different Steam game* -- no
-/// help at all when the missing artwork is Steam's. A SteamGridDB entry is now
-/// addressable directly.
+/// Source-qualified: keyed by Steam appid alone, the artwork picker could only
+/// re-point a game at another Steam game, which is no help when the missing
+/// artwork is Steam's.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceKey {
     Steam(String),
@@ -456,7 +448,7 @@ const KINDS: [Kind; 3] = [Kind::Cover, Kind::Hero, Kind::Logo];
 fn resolve(key: &SourceKey, sgdb_key: Option<&str>) -> Manifest {
     let slug = key.slug();
     let mut m = Manifest {
-        app_id: slug.clone(),
+        slug: slug.clone(),
         cover: Source::None,
         hero: Source::None,
         logo: Source::None,
@@ -551,19 +543,27 @@ fn resolve(key: &SourceKey, sgdb_key: Option<&str>) -> Manifest {
 
     let mut have: std::collections::HashMap<Kind, image::DynamicImage> = Default::default();
     for (kind, raw, img, source) in found {
+        // From the image `usable` already decoded, not from the bytes again:
+        // decoding a 250 KB hero is the expensive step, and it ran twice.
         let encoded = if kind == Kind::Logo {
             // Wordmarks are frequently a small image inside a large transparent
             // canvas; trimmed, they fill the space they are given.
             let trimmed = trim_transparent(&img);
             let capped = downscale(&trimmed, kind).unwrap_or(trimmed);
-            let mut out = std::io::Cursor::new(Vec::new());
-            match capped.write_to(&mut out, image::ImageFormat::Png) {
-                Ok(()) => out.into_inner(),
-                Err(_) => raw.to_vec(),
-            }
+            encode(&capped, kind)
         } else {
-            resize(&raw, kind).unwrap_or_else(|| raw.to_vec())
-        };
+            shrink(&img, kind).unwrap_or_else(|| Ok(raw.to_vec()))
+        }
+        .unwrap_or_else(|e| {
+            // The original is still a usable image, so serve that rather than
+            // nothing -- but say so, or an oversized cache is a mystery.
+            log_warn!(
+                "art",
+                "{slug}: re-encoding {} failed, caching the original: {e}",
+                kind.file()
+            );
+            raw.to_vec()
+        });
         write_cached(&path_for(&slug, kind), &encoded);
         have.insert(kind, img);
         match kind {
@@ -636,20 +636,52 @@ fn lock_for(slug: &str) -> std::sync::Arc<std::sync::Mutex<()>> {
         .clone()
 }
 
+/// Games known to have a current manifest on disk.
+///
+/// The manifest is the authority on whether a game has been resolved -- a file
+/// alone is not, because a zero-byte miss and a not-yet-fetched asset look
+/// identical -- but reading and parsing it for every one of the hundreds of
+/// requests a scroll makes is a cost paid for nothing after the first.
+static RESOLVED: std::sync::RwLock<Option<std::collections::HashSet<String>>> =
+    std::sync::RwLock::new(None);
+
+fn is_resolved(slug: &str) -> bool {
+    let known = RESOLVED.read().unwrap_or_else(|e| e.into_inner());
+    if known.as_ref().is_some_and(|s| s.contains(slug)) {
+        return true;
+    }
+    drop(known);
+    // The first request this launch for a game an earlier launch resolved.
+    if manifest(slug).is_some() {
+        mark_resolved(slug);
+        return true;
+    }
+    false
+}
+
+fn mark_resolved(slug: &str) {
+    RESOLVED
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(Default::default)
+        .insert(slug.to_string());
+}
+
 pub fn fetch(key: &SourceKey, kind: Kind, sgdb_key: Option<&str>) -> Option<Vec<u8>> {
     let slug = key.slug();
     let path = path_for(&slug, kind);
 
-    // The manifest is the authority on whether this has been resolved. A file
-    // alone is not: a zero-byte miss and a not-yet-fetched asset look identical
-    // on disk.
-    if manifest(&slug).is_none() {
+    if !is_resolved(&slug) {
         let gate = lock_for(&slug);
         let _held = gate.lock().unwrap_or_else(|e| e.into_inner());
         // Checked again inside the lock: whoever held it may have just done
         // the work, and doing it twice is the thing this exists to prevent.
-        if manifest(&slug).is_none() {
+        if !is_resolved(&slug) {
             resolve(key, sgdb_key);
+            // Recorded whether or not the manifest reached the disk: the
+            // assets did, and re-resolving on every request because one
+            // write failed would download the lot again and again.
+            mark_resolved(&slug);
         }
     }
     match std::fs::read(&path) {
@@ -688,10 +720,12 @@ fn downscale(img: &image::DynamicImage, kind: Kind) -> Option<image::DynamicImag
         return None;
     }
     let scale = kind.max_edge() as f32 / w.max(h) as f32;
+    // Lanczos3 costs more than Triangle and this runs once per asset ever, off
+    // the UI thread. Downscaled cover art is looked at closely.
     Some(img.resize(
         (w as f32 * scale) as u32,
         (h as f32 * scale) as u32,
-        image::imageops::FilterType::Lanczos3,
+        FilterType::Lanczos3,
     ))
 }
 
@@ -707,64 +741,48 @@ pub fn clear_cache() -> std::io::Result<()> {
     }
     paths::ensure(&dir)?;
     std::fs::write(dir.join(".version"), ART_VERSION.to_string())?;
+    // Or the games that found nothing keep answering from memory while the
+    // disk has been wiped precisely so they would be asked again.
+    *RESOLVED.write().unwrap_or_else(|e| e.into_inner()) = None;
     Ok(())
 }
 
-/// Returns None when the original bytes should be stored unchanged -- either
-/// because nothing needed doing, or because we could not decode it at all.
-fn resize(raw: &[u8], kind: Kind) -> Option<Vec<u8>> {
-    let img = image::load_from_memory(raw).ok()?;
-    let (w, h) = (img.width(), img.height());
+/// The bytes to cache for an asset over its cap, or None when the original
+/// bytes should be stored unchanged.
+///
+/// Never upscale: an asset smaller than the target is already as good as it
+/// is going to get, and enlarging it only costs memory. And when no resize is
+/// needed, keep the original bytes rather than re-encoding them. Steam serves
+/// many `library_600x900` assets at 300×450 already, and running those through
+/// the JPEG encoder again is a second generation of loss for nothing.
+fn shrink(img: &image::DynamicImage, kind: Kind) -> Option<image::ImageResult<Vec<u8>>> {
+    Some(encode(&downscale(img, kind)?, kind))
+}
 
-    // Never upscale. An asset smaller than the target is already as good as it
-    // is going to get, and enlarging it only costs memory.
-    //
-    // And when no resize is needed, keep the original bytes rather than
-    // re-encoding them. Steam serves many `library_600x900` assets at 300×450
-    // already, and running those through the JPEG encoder again is a second
-    // generation of loss in exchange for nothing.
-    if w.max(h) <= kind.max_edge() {
-        return None;
-    }
-
-    let scale = kind.max_edge() as f32 / w.max(h) as f32;
-    // Lanczos3 costs more than Triangle and this runs once per asset ever, off
-    // the UI thread. Downscaled cover art is looked at closely.
-    let img = img.resize(
-        (w as f32 * scale) as u32,
-        (h as f32 * scale) as u32,
-        FilterType::Lanczos3,
-    );
-
+fn encode(img: &image::DynamicImage, kind: Kind) -> image::ImageResult<Vec<u8>> {
     let mut out = Cursor::new(Vec::new());
     if kind.keeps_alpha() {
-        img.write_to(&mut out, image::ImageFormat::Png).ok()?;
+        img.write_to(&mut out, image::ImageFormat::Png)?;
     } else {
         image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 86)
-            .encode_image(&img.to_rgb8())
-            .ok()?;
+            .encode_image(&img.to_rgb8())?;
     }
-    Some(out.into_inner())
+    Ok(out.into_inner())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn png(w: u32, h: u32) -> Vec<u8> {
-        let img = image::RgbaImage::from_fn(w, h, |x, y| {
+    fn gradient(w: u32, h: u32) -> image::DynamicImage {
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(w, h, |x, y| {
             image::Rgba([(x % 255) as u8, (y % 255) as u8, 128, 255])
-        });
-        let mut out = Cursor::new(Vec::new());
-        image::DynamicImage::ImageRgba8(img)
-            .write_to(&mut out, image::ImageFormat::Png)
-            .unwrap();
-        out.into_inner()
+        }))
     }
 
     #[test]
     fn a_large_cover_is_scaled_down() {
-        let out = resize(&png(600, 900), Kind::Cover).unwrap();
+        let out = shrink(&gradient(600, 900), Kind::Cover).unwrap().unwrap();
         let img = image::load_from_memory(&out).unwrap();
         assert_eq!(img.height(), COVER_MAX, "longest edge should hit the cap");
         assert_eq!(img.width(), 320);
@@ -785,17 +803,17 @@ mod tests {
     /// case, not the edge case.
     #[test]
     fn a_small_asset_is_left_completely_alone() {
-        assert!(resize(&png(120, 180), Kind::Cover).is_none());
-        assert!(resize(&png(300, 450), Kind::Cover).is_none());
+        assert!(shrink(&gradient(120, 180), Kind::Cover).is_none());
+        assert!(shrink(&gradient(300, 450), Kind::Cover).is_none());
         // Exactly at the cap still counts as no work needed.
-        assert!(resize(&png(320, COVER_MAX), Kind::Cover).is_none());
+        assert!(shrink(&gradient(320, COVER_MAX), Kind::Cover).is_none());
     }
 
     /// The transparent wordmark is the whole design. Flattening it to JPEG
     /// would put a black box behind every hero.
     #[test]
     fn the_wordmark_keeps_its_alpha() {
-        let out = resize(&png(1800, 600), Kind::Logo).unwrap();
+        let out = shrink(&gradient(1800, 600), Kind::Logo).unwrap().unwrap();
         let img = image::load_from_memory(&out).unwrap();
         assert!(img.color().has_alpha(), "logo must stay PNG with alpha");
         assert_eq!(Kind::Logo.mime(), "image/png");
@@ -850,10 +868,16 @@ mod tests {
         assert!(is_placeholder(&one));
     }
 
+    /// Adding a SteamGridDB key clears the cache so the games that found
+    /// nothing get asked again. The record of what was resolved has to go with
+    /// it, or those games keep serving the old answer until a restart -- and
+    /// the key appears to do nothing for the games that needed it most.
     #[test]
-    fn rubbish_input_is_none_rather_than_a_panic() {
-        assert!(resize(b"not an image at all", Kind::Cover).is_none());
-        assert!(resize(&[], Kind::Hero).is_none());
+    fn clearing_the_cache_forgets_what_was_resolved() {
+        mark_resolved("steam-forgotten");
+        assert!(is_resolved("steam-forgotten"));
+        clear_cache().unwrap();
+        assert!(!is_resolved("steam-forgotten"));
     }
 
     /// A banner in a 2:3 card looks broken however it is fitted. This is the
@@ -1024,17 +1048,12 @@ mod tests {
 mod live {
     use super::*;
 
-    /// The real Battlefield 6 case, end to end.
-    ///
-    /// Its `library_600x900.jpg` is 1.6 KB of grey and its `logo.png` is the
-    /// same, while its `library_hero.jpg` is 250 KB of real art and its actual
-    /// capsule exists only under a hashed path. Every part of the fallback is
-    /// exercised by this one appid, which is why it is the fixture.
-    ///
-    ///     cargo test live -- --ignored --nocapture
     /// Prints the resolution report for a spread of real games: an old one
     /// Steam has everything for, a recent one it does not, and a couple in
-    /// between. This is the "can it certifiably tell" question, answered.
+    /// between. Battlefield 6 is the fixture that exercises every part of the
+    /// fallback: its `library_600x900.jpg` and `logo.png` are 1.6 KB of grey,
+    /// its `library_hero.jpg` is real, and its capsule exists only under a
+    /// hashed path.
     ///
     ///     cargo test live -- --ignored --nocapture
     #[test]

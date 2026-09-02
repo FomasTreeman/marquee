@@ -1,8 +1,6 @@
-//! Host reporting.
-//!
-//! The Phase 0 spike has to produce numbers *per platform*, and a screenshot
-//! of a frame rate is worthless without knowing which webview drew it. This
-//! stamps every measurement with the engine behind it.
+//! Host reporting: which webview is drawing this. A frame rate or a
+//! rendering bug means nothing without knowing the engine behind it, so
+//! every measurement and report is stamped with it.
 
 use serde::Serialize;
 

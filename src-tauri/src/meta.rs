@@ -255,10 +255,15 @@ pub fn fetch_one(client: &reqwest::blocking::Client, app_id: &str) -> Fetched {
 }
 
 /// A client configured the way every request in this app should be: bounded,
-/// and identifying itself honestly.
+/// and identifying itself honestly (docs/PLAN.md §11: a public endpoint,
+/// called at a human rate, by something that says who it is).
 pub fn http_client() -> Option<reqwest::blocking::Client> {
+    http_client_with(Duration::from_secs(20))
+}
+
+pub fn http_client_with(timeout: Duration) -> Option<reqwest::blocking::Client> {
     reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(20))
+        .timeout(timeout)
         .user_agent(concat!(
             "Marquee/",
             env!("CARGO_PKG_VERSION"),
@@ -316,22 +321,9 @@ pub fn spawn(app: AppHandle) -> Enricher {
     let (tx, rx) = mpsc::channel::<Vec<String>>();
 
     std::thread::spawn(move || {
-        let client = match reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(20))
-            // Identify honestly. docs/PLAN.md §11: stay on the right side of
-            // "calling a public endpoint at a human rate".
-            .user_agent(concat!(
-                "Marquee/",
-                env!("CARGO_PKG_VERSION"),
-                " (game launcher)"
-            ))
-            .build()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                log_warn!("meta", "no HTTP client, metadata disabled: {e}");
-                return;
-            }
+        let Some(client) = http_client() else {
+            log_warn!("meta", "no HTTP client, metadata disabled");
+            return;
         };
 
         let mut queue: VecDeque<String> = VecDeque::new();
@@ -364,6 +356,8 @@ pub fn spawn(app: AppHandle) -> Enricher {
 
             if let Some(meta) = cached(&app_id) {
                 if !meta.name.is_empty() {
+                    // Both emits: the only listener is the webview, and a
+                    // closed webview is not an error.
                     let _ = app.emit("meta", &meta);
                 }
                 continue;
