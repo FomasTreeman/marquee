@@ -16,10 +16,15 @@ Three things it deliberately is not:
 - **Not a store.** It never downloads a game, installs one, or runs an
   installer. Nothing it fetches is executed. See `docs/PLAN.md §5`.
 - **Not an account.** No sign-in, no server, no telemetry, no crash uploads.
-  Nothing leaves the machine except requests to Steam's public endpoints and,
-  if you supply a key, SteamGridDB.
+  Nothing leaves the machine except requests to Steam's public endpoints, to
+  SteamGridDB if you supply a key, and to this repository's releases page for
+  the update check ([UPDATES.md](UPDATES.md)).
 - **Not a privileged process.** No elevation, no service, no driver, no
-  scheduled task, no auto-start. Closing it stops it entirely.
+  scheduled task. Closing it stops it entirely. The one thing it will
+  register with the system is itself, on Windows, under
+  `HKEY_CURRENT_USER\...\Run` — a per-user start-with-Windows entry that is
+  off by default, switched in Settings, and read back live so the toggle
+  cannot disagree with what Windows will do (`autostart.rs`).
 
 ## What it executes, and how
 
@@ -98,9 +103,11 @@ SteamGridDB is only ever called from Rust; the webview cannot reach it.
 
 ## Tauri permissions
 
-`src-tauri/capabilities/default.json` grants `core:default` and
-`dialog:allow-open`. That is the entire surface: no filesystem plugin, no
-shell plugin, no HTTP plugin. Every privileged operation goes through a named
+`src-tauri/capabilities/default.json` grants `core:default`,
+`dialog:allow-open`, `updater:default` and `process:allow-restart`. That is
+the entire surface: no filesystem plugin, no shell plugin, no HTTP plugin.
+The frontend can open a file dialog, ask whether there is an update and
+restart after one; every other privileged operation goes through a named
 `#[tauri::command]` that validates its own arguments.
 
 ## Credentials
@@ -121,18 +128,27 @@ in an exported profile**, which is what makes a profile work on a new machine �
 so treat an exported profile as mildly sensitive and do not put one in a public
 place.
 
-## Making the repository public
+## The repository
 
-Checked before publishing:
+Checked before it went public, and true of every commit since:
 
-- No secrets anywhere in the history. The word "secret" appears only in this
-  file and in the updater documentation.
+- No secrets in the history. The update signing key lives in a password
+  manager and the `release` environment, never in a file here; `*.key` is
+  ignored and a ruleset refuses it.
 - No personal paths or identifiers in tracked files. The Steam fixtures under
   `src-tauri/tests/fixtures/` are anonymised to `/Users/example`.
 - Nothing user-specific is tracked: the database, logs and artwork cache all
   live in the platform's app directories, and `.gitignore` covers the rest.
+- Every GitHub Action is pinned to a commit SHA, and a check refuses a tag.
+  One of them runs in the only job that can see the signing key.
+
+Some of the code is written by an agent from issue text, which is untrusted
+input. What bounds that is described in [AUTOMATION.md](AUTOMATION.md): it
+cannot merge, cannot push to `main`, and only a maintainer can start it.
 
 ## Reporting something
 
-Open an issue if it is not sensitive. If it is, say so in the issue without the
-details and we will find somewhere better than a public thread.
+Open an issue if it is not sensitive. If it is, use **Report a vulnerability**
+under the repository's Security tab when it is offered; failing that, open an
+issue saying only that you have something sensitive, and we will find
+somewhere better than a public thread.

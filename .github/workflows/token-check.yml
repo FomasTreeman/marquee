@@ -111,20 +111,22 @@ jobs:
               if (missing.length) throw new Error(`no column named ${missing.join(', ')}`)
             })
 
-            // It must NOT be able to reach the repository. A classic token
-            // carrying `repo` as well would grant write access to everything on
-            // the account, to move a card.
-            let repoReachable = false
-            try {
-              await gql(`query($o: String!, $r: String!) {
-                repository(owner: $o, name: $r) { id } }`,
-                { o: context.repo.owner, r: context.repo.repo })
-              repoReachable = true
-            } catch { /* what we want */ }
-            rows.push(repoReachable
-              ? ['note', 'it can also read this repository',
-                 'it carries `repo` as well — narrow it to `project` alone when convenient']
-              : ['ok', 'it cannot reach the repository', 'which is correct'])
+            // It must NOT carry more than `project`. A classic token with
+            // `repo` as well would grant write access to everything on the
+            // account, to move a card. This used to be tested by asking
+            // whether the token could read this repository, which stopped
+            // meaning anything the day the repository went public: every
+            // token can. GitHub names a classic token's scopes in a response
+            // header instead, so those are read.
+            const probe = await fetch('https://api.github.com/rate_limit',
+              { headers: { authorization: `bearer ${token}` } })
+            const scopes = (probe.headers.get('x-oauth-scopes') || '')
+              .split(',').map((x) => x.trim()).filter(Boolean)
+            const extra = scopes.filter((x) => !['project', 'read:project'].includes(x))
+            rows.push(extra.length
+              ? ['note', `it also carries ${extra.join(', ')}`,
+                 'narrow it to `project` alone when convenient']
+              : ['ok', `its scopes are ${scopes.join(', ') || 'unreported'}`, 'which is correct'])
 
             await expiry()
 

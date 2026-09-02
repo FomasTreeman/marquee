@@ -15,6 +15,26 @@ use crate::vdf;
 /// playable.
 const STATE_FULLY_INSTALLED: u64 = 4;
 
+/// Steam sets this bit when the local content is out of date and needs
+/// downloading before the game will run -- separate from whether it is
+/// currently doing that download, which is `STATE_UPDATING_MASK` below.
+const STATE_UPDATE_REQUIRED: u64 = 2;
+
+/// Every bit observed set while Steam is actively fetching or applying an
+/// update. `StateFlags` is undocumented, like everything else this file reads
+/// off Valve -- docs/PLAN.md §11 -- so this is a best effort checked against a
+/// real captured manifest (`appmanifest_partial.acf`, 1026 = update required
+/// + update started) rather than a specification.
+const STATE_UPDATING_MASK: u64 = 0x100 // Update Running
+    | 0x200 // Update Paused
+    | 0x400 // Update Started
+    | 0x8000 // Validating
+    | 0x10000 // Adding Files
+    | 0x20000 // Preallocating
+    | 0x40000 // Downloading
+    | 0x80000 // Staging
+    | 0x100000; // Committing
+
 /// Valve's own tools and runtimes have appmanifests like any game. Nobody
 /// wants Proton in their library.
 fn is_tool(appid: &str, name: &str) -> bool {
@@ -285,6 +305,8 @@ impl Steam {
                     // arriving instead of showing something wrong.
                     title: String::new(),
                     installed: false,
+                    update_available: false,
+                    updating: false,
                     install_dir: None,
                     size_bytes: 0,
                     last_played,
@@ -323,6 +345,8 @@ impl Steam {
             provider_id: appid,
             title,
             installed: flags & STATE_FULLY_INSTALLED != 0,
+            update_available: flags & STATE_UPDATE_REQUIRED != 0,
+            updating: flags & STATE_UPDATING_MASK != 0,
             install_dir,
             size_bytes: app.u64_at("SizeOnDisk").unwrap_or(0),
             last_played,
@@ -443,6 +467,56 @@ mod tests {
         assert!(!game.installed, "1026 has no fully-installed bit set");
 
         std::fs::remove_dir_all(std::env::temp_dir().join("marquee-test-steam")).ok();
+    }
+
+    /// `StateFlags` mixes "installed" with "needs an update" and "is
+    /// currently downloading one" in the same bitfield, and each of the three
+    /// example manifests here isolates one of those states.
+    #[test]
+    fn update_state_is_read_from_state_flags() {
+        let dir = std::env::temp_dir().join("marquee-test-steam-update/steamapps");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // StateFlags 4 -- fully installed, nothing pending.
+        let current = dir.join("appmanifest_365670.acf");
+        std::fs::write(
+            &current,
+            include_str!("../../tests/fixtures/appmanifest_365670.acf"),
+        )
+        .unwrap();
+        let game = Steam::read_manifest(&current).unwrap();
+        assert!(game.installed);
+        assert!(!game.update_available, "4 has no update-required bit");
+        assert!(!game.updating);
+
+        // StateFlags 6 (4 + 2) -- installed, but Steam wants to update it and
+        // has not started.
+        let waiting = dir.join("appmanifest_367520.acf");
+        std::fs::write(
+            &waiting,
+            include_str!("../../tests/fixtures/appmanifest_update_available.acf"),
+        )
+        .unwrap();
+        let game = Steam::read_manifest(&waiting).unwrap();
+        assert!(game.installed, "still playable while an update only waits");
+        assert!(game.update_available, "6 sets the update-required bit");
+        assert!(!game.updating, "nothing is downloading yet");
+
+        // StateFlags 1026 (1024 + 2) -- update required and already under way.
+        let downloading = dir.join("appmanifest_1145360.acf");
+        std::fs::write(
+            &downloading,
+            include_str!("../../tests/fixtures/appmanifest_partial.acf"),
+        )
+        .unwrap();
+        let game = Steam::read_manifest(&downloading).unwrap();
+        assert!(game.update_available, "1026 still has the required bit set");
+        assert!(
+            game.updating,
+            "1024 (Update Started) is in the updating mask"
+        );
+
+        std::fs::remove_dir_all(std::env::temp_dir().join("marquee-test-steam-update")).ok();
     }
 
     /// Nobody wants Proton and the Steamworks redistributables in their

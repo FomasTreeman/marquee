@@ -68,10 +68,15 @@ function heroFacts(game: Game): string[] {
   const state = game.provider === 'manual' && !game.installed
     ? 'No executable set'
     : game.installed ? gib(game.sizeBytes) || 'Installed' : 'Not installed'
+  // Shown on the hero panel, not just the detail screen, so a hundred-gigabyte
+  // update is visible while browsing rather than a surprise at the moment
+  // Play is pressed.
+  const update = game.updating ? 'Updating…' : game.updateAvailable ? 'Update available' : ''
   return [
     game.favourite ? '★ Favourite' : '',
     store,
     state,
+    update,
     hoursLabel(game.playtimeMinutes),
     playedLabel(game.lastPlayed),
   ].filter(Boolean)

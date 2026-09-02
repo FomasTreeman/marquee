@@ -15,16 +15,24 @@ cd "$(dirname "$0")/.."
 fail=0
 report() { printf '  %s\n    %s\n' "$1" "$2"; fail=1; }
 
-# --- TypeScript: a catch block with nothing at all in it -----------------
+# --- TypeScript and the board scripts: a catch with nothing in it --------
+# Both the `catch {}` block and the `.catch(() => {})` handler, since a
+# promise chain is where most of the frontend's failures arrive. The board
+# scripts count too: the automation is where the silence rule was skipped
+# first and where it cost the most (see below).
 while IFS=: read -r file line text; do
   [ -z "${file:-}" ] && continue
+  # A comment on the line above counts as the stated reason, same as Rust.
+  prev=$(sed -n "$((line - 1))p" "$file" | sed 's/^ *//')
+  case "$prev" in //*) continue ;; esac
   report "$file:$line" "$(echo "$text" | sed 's/^ *//')"
-done < <(grep -rnE 'catch *(\([^)]*\))? *\{ *\}' src/*.ts || true)
+done < <(find src .github/scripts -name '*.ts' -o -name '*.mjs' \
+         | xargs grep -nE 'catch *(\([^)]*\))? *\{ *\}|\.catch\(\(\) *=> *\{ *\}\)' || true)
 
 # --- Rust: a discarded Result from a call that touches the disk ----------
 # Test code is exempt: a temp directory that fails to delete is not a bug the
 # user will ever see.
-for f in src-tauri/src/*.rs; do
+for f in src-tauri/src/*.rs src-tauri/src/*/*.rs; do
   while IFS=: read -r line text; do
     [ -z "${line:-}" ] && continue
     # A comment on the line above counts as the stated reason.

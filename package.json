@@ -2,6 +2,11 @@
   "name": "marquee",
   "private": true,
   "version": "0.2.2",
+  "description": "A controller-first game launcher for the television",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FomasTreeman/marquee"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +16,7 @@
     "app": "tauri dev",
     "tokens": "python3 tools/build-tokens.py",
     "logs": "tail -f \"$HOME/Library/Logs/Marquee/marquee.log\"",
-    "test": "tools/check-silence.sh && python3 tools/check-workflows.py && python3 tools/check-agent-tools.py && node .github/scripts/board.test.mjs && vitest run && tsc --noEmit && cd src-tauri && cargo test",
+    "test": "pnpm check && node .github/scripts/board.test.mjs && vitest run && tsc --noEmit && cd src-tauri && cargo test",
     "test:ui": "vitest run",
     "build:windows": "tools/build-windows.sh",
     "check": "tools/check-silence.sh && python3 tools/check-workflows.py && python3 tools/check-agent-tools.py"

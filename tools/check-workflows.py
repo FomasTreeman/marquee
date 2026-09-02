@@ -22,9 +22,17 @@ import pathlib
 import re
 import sys
 
+import os
+
 try:
     import yaml
 except ImportError:
+    # Skipping is fine on a laptop and is exactly the silent pass this check
+    # exists to prevent on the runner: a green "check" job that checked
+    # nothing looks the same as one that did.
+    if os.environ.get("CI"):
+        print("check-workflows: pyyaml is not installed on this runner, so nothing was checked")
+        sys.exit(1)
     print("check-workflows: pyyaml not installed, skipping")
     sys.exit(0)
 
@@ -50,6 +58,17 @@ STEP = {
 # version in a trailing comment. Dependabot reads and updates both -- see
 # .github/dependabot.yml, which is what stops the pins going stale.
 PINNED = re.compile(r"^[^@]+@[0-9a-f]{40}$")
+
+# An expression inside `run:` is pasted into the shell before it runs. For
+# anything a person outside the repository can write -- an issue title, a
+# branch name, a comment, a dispatch input -- that is a shell injection with
+# the job's token attached. The safe form is an `env:` entry, which reaches
+# the script as a variable and cannot escape its quotes. Nothing here does
+# this today, and the check is what keeps it that way, because a review does
+# not reliably notice which of two `${{ }}` is the dangerous one.
+INJECTABLE = re.compile(
+    r"\$\{\{[^}]*\b(github\.event\.|inputs\.|github\.head_ref)"
+)
 
 problems = []
 unpinned = []
@@ -122,6 +141,10 @@ def check(path: pathlib.Path) -> None:
                 problems.append(
                     f"{at}: a `run` step cannot take `with` — most likely a step "
                     f"was inserted between a `uses:` and the `with:` that belonged to it"
+                )
+            if has_run and isinstance(step["run"], str) and INJECTABLE.search(step["run"]):
+                problems.append(
+                    f"{at}: `run` interpolates event data with `${{{{ }}}}` -- pass it through `env:` instead"
                 )
             if has_run and "shell" not in step and "windows" in str(job.get("runs-on", "")).lower():
                 problems.append(f"{at}: a Windows `run` step should name its shell")

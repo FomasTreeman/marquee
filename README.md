@@ -1,17 +1,35 @@
 # Marquee
 
-A cross-platform, controller-first game launcher. One grid, every store, pitch
-black, cover art doing the work.
+A controller-first game launcher for the television. One grid, every store,
+pitch black, cover art doing the work.
 
-Windows, Linux and macOS. Tauri v2 — a Rust core with a web frontend, so the
-interface is CSS and the parsers are memory-safe.
+Windows, macOS and Linux. Tauri v2 — a Rust core with a web frontend, so the
+interface is a stylesheet and the parsers are memory-safe.
 
 ## The idea in four lines
 
-1. Install it. Sign into Steam. Your library is there, with art.
+1. Install it. Your Steam library is there, with art.
 2. Add anything else by typing its name. One field.
 3. **No API keys. No accounts. No configuration.**
-4. The whole interface is a stylesheet.
+4. The whole interface is CSS.
+
+## Installing
+
+Download the newest build from
+[Releases](https://github.com/FomasTreeman/marquee/releases/latest):
+
+| | file | note |
+|---|---|---|
+| Windows | `marquee_<version>_x64-setup.exe` | SmartScreen will object, because the installer is not code-signed: *More info → Run anyway*. The `.msi` is the same thing for people who prefer one |
+| macOS, Apple silicon | `marquee_<version>_aarch64.dmg` | Not notarised, so the first launch is a right-click → Open rather than a double-click |
+| macOS, Intel | `marquee_<version>_x64.dmg` | as above |
+| Linux | `.AppImage`, `.deb` or `.rpm` | The AppImage needs `chmod +x`. Linux builds and is released on every merge, and has had far less use than the other two |
+
+Installed copies update themselves. About twenty seconds after launch Marquee
+checks for a newer release and offers it when nothing else is on screen —
+never over a running game. "Not now" is remembered for that version. Every
+download is verified against a public key compiled into the copy already
+running; [docs/UPDATES.md](docs/UPDATES.md) explains the whole mechanism.
 
 ## How it works
 
@@ -21,181 +39,130 @@ logo, and launches with a button. If Steam is closed it is started silently to
 the tray first, so its window never appears in front of the game.
 
 **Everything else is a name.** Epic, GOG, EA, Ubisoft, emulators, a decade-old
-installer — you type *"Hollow Knight"*, pick it from the results, and it lands
-in the library complete with metadata and artwork. Pointing at the executable
-is a separate one-click step afterwards, so a game looks finished before you
-have said anything about where it lives on disk.
+installer — type *"Hollow Knight"*, pick it from the results, and it lands in
+the library complete with metadata and artwork. Pointing at the executable is
+a separate one-click step afterwards, so a game looks finished before you have
+said anything about where it lives on disk. Every executable you choose
+teaches Marquee a folder, and it searches those first next time — a library
+on whichever drive had room gets found, which guessing at `Program Files`
+never would.
 
-That is one code path instead of five undocumented per-store parsers, and it is
-why there is no EA integration to break.
+That is one code path instead of five undocumented per-store parsers, and it
+is why there is no EA integration to break.
 
 **Metadata needs no keys**, because Steam's store search, app details and art
-CDN are all public and unauthenticated — and a Steam *store page* exists for
-most PC games regardless of where you bought them. Optional keys exist for
-games Steam has never heard of, and they are strictly optional.
+CDN are public and unauthenticated, and a Steam *store page* exists for most
+PC games regardless of where you bought them. Steam's own art has real gaps —
+recent releases publish a grey placeholder where a cover should be, and plenty
+of games have no transparent wordmark at all — so a free
+[SteamGridDB](https://www.steamgriddb.com) key can be pasted into Settings to
+fill them. Strictly optional, and the app says so when artwork is missing and
+the key that would fix it is not set. When no box art exists anywhere, one is
+composed from the game's key art and wordmark.
 
-## Status
+**It is built for a sofa.** Fullscreen by default, the screen kept awake while
+you browse, an on-screen keyboard when a pad is what you are holding, and the
+launcher minimised the moment a game starts. Favourites, hidden games, hand-
+added games, artwork corrections and settings can be exported as a profile,
+kept current in a folder of your choosing, and are found on their own after a
+reinstall if that folder was beside your games.
 
-**Phases 0–2 are done on macOS.** Not a prototype: it reads a real library,
-looks right, and launches games.
+## Controls
 
-```
-INFO  scan       215 games in 0 ms (steam=ok manual=ok)
-INFO  boot       ready in 116 ms · 215 games
-INFO  selfcheck  16 checks passed
-```
+Everything is reachable with a pad alone, a keyboard alone, or a mouse alone.
+A test holds every pad action to having a keyboard route, because "add a
+game" once spent a year pad-only.
 
-Measured on macOS / WKWebView: 0–2 dropped frames out of 180 with 2,000 cards,
-0.3–2 ms input latency, 0.35 ms IPC round trip. Budgets and method are in
-[docs/PHASE-0.md](docs/PHASE-0.md).
+| Pad | Keyboard | |
+|---|---|---|
+| D-pad / stick | Arrows, WASD | Move |
+| **A** | Enter, Space | Play |
+| **B** | Escape, Backspace | Back |
+| **X** | X | Favourite |
+| **Y** | Y | Details — rename, fix artwork, hide |
+| **LB / RB** | Q / E | Page between the preset tabs: All, Favourites, Installed, Never played, Hidden |
+| **L3** | O | Sort — recency, playtime, name, size; favourites lead every order |
+| **R3** | / or F | Search — matches genre and studio too, so "roguelike" or "larian" finds something |
+| **Start** (☰) | Tab, M | Main menu — settings, rescan, quit, restart, shut down |
+| **Select** (⧉) | N | Add a game by name |
+| | F11 | Windowed or fullscreen; remembered |
+| | P | The performance HUD |
 
-**Working**
-
-- The Steam library — installed *and* played, with real playtime, from Steam's
-  own local files
-- Cover art, wide key art and transparent wordmarks, fetched once, resized on
-  ingest, then served from disk. The library renders with no network at all
-- Names, descriptions, genres, dates and scores — **no API key anywhere**
-- **A second artwork source.** Steam's own art has real gaps: recent releases
-  publish a grey placeholder where a cover should be, and plenty of games have
-  no transparent wordmark at all. Paste a free SteamGridDB key in Settings and
-  those fill in — on a real library, 23 of 28 games resolve entirely from Steam
-  and the remaining 5 entirely from SteamGridDB. Optional, and the app says so
-  when artwork is missing and the key that would fix it is not set
-- Launching, by `steam://` for Steam and directly for anything else
-- A detail view, favourites that survive a rescan, filter presets, search
-- **Renaming any game**, edited in place where its title is shown. Steam's name
-  for a game is often not the one you would look for it under, and an edition
-  suffix reads badly under a card. An empty field restores the original
-- **Adding any other game by typing its name**, with an on-screen keyboard
-  when a pad is connected — the whole premise is a launcher used from a sofa,
-  and until that existed the headline feature needed a desk
-- **Fixing wrong or missing artwork** on any game by searching the name it is
-  actually listed under
-- **Learning where you keep games.** Every executable you choose by hand
-  teaches it a folder, and it searches those first next time — so a library on
-  a custom folder on whichever drive had room gets found, which guessing at
-  `Program Files` never would
-
-- **Minimises when a game starts**, so a fullscreen launcher is never sitting
-  in front of a game that is still loading. Switchable in Settings
-- **A profile that survives the machine.** Favourites, hidden games, hand-added
-  games and where they live, artwork corrections, settings — exported to any
-  path, kept current in a folder of your choosing, and found on its own after a
-  reinstall if it was saved beside your games
-- **Fullscreen by default** — it is a launcher, not a desktop application that
-  happens to be large. **F11** switches to windowed and that choice is
-  remembered. The screen is also kept awake
-  while you browse — a controller is not an input device as far as the OS is
-  concerned, so ten minutes of browsing looks like ten minutes of idle
-
-- Sorting by recency, playtime, name or size — remembered, with favourites
-  leading every order. Search matches genre and studio too, so "roguelike" or
-  "larian" finds something
-- A game that spawns and dies immediately says so, rather than looking like it
-  launched
-
-**Not yet**
-
-- **Windows and Linux are entirely unverified.** The code is written for all
-  three and CI builds all three, but nothing has been *run* anywhere but macOS,
-  and [the plan](docs/PLAN.md) is explicit that a pass on one webview engine is
-  not a pass
-- Categories and collections
-
-- Anything about a game that is owned but has never been played or installed
-
-- **[docs/PLAN.md](docs/PLAN.md)** — scope, stack, architecture, phasing, and
-  the risks worth knowing before starting.
-- **[docs/PHASE-0.md](docs/PHASE-0.md)** — the spike's exit criteria and the
-  numbers, per platform.
-- **[docs/DEBUGGING.md](docs/DEBUGGING.md)** — the log, the self-check, and how
-  to tell a real measurement from a browser-tab artifact.
-- **[docs/SECURITY.md](docs/SECURITY.md)** — what a launcher can do, and what
-  bounds it. Worth reading before running anything that starts other programs.
-- **[docs/UPDATES.md](docs/UPDATES.md)** — how Marquee updates itself, how to
-  cut a release, and the one mistake in the whole flow you cannot undo.
-- **[docs/WORKFLOW.md](docs/WORKFLOW.md)** — the loop from "that's broken" to
-  "it updated itself": the board, the labels, who does what and when.
-- **[docs/CONTRIBUTING-AI.md](docs/CONTRIBUTING-AI.md)** — the setup behind it,
-  and what makes an issue that gets a real fix.
-
-## Running it
-
-```bash
-pnpm install
-pnpm app        # the real thing: Tauri window, real numbers
-pnpm dev        # plain browser tab, fast loop for CSS work only
-pnpm tokens     # regenerate src/css/tokens.css from design/tokens.json
-pnpm logs       # tail the log (both runtimes, one file)
-pnpm test       # silence check + frontend tests + tsc + cargo test
-pnpm check      # just the silence check: discarded failures with no reason given
-pnpm build:windows   # cross-compile a Windows .exe from here
-```
-
-`pnpm build:windows` needs a one-time setup and produces a bare executable, not
-an installer — see [docs/WINDOWS.md](docs/WINDOWS.md). It proves the code
-compiles for Windows; it does not prove it works there.
-
-`?mock=40` populates the library with real Steam titles — useful on a machine
-with two games installed. `?hud=0` hides the HUD, and **P** toggles it.
-
-| | |
-|---|---|
-| **A** | Play |
-| **B** | Back |
-| **Y** | Details |
-| **X** | Favourite |
-| **L3** | Sort menu |
-| **R3** | Search |
-| **LB / RB** | Page between preset tabs (All, Favourites, Installed, Never played, Hidden) |
-| **☰** / Tab, M | Main menu — settings, rescan, quit, restart, shut down |
-| **⧉** (Select) / N | Add a game by name |
-| **/** or F | Search |
-| **F11** | Fullscreen |
-| **P** | Toggle the performance HUD |
-
-The legend along the bottom **follows whatever you last used** — pad buttons for
-a pad, keys for a keyboard, and for a mouse it says what clicking does. Every
-entry in it is clickable, so sort, search and the menus are reachable without
-learning a binding. In the grid, click selects and double-click plays.
-
-Everything is reachable with a pad alone, with a keyboard alone, and with a
-mouse alone. There used to be a filter menu on R3 / I as well, listing the same
-preset tabs already always visible along the top — a second press to reach
-something already one press away. It is gone, and R3 opens search instead,
-which previously had no pad route at all. "Add a game" had the same kind of
-gap once -- pad only, on Select, with no key at all -- which is the sort of
-gap that lasts a year in a controller-first app, so a test now holds every pad
-action to having a keyboard route.
+The legend along the bottom follows whatever you last used — pad buttons for
+a pad, keys for a keyboard, and what clicking does for a mouse — and every
+entry in it is clickable. In the grid, click selects and double-click plays.
 
 Motion is tunable in `design/tokens.json`: `--scroll-ms` for the grid glide,
 `--motion` as a global multiplier. Both go to zero under
 `prefers-reduced-motion`, which makes everything instant rather than degraded.
 
-`pnpm app` puts a HUD in the bottom right with frame rate, input latency, IPC
-round trip and the webview that drew it. It is there because priority #1 is
-performance and [a budget nobody can see is a budget nobody keeps](docs/PLAN.md).
+## Status
 
-Do not trust frame numbers from `pnpm dev` — a backgrounded browser tab has
-`requestAnimationFrame` throttled and will report nonsense.
+In daily use on a Windows machine in a lounge and a Mac on a desk, with a
+real library of a couple of hundred games. Linux is built and released on the
+same commits and has not been lived with.
+
+Measured on macOS with 2,000 cards: 0–2 dropped frames in 180, 0.3–2 ms input
+latency, 0.35 ms IPC round trip. The budgets and how they were arrived at are
+in [docs/PLAN.md](docs/PLAN.md) §2 and [docs/DEBUGGING.md](docs/DEBUGGING.md).
+
+Not built: categories and collections; anything about a game that is owned
+but has never been installed; running a hand-added Windows executable on
+Linux, which would need Proton.
+
+## Building it
+
+Rust stable, Node 20 and pnpm 9. On Linux, the WebKitGTK toolchain first:
+
+```bash
+sudo apt-get install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
+```
+
+Then:
+
+```bash
+pnpm install
+pnpm app        # the real thing: a Tauri window with a real library
+pnpm dev        # a plain browser tab, for CSS work only — no backend, ?mock=40 for a library
+pnpm tokens     # regenerate src/css/tokens.css from design/tokens.json
+pnpm logs       # tail the log — both runtimes, one file
+pnpm test       # every check CI runs: silence, workflows, board rules, vitest, tsc, cargo test
+pnpm check      # the static checks alone
+pnpm build:windows   # cross-compile a Windows .exe from a Mac; docs/WINDOWS.md
+```
+
+`pnpm app` puts a HUD in the bottom right with frame rate, input latency, IPC
+round trip and the webview that drew it, because priority #1 is performance
+and a budget nobody can see is a budget nobody keeps. Do not trust frame
+numbers from `pnpm dev` — a backgrounded tab has `requestAnimationFrame`
+throttled and will report nonsense.
 
 Design tokens live in `design/tokens.json` and are generated into CSS. Never
-edit `src/css/tokens.css` by hand; the header says so and the next build will
-overwrite it.
+edit `src/css/tokens.css` by hand; CI checks that the two agree.
+
+[CONTRIBUTING.md](CONTRIBUTING.md) has the conventions, and the one unusual
+rule.
+
+## The documents
+
+| | |
+|---|---|
+| [docs/PLAN.md](docs/PLAN.md) | The plan it was built from, kept as the record of why: scope, stack, priorities as numbers, what was rejected |
+| [docs/DEBUGGING.md](docs/DEBUGGING.md) | The log, the self-check that hit-tests what is painted, and the four silent bugs that made it necessary |
+| [docs/SECURITY.md](docs/SECURITY.md) | What a launcher can do, and what bounds it. Read before running anything that starts other programs |
+| [docs/UPDATES.md](docs/UPDATES.md) | How it updates itself, and the one mistake in the flow you cannot undo |
+| [docs/AUTOMATION.md](docs/AUTOMATION.md) | How it is maintained: issue → agent → pull request → CI → review → merge queue → release |
+| [docs/WINDOWS.md](docs/WINDOWS.md) | Cross-compiling from a Mac, and what to read when a pad does nothing on Windows |
 
 ## Why
 
 [Playnite](https://playnite.link) is the reference and it is excellent: one
 library across every store, user data that survives, a fullscreen mode built
 for a pad. It is also Windows-only, heavier than a television interface needs
-to be, and themed through WPF resource dictionaries — where one malformed file
-silently drops the whole theme, and the platform has no letter-spacing and no
+to be, and themed through WPF resource dictionaries, where one malformed file
+silently drops the whole theme and the platform has no letter-spacing and no
 saturation filter at all.
 
-The sibling repositories `playnite_clean` and `heroic_clean` are that same
-design fighting its host. This is the design with no host to fight.
+Marquee is the same design with no host to fight.
 
 Priorities, in the order they break ties: **performance, stability, UI.**
-
-Private. Licence deferred.
