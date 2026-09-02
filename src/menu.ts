@@ -1,10 +1,10 @@
 /**
  * A list menu.
  *
- * One component behind the main menu, the sort menu and the filter menu,
- * because on a console they are the same thing: a short vertical list, up and
- * down to move, A to choose, B to leave. Building three of these separately is
- * how they end up behaving differently for no reason.
+ * One component behind the main menu and the sort menu, because on a console
+ * they are the same thing: a short vertical list, up and down to move, A to
+ * choose, B to leave. Building these separately is how they end up behaving
+ * differently for no reason.
  *
  * Anchored rather than centred. A sort menu that appears in the middle of the
  * screen has lost its connection to the thing it sorts; PS5 and Xbox both drop

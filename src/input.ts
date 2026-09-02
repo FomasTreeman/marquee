@@ -24,13 +24,11 @@ export type Action =
   /** Keyboard only. The HUD is a development tool and does not deserve a
    *  face button. */
   | 'perf'
-  /** Open the library search field. */
+  /** Open the library search field — right stick click. */
   | 'search'
   | 'fullscreen'
   /** Open the sort menu — left stick click. */
   | 'sort'
-  /** Open the filter menu — right stick click. */
-  | 'filter'
 
 /** What the person is actually holding. */
 export type Device = 'pad' | 'keyboard' | 'mouse'
@@ -73,7 +71,6 @@ export const KEYMAP: Record<string, Action> = {
   KeyQ: 'lb', KeyE: 'rb',
   Tab: 'menu', KeyM: 'menu',
   KeyN: 'add',
-  KeyI: 'filter',
   KeyP: 'perf',
   Slash: 'search', KeyF: 'search',
   F11: 'fullscreen',
@@ -93,7 +90,7 @@ export const PAD_ACTIONS: readonly Action[] = [
   'a', 'b', 'x', 'y',
   'lb', 'rb',
   'menu', 'add',
-  'search', 'sort', 'filter',
+  'search', 'sort',
 ]
 
 interface RustInputEvent { action: Action; repeat: boolean; t: number }
