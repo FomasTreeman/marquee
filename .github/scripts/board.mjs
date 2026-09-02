@@ -267,8 +267,8 @@ export async function factsFor(github, owner, repo, number) {
                commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
              }
            }
-           timelineItems(last: 50, itemTypes: [LABELED_EVENT]) {
-             nodes { ... on LabeledEvent { label { name } } }
+           timelineItems(last: 50, itemTypes: [LABELED_EVENT, REOPENED_EVENT]) {
+             nodes { __typename ... on LabeledEvent { label { name } } }
            }
          }
        }
@@ -302,9 +302,20 @@ export async function factsFor(github, owner, repo, number) {
     // Without it a run that ended with nothing to show is indistinguishable
     // from an issue nobody has ever touched, which is how a card went
     // backwards from In Progress to Todo.
-    attempts: issue.timelineItems.nodes
+    //
+    // Counted since the last reopen. An issue reopened because its merged fix
+    // did not do what was intended starts a new job, and the run that
+    // delivered the first fix was a success, not a failed attempt at this
+    // one -- carrying it over would send the issue to Needs Decision after
+    // two more goes when the rule everywhere else is three.
+    attempts: sinceLastReopen(issue.timelineItems.nodes)
       .filter((n) => n?.label?.name === CONFIG.labels.working).length,
   }
+}
+
+function sinceLastReopen(nodes) {
+  const at = nodes.map((n) => n?.__typename).lastIndexOf('ReopenedEvent')
+  return at < 0 ? nodes : nodes.slice(at + 1)
 }
 
 /** Put one issue where it belongs, labels and card together. */
