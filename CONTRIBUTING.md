@@ -4,6 +4,12 @@ Marquee is small and deliberately so. Contributions are welcome; the notes
 below are what a reviewer here will look for, and most of them exist because
 of something that went wrong once.
 
+One thing to know before you start: the licence is
+[PolyForm Strict](LICENSE.md), which permits use but not redistribution or
+derived works, and a contribution is offered under it. If you want your work
+to be forkable by anyone, this is not the project for it, and that is a fair
+reason to walk away.
+
 ## Before you open a pull request
 
 ```bash

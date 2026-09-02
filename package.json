@@ -3,6 +3,7 @@
   "private": true,
   "version": "0.2.2",
   "description": "A controller-first game launcher for the television",
+  "license": "PolyForm-Strict-1.0.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/FomasTreeman/marquee"
