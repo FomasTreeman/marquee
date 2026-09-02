@@ -300,12 +300,17 @@ export function onAnyInput(
 ): () => void {
   taps.add(onAction)
   let stopRust: (() => void) | undefined
+  let stopped = false
   if (inApp) {
+    // Stopping before listen() has resolved -- a quick toggle of the test --
+    // left the Rust listener attached for the life of the window, reporting
+    // to a panel that had gone.
     void listen<string>('input-unmapped', (e) => onUnmapped(e.payload))
-      .then((un) => { stopRust = un })
+      .then((un) => { if (stopped) un(); else stopRust = un })
       .catch((e) => logWarn('input', 'could not watch for unmapped buttons', e))
   }
   return () => {
+    stopped = true
     taps.delete(onAction)
     stopRust?.()
   }

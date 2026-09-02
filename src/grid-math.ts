@@ -205,6 +205,24 @@ export function poolSize(m: Metrics, viewportHeight: number, overscanRows: numbe
  * a press is an instruction and easing *into* it reads as lag. The same reason
  * every console list moves this way.
  */
+/**
+ * What a recycled slot's image does with the art it is being handed, given
+ * what it already holds and which cover last failed to decode in it.
+ *
+ * A cover that fails to decode is left in place, hidden, so it is not fetched
+ * again on every pass. But the same slot handed the same item again -- every
+ * layout() does this to every slot -- saw its own src already set and revealed
+ * it, and a revealed <img> whose load failed is the browser's broken-image
+ * glyph, on a card that had been correctly showing its title.
+ */
+export function imageAction(
+  current: string | null, failed: string | undefined, art: string | undefined,
+): 'load' | 'show' | 'hide' {
+  if (!art) return 'hide'
+  if (current !== art) return 'load'
+  return failed === art ? 'hide' : 'show'
+}
+
 export function easeOut(t: number): number {
   const c = Math.min(1, Math.max(0, t))
   return 1 - Math.pow(1 - c, 3)

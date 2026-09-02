@@ -353,8 +353,8 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
     testOut.textContent = seen.join('\n')
   }
 
-  testButton.onclick = () => {
-    testing = !testing
+  function setTesting(on: boolean): void {
+    testing = on
     testButton.textContent = testing ? 'Stop testing' : 'Test a controller'
     testButton.classList.toggle('action-primary', testing)
     testOut.hidden = !testing
@@ -367,6 +367,7 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
       (raw) => note(`unmapped  ${raw}   <- this is why that button does nothing`),
     )
   }
+  testButton.onclick = () => setTesting(!testing)
 
   // --- profile --------------------------------------------------------
   const profile = section(
@@ -496,6 +497,9 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
     open = false
     root.hidden = true
     field.blur()
+    // Closing with the test running left it tapping every press in the
+    // library, and the panel reopened mid-test with a button that said Stop.
+    setTesting(false)
     // The field this screen owns is the only reason the on-screen keyboard is
     // ever attached here; leaving it up after the field is gone is issue #18.
     onClose?.()

@@ -29,6 +29,7 @@ import {
 import { installErrorHandlers, logInfo, logWarn, logError, renderFatal, logPath } from './log'
 import { runSelfCheck, scheduleSelfCheck } from './selfcheck'
 import { declineUpdate, scheduleUpdateCheck, updateMenuItems } from './update'
+import { serialised } from './serial'
 import {
   apply as applyFilter, describe as describeFilter, searchLabel,
   PRESETS, SORTS, type Preset, type Sort,
@@ -186,7 +187,18 @@ async function main(): Promise<void> {
    */
   function openDetails(index: number): void {
     const game = gameAt(index)
-    if (game) detail.open(game, meta.get(game.providerId), artAt(index))
+    if (!game) return
+    detail.open(game, meta.get(game.providerId), artAt(index))
+    // The manifest is written when artwork resolves, which may be after the
+    // card was drawn, so it is fetched on open rather than cached. This lived
+    // in the Y handler alone, so the mouse and the legend opened a details
+    // screen that never learned where its artwork came from.
+    void artworkReport([game.providerId])
+      .then((r) => {
+        if (r[0] && detail.isOpen) detail.open(game, meta.get(game.providerId), artAt(index), r[0])
+      })
+      .catch(() => { /* a missing report is a fact that says "not yet" */ })
+    checkNow('detail')
   }
 
   const grid = createGrid(
@@ -303,7 +315,7 @@ async function main(): Promise<void> {
   }
 
   /** Rescan and rebuild everything, keeping the cursor on the same game. */
-  async function reloadLibrary(): Promise<void> {
+  const reloadLibrary = serialised(async (): Promise<void> => {
     try {
       scan = MOCK ? { games: [], providers: [], tookMs: 0 } : await scanLibrary()
       for (const p of scan.providers) if (p.error) logWarn('scan', `${p.provider}: ${p.error}`)
@@ -338,7 +350,7 @@ async function main(): Promise<void> {
     const ready = await requestMeta(appIds)
     for (const m of ready) applyMeta(m)
     logInfo('meta', `${ready.length}/${appIds.length} names already cached`)
-  }
+  })
 
   function applyMeta(m: Meta): void {
     meta.set(m.appId, m)
@@ -732,23 +744,7 @@ async function main(): Promise<void> {
       if (e.action === 'menu') { openMainMenu(); return }
       if (e.action === 'add') { openAdd(); return }
       if (e.action === 'search') { openSearch(); return }
-      if (e.action === 'y') {
-        const game = gameAt(grid.focused)
-        if (game) {
-          detail.open(game, meta.get(game.providerId), artAt(grid.focused))
-          // The manifest is written when artwork resolves, which may be after
-          // the card was drawn, so it is fetched on open rather than cached.
-          void artworkReport([game.providerId])
-            .then((r) => {
-              if (r[0] && detail.isOpen) {
-                detail.open(game, meta.get(game.providerId), artAt(grid.focused), r[0])
-              }
-            })
-            .catch(() => { /* a missing report is a fact that says "not yet" */ })
-          checkNow('detail')
-        }
-        return
-      }
+      if (e.action === 'y') { openDetails(grid.focused); return }
       if (e.action === 'sort') { openSort(); return }
     }
     // The shoulders move between the tabs along the top -- All, Favourites,
@@ -891,10 +887,10 @@ async function main(): Promise<void> {
             toast('Left as it is. It will be offered again next release.')
             return
           }
-          toast('Downloading…', 'info', 30_000)
+          const progress = toast('Downloading…', 'info', 30_000)
           try {
             await update.install((percent) => {
-              if (percent !== undefined) toast(`Downloading… ${percent}%`, 'info', 30_000)
+              if (percent !== undefined) progress.update(`Downloading… ${percent}%`)
             })
           } catch (e) {
             // The signature check failing lands here too, which is the whole

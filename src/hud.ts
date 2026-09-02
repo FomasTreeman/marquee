@@ -20,7 +20,7 @@ import type { HostInfo } from './host'
 import type { PadStatus } from './input'
 import type { ScanResult } from './library'
 
-interface Meter { read(): FrameStats }
+interface Meter { read(): FrameStats; start(): void; stop(): void }
 
 /** Refresh-relative, so the same budget holds on a ProMotion laptop and a
  *  60 Hz television. */
@@ -62,6 +62,7 @@ export function createHud(grid: Grid, meter: Meter) {
   let lastInput: number | null = null
   let worstInput = 0
   let timer: number | undefined
+  let refresh: () => void = () => {}
 
   // Off unless asked for. It is a development instrument, and it was defaulting
   // on in the shipped application -- a panel of frame timings in the corner of
@@ -82,6 +83,19 @@ export function createHud(grid: Grid, meter: Meter) {
     return p.connected === 0 ? 'none connected' : `${p.connected} connected`
   }
 
+  // The meter and the timer run only while the panel is on screen. Rule 1
+  // again: a hidden instrument that still costs a callback a frame is
+  // measuring itself.
+  function show(on: boolean): void {
+    visible = on
+    el.style.display = on ? '' : 'none'
+    window.clearInterval(timer)
+    timer = undefined
+    if (!on) { meter.stop(); return }
+    meter.start()
+    timer = window.setInterval(refresh, 500)
+  }
+
   return {
     noteInput(latency: number | null): void {
       if (latency === null) return
@@ -89,23 +103,17 @@ export function createHud(grid: Grid, meter: Meter) {
       worstInput = Math.max(worstInput, latency)
     },
 
-    toggle(): void {
-      visible = !visible
-      el.style.display = visible ? '' : 'none'
-    },
+    toggle(): void { show(!visible) },
 
     async attach(ctx: HudContext): Promise<void> {
       document.body.appendChild(el)
-      el.style.display = visible ? '' : 'none'
       set('host', `${ctx.host.webview} · ${ctx.host.os}/${ctx.host.arch}`)
       set('library', libraryLabel(ctx.scan), ctx.scan.providers.some((p) => p.error !== null))
       set('ipc', ctx.ipc === null ? '— browser' : `${ctx.ipc.toFixed(2)} ms`,
         ctx.ipc !== null && ctx.ipc > BUDGET.ipcMs)
       set('pad', padLabel(ctx.pad), !ctx.pad.supported)
 
-      window.clearInterval(timer)
-      timer = window.setInterval(() => {
-        if (!visible) return
+      refresh = () => {
         const f = meter.read()
         const interval = f.hz ? 1000 / f.hz : 0
         const droppedPct = (f.dropped / 180) * 100
@@ -122,7 +130,8 @@ export function createHud(grid: Grid, meter: Meter) {
           ? '— press a button'
           : `${lastInput.toFixed(1)} ms · worst ${worstInput.toFixed(1)}`,
           worstInput > BUDGET.inputMs)
-      }, 500)
+      }
+      show(visible)
     },
   }
 }

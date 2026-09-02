@@ -1,7 +1,7 @@
 import { logWarn } from './log'
 import {
   firstVisibleIndex, glide, metrics, move as moveIndex, poolSize, positionOf,
-  scrollToShow, topClearance, gapCoversEdges, type Metrics,
+  scrollToShow, topClearance, gapCoversEdges, imageAction, type Metrics,
 } from './grid-math'
 
 /**
@@ -40,6 +40,8 @@ interface Slot {
    *  has since been superseded cannot reveal the wrong game's art -- the
    *  cause of "duplicate covers" while fast-scrolling. */
   generation: number
+  /** The src that last failed to decode in this node, if it is still set. */
+  failed: string | undefined
   /** Which item this pooled node currently shows, or -1 when parked. */
   index: number
   /** Last values written to the DOM. Every write is compared against these
@@ -219,7 +221,7 @@ export function createGrid(
 
     const s: Slot = {
       el, art, fallback, img,
-      index: -1, transform: '', focus: false, visible: false, generation: 0,
+      index: -1, transform: '', focus: false, visible: false, generation: 0, failed: undefined,
     }
     // Parked until it is given an item. A fresh slot has index -1 and no
     // transform, so without this the whole unused pool sits stacked at 0,0 on
@@ -286,32 +288,34 @@ export function createGrid(
       s.el.style.setProperty('--card-tint', item.tint)
       s.fallback.textContent = item.title
       const generation = ++s.generation
-      if (item.art) {
-        if (s.img.getAttribute('src') !== item.art) {
-          // Hidden until the new artwork has actually decoded. Without this the
-          // previous game's cover stays on screen underneath the new game's
-          // title, which reads as the grid showing duplicates.
-          s.img.style.display = 'none'
-          s.img.src = item.art
-          const reveal = () => {
-            if (s.generation !== generation) return
-            s.img.style.display = ''
-          }
-          // decode() resolves once the image is ready to paint, so revealing it
-          // cannot land on a half-decoded frame. It rejects on a 404 or when
-          // superseded, and both mean "leave the fallback showing".
-          s.img.decode().then(reveal).catch(() => {
-            // Superseded is routine — the slot was recycled mid-flight. A
-            // cover we already resolved and verified failing to decode is not,
-            // and a title card with no art is exactly the bug that gets
-            // reported as "artwork is broken" with nothing in the log.
-            if (s.generation === generation) reportArtFailure(String(item.art))
-          })
-        } else {
+      const action = imageAction(s.img.getAttribute('src'), s.failed, item.art)
+      if (action === 'load') {
+        // Hidden until the new artwork has actually decoded. Without this the
+        // previous game's cover stays on screen underneath the new game's
+        // title, which reads as the grid showing duplicates.
+        s.img.style.display = 'none'
+        s.img.src = item.art!
+        s.failed = undefined
+        const reveal = () => {
+          if (s.generation !== generation) return
           s.img.style.display = ''
         }
+        // decode() resolves once the image is ready to paint, so revealing it
+        // cannot land on a half-decoded frame. It rejects on a 404 or when
+        // superseded, and both mean "leave the fallback showing".
+        s.img.decode().then(reveal).catch(() => {
+          // Superseded is routine — the slot was recycled mid-flight. A
+          // cover we already resolved and verified failing to decode is not,
+          // and a title card with no art is exactly the bug that gets
+          // reported as "artwork is broken" with nothing in the log.
+          if (s.generation !== generation) return
+          s.failed = item.art
+          reportArtFailure(String(item.art))
+        })
+      } else if (action === 'show') {
+        s.img.style.display = ''
       } else {
-        s.img.removeAttribute('src')
+        if (!item.art) s.img.removeAttribute('src')
         s.img.style.display = 'none'
       }
       s.index = index
