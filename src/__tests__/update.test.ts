@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { scheduleUpdateCheck, updateMenuItems, type PendingUpdate } from '../update'
+import { progressStep, scheduleUpdateCheck, updateMenuItems, type PendingUpdate } from '../update'
 
 /**
  * The plugin verifies signatures; none of that is re-tested here. What is
@@ -66,5 +66,24 @@ describe('the offer itself', () => {
     // A menu on a television is read from across a room. Two rows is the
     // whole vocabulary this question needs.
     expect(items).toHaveLength(2)
+  })
+})
+
+describe('reporting download progress', () => {
+  it('says nothing for a chunk that does not move the percentage', () => {
+    const p = { total: 1000, got: 0 }
+    expect(progressStep(p)).toBe(0)
+    p.got = 4
+    expect(progressStep(p)).toBeUndefined()
+    p.got = 5
+    expect(progressStep(p)).toBe(1)
+  })
+
+  it('says nothing at all when the size is unknown', () => {
+    expect(progressStep({ total: 0, got: 500 })).toBeUndefined()
+  })
+
+  it('never reads past a hundred, however the chunks add up', () => {
+    expect(progressStep({ total: 10, got: 12 })).toBe(100)
   })
 })

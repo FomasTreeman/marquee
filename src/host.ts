@@ -59,7 +59,7 @@ export async function hostInfo(): Promise<HostInfo> {
       debug: true,
     }
   }
-  return invoke<HostInfo>('host_info')
+  return call<HostInfo>('host_info')
 }
 
 /** Round-trip latency of the IPC bridge, in milliseconds.
@@ -67,9 +67,11 @@ export async function hostInfo(): Promise<HostInfo> {
 export async function pingMs(samples = 20): Promise<number | null> {
   if (!inApp) return null
   // One warm-up: the first call pays for channel setup and would otherwise
-  // dominate a twenty-sample mean.
-  await invoke('ping')
+  // dominate a twenty-sample mean. Through call() like everything else: a
+  // failing ping used to be a rejection nobody logged, and the microseconds
+  // call() adds are noise against a round trip.
+  await call('ping')
   const t0 = performance.now()
-  for (let i = 0; i < samples; i++) await invoke('ping')
+  for (let i = 0; i < samples; i++) await call('ping')
   return (performance.now() - t0) / samples
 }

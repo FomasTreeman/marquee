@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { apply, compare, describe as describeFilter, matches, searchLabel, sortKey } from '../filter'
+import { apply, compare, describe as describeFilter, matches, searchLabel, sortKey, type Sort } from '../filter'
 import type { Game } from '../library'
 
 function game(over: Partial<Game> = {}): Game {
@@ -62,6 +62,14 @@ describe('library filtering', () => {
     expect(describeFilter('all', '', 1, 1)).toBe('1 game')
     expect(describeFilter('favourites', '', 2, 9)).toBe('Favourites · 2')
     expect(describeFilter('all', 'hade', 1, 9)).toContain('1 of 9')
+  })
+
+  it('names the order when it is not the default', () => {
+    expect(describeFilter('all', '', 3, 3, 'name')).toBe('3 games · Name')
+  })
+
+  it('reads an unknown saved sort as the default, not as undefined', () => {
+    expect(describeFilter('all', '', 3, 3, 'bogus' as Sort)).toBe('3 games')
   })
 })
 
