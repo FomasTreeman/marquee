@@ -113,6 +113,25 @@ impl Steam {
         }
     }
 
+    /// The appid Steam currently reports as running, if any.
+    ///
+    /// Lives in the same registry key as the pid `is_running` reads, and
+    /// Steam updates it the instant a game starts or stops. It is the only
+    /// live signal available for when a `steam://` hand-off session ends: the
+    /// game belongs to Steam's process tree from the moment the URI is
+    /// opened, not ours, so there is no child of our own to wait on -- see
+    /// `run`'s module doc, which is why `run::start` polls this.
+    #[cfg(target_os = "windows")]
+    pub fn running_app_id() -> Option<u32> {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+        RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey("Software\\Valve\\Steam\\ActiveProcess")
+            .and_then(|k| k.get_value::<u32, _>("RunningAppID"))
+            .ok()
+            .filter(|id| *id != 0)
+    }
+
     /// Start Steam without showing its window.
     ///
     /// `-silent` puts it straight in the tray. The alternative -- letting the
@@ -425,6 +444,18 @@ mod tests {
         let second = Steam::is_running();
         assert_eq!(first, second, "detection should not flap");
         println!("  steam running on this machine: {first}");
+    }
+
+    /// Same shape as `detecting_steam_is_stable_and_cheap`: this depends on
+    /// whatever this machine happens to be running, but it must answer
+    /// without panicking and agree with itself.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn reading_the_running_appid_is_stable_and_cheap() {
+        let first = Steam::running_app_id();
+        let second = Steam::running_app_id();
+        assert_eq!(first, second, "detection should not flap");
+        println!("  steam running appid on this machine: {first:?}");
     }
 
     #[test]

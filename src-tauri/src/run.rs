@@ -8,11 +8,22 @@
 //! from an unexpected parent process.
 //!
 //! The cost is that we do not own the child: the URI handler returns
-//! immediately and the game belongs to Steam. That would normally make session
-//! timing impossible -- except that Steam writes playtime into
-//! `localconfig.vdf` itself, which is where the library already reads it from.
-//! So a rescan after playing picks up the real figure, from Steam's own
-//! records, with no process watching at all.
+//! immediately and the game belongs to Steam. Playtime is unaffected by that
+//! -- Steam writes it into `localconfig.vdf` itself, which is where the
+//! library already reads it from, so a rescan after playing picks up the
+//! real figure with no process watching at all.
+//!
+//! Restoring the window Marquee minimised for the game is a different
+//! problem, and playtime's own answer does not solve it: nothing reads
+//! `localconfig.vdf` until the *next* scan, which can be minutes away. On
+//! Windows, Steam also keeps the running appid live in the registry -- the
+//! same key `Steam::is_running` already reads -- updated the instant a game
+//! starts or stops, so `start` polls that to know when a hand-off session
+//! ends. macOS and Linux have no equivalent live signal, so a Steam launch
+//! there still leaves Marquee minimised until the user switches back by hand.
+//! Before this, *no* Steam launch on any platform brought the window back --
+//! only a manually-added game did, because the first attempt at this (#63)
+//! only ever watched a child process we owned (#90).
 //!
 //! **Manual** games spawn directly, so we own the child and can time the
 //! session exactly.
@@ -171,6 +182,19 @@ const STEAM_SETTLE: std::time::Duration = std::time::Duration::from_secs(4);
 /// A second attempt, for when the first still landed too early.
 const STEAM_RETRY: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// How often to poll Steam's reported running appid while tracking a
+/// hand-off session. Only used on Windows -- see `watch_steam_session`.
+#[cfg(target_os = "windows")]
+const STEAM_SESSION_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// How long to wait for Steam to report the launched appid as running before
+/// giving up on tracking that session. Covers an appid that was handed off
+/// but never actually starts -- Steam offering to install it instead, say --
+/// so this thread does not sit polling forever for a session that was never
+/// going to happen.
+#[cfg(target_os = "windows")]
+const STEAM_SESSION_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
 /// Make sure Steam is up, without showing its window.
 ///
 /// Returns true when Steam had to be started, because that is the case where
@@ -207,6 +231,48 @@ fn ensure_steam_ready() -> bool {
     true
 }
 
+/// Wait for `appid` to become Steam's reported running game, then wait for it
+/// to stop being that, and call `on_exit` when it does.
+///
+/// `running_app_id` is injected -- and the poll interval and start timeout
+/// passed in rather than read from the module consts -- so the waiting and
+/// give-up logic can be tested without a real Steam client or registry to
+/// poll and without a real test taking minutes. See the tests below.
+///
+/// Only called from the Windows arm below -- gated the same way here so a
+/// non-Windows build does not warn this dead rather than merely unused there,
+/// while `cfg(test)` keeps it compiled everywhere the tests below need it.
+#[cfg(any(target_os = "windows", test))]
+fn watch_steam_session(
+    appid: u32,
+    title: &str,
+    on_exit: impl FnOnce(),
+    poll: std::time::Duration,
+    start_timeout: std::time::Duration,
+    mut running_app_id: impl FnMut() -> Option<u32>,
+) {
+    let start_deadline = std::time::Instant::now() + start_timeout;
+    while running_app_id() != Some(appid) {
+        if std::time::Instant::now() >= start_deadline {
+            log_info!(
+                "run",
+                "{title} never showed up as Steam's running game; not tracking its session"
+            );
+            return;
+        }
+        std::thread::sleep(poll);
+    }
+    log_info!(
+        "run",
+        "Steam reports {title} running; waiting for it to end"
+    );
+    while running_app_id() == Some(appid) {
+        std::thread::sleep(poll);
+    }
+    log_info!("run", "{title} session ended");
+    on_exit();
+}
+
 pub fn start(
     game: &Game,
     on_failure: impl FnOnce(String) + Send + 'static,
@@ -217,11 +283,9 @@ pub fn start(
         Launch::Uri(uri) => {
             let uri = uri.clone();
             let title = game.title.clone();
-            // `on_exit` is not called from this arm: as the module doc says,
-            // the game belongs to Steam once the URI is handed off, and there
-            // is no owned child here to wait on. Steam-launched games are
-            // outside the scope of #63 for that reason.
-            //
+            // `plan` only ever builds a Uri launch for the "steam" provider,
+            // so provider_id is a Steam appid here.
+            let appid: u32 = game.provider_id.parse().unwrap_or(0);
             // Off the interface's thread: waiting for a cold Steam takes
             // seconds, and the grid must stay responsive while it happens.
             std::thread::spawn(move || {
@@ -244,6 +308,29 @@ pub fn start(
                         "asking Steam for {title} again, in case the first was early"
                     );
                     let _ = open_uri(&uri);
+                }
+
+                // Steam owns the game from here, so there is no child to
+                // `wait()` on the way the manual arm below does. On Windows it
+                // keeps the running appid live in the registry instead, which
+                // is enough to know when the session it was handed off to
+                // ends -- see the module doc and #90, where the first attempt
+                // at this (#63) watched only owned processes and so never
+                // brought Marquee back for a Steam launch at all.
+                #[cfg(target_os = "windows")]
+                watch_steam_session(
+                    appid,
+                    &title,
+                    on_exit,
+                    STEAM_SESSION_POLL,
+                    STEAM_SESSION_START_TIMEOUT,
+                    crate::library::steam::Steam::running_app_id,
+                );
+                #[cfg(not(target_os = "windows"))]
+                {
+                    // No equivalent live signal on macOS or Linux -- see the
+                    // module doc.
+                    let _ = (appid, on_exit);
                 }
             });
         }
@@ -524,5 +611,74 @@ mod tests {
         g.provider = "manual".into();
         let err = plan(&g).unwrap_err();
         assert!(err.contains("no executable"), "{err}");
+    }
+
+    /// An appid that never shows up as Steam's running game -- a hand-off
+    /// that Steam turned into an install prompt rather than a launch, say --
+    /// must give up rather than call `on_exit`. Before `watch_steam_session`
+    /// existed, a Steam launch never called `on_exit` at all (#90): this
+    /// covers the half of its logic that deliberately still does not, so
+    /// that half cannot regress into firing on every launch regardless of
+    /// whether Steam ever reported one running.
+    #[test]
+    fn a_steam_session_that_never_starts_does_not_call_on_exit() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        watch_steam_session(
+            1234,
+            "Test",
+            move || {
+                let _ = tx.send(());
+            },
+            std::time::Duration::from_millis(5),
+            std::time::Duration::from_millis(30),
+            || None,
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "on_exit must not fire for a session Steam never reported starting"
+        );
+    }
+
+    /// The other half: once Steam reports the appid running and then stops
+    /// reporting it, that is a real session ending, and `on_exit` must fire
+    /// -- this is what brings Marquee's window back for a Steam launch, which
+    /// nothing did before this (#90).
+    #[test]
+    fn a_steam_session_that_starts_and_ends_calls_on_exit() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc;
+
+        let appid = 1234;
+        // 0 stands for "not running", matching what `running_app_id` reports.
+        let state = Arc::new(AtomicU32::new(0));
+        let poll_state = state.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+
+        let flipper = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(15));
+            state.store(appid, Ordering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            state.store(0, Ordering::SeqCst);
+        });
+
+        watch_steam_session(
+            appid,
+            "Test",
+            move || {
+                let _ = tx.send(());
+            },
+            std::time::Duration::from_millis(5),
+            std::time::Duration::from_secs(2),
+            move || match poll_state.load(Ordering::SeqCst) {
+                0 => None,
+                id => Some(id),
+            },
+        );
+
+        flipper.join().unwrap();
+        assert!(
+            rx.recv_timeout(std::time::Duration::from_secs(1)).is_ok(),
+            "on_exit should fire once Steam stops reporting the session running"
+        );
     }
 }
