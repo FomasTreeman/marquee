@@ -7,7 +7,7 @@ const DEVICES: Device[] = ['pad', 'keyboard', 'mouse']
 function spies(): LegendActions {
   return {
     play: vi.fn(), details: vi.fn(), favourite: vi.fn(), sort: vi.fn(),
-    filter: vi.fn(), search: vi.fn(), menu: vi.fn(), add: vi.fn(),
+    search: vi.fn(), menu: vi.fn(), add: vi.fn(),
   }
 }
 
@@ -31,7 +31,7 @@ describe('legendFor', () => {
   it('offers every core action on every device', () => {
     for (const d of DEVICES) {
       const labels = legendFor(d, spies()).map((h) => h.label)
-      for (const need of ['Play', 'Details', 'Favourite', 'Sort', 'Filter', 'Menu', 'Add']) {
+      for (const need of ['Play', 'Details', 'Favourite', 'Sort', 'Search', 'Menu', 'Add']) {
         expect(labels, `${d} is missing ${need}`).toContain(need)
       }
     }
@@ -73,7 +73,7 @@ describe('legendFor', () => {
       expect(on.play, d).not.toHaveBeenCalled()
       byLabel.get('Sort')?.()
       expect(on.sort, d).toHaveBeenCalledTimes(1)
-      expect(on.filter, d).not.toHaveBeenCalled()
+      expect(on.search, d).not.toHaveBeenCalled()
     }
   })
 

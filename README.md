@@ -147,25 +147,27 @@ with two games installed. `?hud=0` hides the HUD, and **P** toggles it.
 | **Y** | Details |
 | **X** | Favourite |
 | **L3** | Sort menu |
-| **R3** / I | Filter menu — search lives at the top of it |
-| **LB / RB** | Page up and down |
+| **R3** | Search |
+| **LB / RB** | Page between preset tabs (All, Favourites, Installed, Never played, Hidden) |
 | **☰** / Tab, M | Main menu — settings, rescan, quit, restart, shut down |
 | **⧉** (Select) / N | Add a game by name |
-| **/** or F | Search (also reachable from the filter menu, for a pad) |
+| **/** or F | Search |
 | **F11** | Fullscreen |
 | **P** | Toggle the performance HUD |
 
 The legend along the bottom **follows whatever you last used** — pad buttons for
 a pad, keys for a keyboard, and for a mouse it says what clicking does. Every
-entry in it is clickable, so sort, filter, search and the menus are reachable
-without learning a binding. In the grid, click selects and double-click plays.
+entry in it is clickable, so sort, search and the menus are reachable without
+learning a binding. In the grid, click selects and double-click plays.
 
 Everything is reachable with a pad alone, with a keyboard alone, and with a
-mouse alone. Search was keyboard-only for a while; it now sits at the top of
-the filter menu, which is where a console would put it. "Add a game" was the
-mirror of that -- pad only, on Select, with no key at all -- which is the sort
-of gap that lasts a year in a controller-first app, so a test now holds every
-pad action to having a keyboard route.
+mouse alone. There used to be a filter menu on R3 / I as well, listing the same
+preset tabs already always visible along the top — a second press to reach
+something already one press away. It is gone, and R3 opens search instead,
+which previously had no pad route at all. "Add a game" had the same kind of
+gap once -- pad only, on Select, with no key at all -- which is the sort of
+gap that lasts a year in a controller-first app, so a test now holds every pad
+action to having a keyboard route.
 
 Motion is tunable in `design/tokens.json`: `--scroll-ms` for the grid glide,
 `--motion` as a global multiplier. Both go to zero under

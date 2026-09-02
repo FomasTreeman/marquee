@@ -150,7 +150,7 @@ export interface Hint {
  * Rebuilt whenever the input device changes, because telling someone to press A
  * while they are holding a mouse is worse than telling them nothing. Each entry
  * is clickable where there is something to click, which is what makes sort,
- * filter and the menus reachable without learning a binding.
+ * search and the menus reachable without learning a binding.
  */
 /** The actions a legend can offer, whatever the device. */
 export interface LegendActions {
@@ -158,7 +158,6 @@ export interface LegendActions {
   details(): void
   favourite(): void
   sort(): void
-  filter(): void
   search(): void
   menu(): void
   add(): void
@@ -184,11 +183,13 @@ export function legendFor(device: Device, on: LegendActions): Hint[] {
         { key: 'Y', label: 'Details', onClick: on.details },
         { key: 'X', label: 'Favourite', onClick: on.favourite },
         { key: 'L3', label: 'Sort', onClick: on.sort },
-        { key: 'R3', label: 'Filter', onClick: on.filter },
+        // Presets are already always on screen as the nav tabs along the top,
+        // so a menu that only re-listed them was a second press to reach
+        // something already one press away. Right stick now opens the one
+        // thing the nav cannot do: type a query.
+        { key: 'R3', label: 'Search', onClick: on.search },
         { key: '☰', label: 'Menu', onClick: on.menu },
         { key: '⧉', label: 'Add', onClick: on.add },
-        // Search has no face button; it lives at the top of the filter menu,
-        // which is where a console would put it.
         { key: 'LB/RB', label: 'Tabs' },
       ]
     case 'keyboard':
@@ -197,7 +198,6 @@ export function legendFor(device: Device, on: LegendActions): Hint[] {
         { key: 'Y', label: 'Details', onClick: on.details },
         { key: 'X', label: 'Favourite', onClick: on.favourite },
         { key: 'O', label: 'Sort', onClick: on.sort },
-        { key: 'I', label: 'Filter', onClick: on.filter },
         { key: '/', label: 'Search', onClick: on.search },
         { key: 'Tab', label: 'Menu', onClick: on.menu },
         { key: 'N', label: 'Add', onClick: on.add },
@@ -212,7 +212,6 @@ export function legendFor(device: Device, on: LegendActions): Hint[] {
         { label: 'Details', onClick: on.details },
         { label: 'Favourite', onClick: on.favourite },
         { label: 'Sort', onClick: on.sort },
-        { label: 'Filter', onClick: on.filter },
         { label: 'Search', onClick: on.search },
         { label: 'Menu', onClick: on.menu },
         { label: 'Add', onClick: on.add },

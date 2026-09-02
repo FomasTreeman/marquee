@@ -40,7 +40,7 @@ const BUTTONS: Array<Action | undefined> = [
   'lb', 'rb',               // 4-5   bumpers
   undefined, undefined,     // 6-7   triggers: see input.rs, they do not page
   'add', 'menu',            // 8-9   Select/Back, Start
-  'sort', 'filter',         // 10-11 stick clicks
+  'sort', 'search',         // 10-11 stick clicks
   'up', 'down', 'left', 'right', // 12-15 d-pad
 ]
 
