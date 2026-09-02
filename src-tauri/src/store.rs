@@ -429,16 +429,24 @@ impl Store {
                 continue;
             }
             let Some(text) = root.to_str() else { continue };
-            self.with(|c| {
-                c.execute(
-                    "INSERT OR IGNORE INTO game_root (path, added_at)
-                     VALUES (?1, strftime('%s','now'))",
-                    params![text],
-                )?;
-                Ok(())
-            })?;
+            self.add_root(text)?;
         }
         Ok(())
+    }
+
+    /// A root as given, for a profile import. Importing used to go through
+    /// `remember_root` with a fake file appended, which records the parent
+    /// of what it is given: every export-then-import climbed each root one
+    /// directory towards `/`.
+    pub fn add_root(&self, path: &str) -> Result<(), String> {
+        self.with(|c| {
+            c.execute(
+                "INSERT OR IGNORE INTO game_root (path, added_at)
+                 VALUES (?1, strftime('%s','now'))",
+                params![path],
+            )?;
+            Ok(())
+        })
     }
 
     /// Most recently learned first, and capped: an unbounded list would turn

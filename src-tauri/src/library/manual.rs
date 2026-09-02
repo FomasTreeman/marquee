@@ -36,9 +36,12 @@ impl LibraryProvider for Manual<'_> {
                 id: format!("manual:{}", m.id),
                 provider: "manual".into(),
                 // The Steam appid when the game was identified through search,
-                // which is what lets it borrow artwork and metadata. Falls back
-                // to the row id so the field is never empty.
-                provider_id: m.steam_app_id.clone().unwrap_or_else(|| m.id.to_string()),
+                // which is what lets it borrow artwork and metadata. Empty
+                // otherwise: this used to fall back to the row id, and any
+                // run of digits is taken for a Steam appid downstream, so the
+                // tenth hand-added game was renamed Counter-Strike and given
+                // its cover.
+                provider_id: m.steam_app_id.clone().unwrap_or_default(),
                 title: m.title,
                 // "Installed" here means playable: we know where it is.
                 installed: m.executable.is_some(),
@@ -53,5 +56,22 @@ impl LibraryProvider for Manual<'_> {
                 art_app_id: None,
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_game_with_no_steam_entry_does_not_borrow_one_by_accident() {
+        let store = Store::in_memory();
+        store.add_manual_game("Some Emulator", None).unwrap();
+        let games = Manual(&store).scan().unwrap();
+        assert!(
+            !games[0].provider_id.chars().any(|c| c.is_ascii_digit()),
+            "{:?} would be taken for a Steam appid",
+            games[0].provider_id
+        );
     }
 }

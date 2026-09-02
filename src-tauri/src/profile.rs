@@ -169,7 +169,7 @@ pub fn apply(store: &Store, profile: &Profile) -> Result<ImportSummary, String> 
     }
 
     for root in &profile.roots {
-        store.remember_root(&format!("{root}/x"))?;
+        store.add_root(root)?;
     }
 
     let summary = ImportSummary {
@@ -300,6 +300,33 @@ mod tests {
 
     /// Importing twice must not produce two of every hand-added game. Rows are
     /// numbered per machine, so matching has to be on what a game *is*.
+    #[test]
+    fn a_game_root_comes_back_exactly_where_it_was() {
+        let a = store();
+        a.remember_root("/Volumes/Big/Games/Elden Ring/Game/eldenring.exe")
+            .unwrap();
+        let before = a.game_roots().unwrap();
+        assert!(before.contains(&"/Volumes/Big/Games".to_string()));
+
+        let dir =
+            std::env::temp_dir().join(format!("marquee-profile-roots-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join(FILENAME);
+        write(&a, &path).unwrap();
+        let b = store();
+        apply(&b, &read(&path).unwrap()).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let mut after = b.game_roots().unwrap();
+        let mut before = before;
+        before.sort();
+        after.sort();
+        assert_eq!(
+            after, before,
+            "a root must not drift towards / on each round trip"
+        );
+    }
+
     #[test]
     fn importing_twice_does_not_duplicate() {
         let s = store();
