@@ -115,21 +115,42 @@ impl Steam {
 
     /// The appid Steam currently reports as running, if any.
     ///
-    /// Lives in the same registry key as the pid `is_running` reads, and
-    /// Steam updates it the instant a game starts or stops. It is the only
-    /// live signal available for when a `steam://` hand-off session ends: the
-    /// game belongs to Steam's process tree from the moment the URI is
-    /// opened, not ours, so there is no child of our own to wait on -- see
-    /// `run`'s module doc, which is why `run::start` polls this.
+    /// Steam updates it the instant a game starts or stops, and it is the
+    /// only live signal available for when a `steam://` hand-off session
+    /// ends: the game belongs to Steam's process tree from the moment the
+    /// URI is opened, not ours, so there is no child of our own to wait on
+    /// -- see `run`'s module doc, which is why `run::start` polls this.
+    ///
+    /// #94 first put this under `ActiveProcess`, by analogy with the `pid`
+    /// `is_running` reads there -- but a real Steam session never made it
+    /// fire, because `RunningAppID` is a client-wide flag, not part of the
+    /// process bookkeeping `ActiveProcess` holds (`pid`, `ActiveUser`, the
+    /// client DLL paths); it sits directly under the `Steam` key. Checked
+    /// there first, with the original `ActiveProcess` location as a fallback
+    /// in case a different Steam version does shape it the other way -- one
+    /// extra registry read, only on the miss.
+    #[cfg(target_os = "windows")]
+    fn running_app_id_from(steam: &winreg::RegKey) -> Option<u32> {
+        steam
+            .get_value::<u32, _>("RunningAppID")
+            .ok()
+            .or_else(|| {
+                steam
+                    .open_subkey("ActiveProcess")
+                    .and_then(|k| k.get_value::<u32, _>("RunningAppID"))
+                    .ok()
+            })
+            .filter(|id| *id != 0)
+    }
+
     #[cfg(target_os = "windows")]
     pub fn running_app_id() -> Option<u32> {
         use winreg::enums::HKEY_CURRENT_USER;
         use winreg::RegKey;
         RegKey::predef(HKEY_CURRENT_USER)
-            .open_subkey("Software\\Valve\\Steam\\ActiveProcess")
-            .and_then(|k| k.get_value::<u32, _>("RunningAppID"))
+            .open_subkey("Software\\Valve\\Steam")
             .ok()
-            .filter(|id| *id != 0)
+            .and_then(|k| Self::running_app_id_from(&k))
     }
 
     /// Start Steam without showing its window.
@@ -456,6 +477,54 @@ mod tests {
         let second = Steam::running_app_id();
         assert_eq!(first, second, "detection should not flap");
         println!("  steam running appid on this machine: {first:?}");
+    }
+
+    /// #90's real bug: `running_app_id` looked only under `ActiveProcess`,
+    /// which never fired against a live Steam session, so a Steam-launched
+    /// game never brought Marquee's window back. This pins the actual shape
+    /// -- `RunningAppID` directly under the `Steam` key -- against a scratch
+    /// registry tree rather than a real Steam install, so it does not depend
+    /// on this machine having Steam, and does not touch a real one's state.
+    ///
+    /// Reverting `running_app_id_from` to check only `ActiveProcess` makes
+    /// the second assertion here fail, which is what shipped in #94.
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn running_app_id_is_read_from_the_steam_key_not_only_active_process() {
+        use winreg::enums::HKEY_CURRENT_USER;
+        use winreg::RegKey;
+
+        let scratch = format!(
+            "Software\\MarqueeTest\\running_app_id\\{}",
+            std::process::id()
+        );
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let (steam, _) = hkcu.create_subkey(&scratch).expect("create scratch key");
+
+        // The shape #94 shipped: only reachable under ActiveProcess, next to
+        // pid. Must still be found, in case some Steam version does shape it
+        // this way.
+        let (active_process, _) = steam
+            .create_subkey("ActiveProcess")
+            .expect("create ActiveProcess subkey");
+        active_process.set_value("RunningAppID", &4321u32).unwrap();
+        assert_eq!(
+            Steam::running_app_id_from(&steam),
+            Some(4321),
+            "must still find it nested under ActiveProcess as a fallback"
+        );
+
+        // The shape a real session actually uses: directly under the Steam
+        // key, sibling to ActiveProcess rather than inside it.
+        steam.delete_subkey_all("ActiveProcess").unwrap();
+        steam.set_value("RunningAppID", &1234u32).unwrap();
+        assert_eq!(
+            Steam::running_app_id_from(&steam),
+            Some(1234),
+            "must find it directly under the Steam key -- this is the case #94 missed"
+        );
+
+        hkcu.delete_subkey_all(&scratch).ok();
     }
 
     #[test]
