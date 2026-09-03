@@ -12,7 +12,7 @@
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import {
   setManualExecutable, removeManualGame, findExecutable, setHidden, uninstallGame,
-  setCustomTitle, updateGame,
+  setCustomTitle, updateGame, viewInStore,
   type ArtworkManifest, type Game, type Meta, type Artwork,
 } from './library'
 import { toast } from './toast'
@@ -445,6 +445,18 @@ export function createDetail(hooks: DetailHooks): DetailView {
               onChanged()
             })
             .catch((e) => toast(`Could not start that update. ${String(e)}`, 'error', 6000))
+        }
+      }
+
+      // Steam only: a hand-added game has no store page for us to link, and
+      // nothing in its record to build one from.
+      if (game.provider === 'steam') {
+        const store = el('button', 'action', actions)
+        store.textContent = 'View in Steam Store'
+        store.onclick = () => {
+          void viewInStore(game.id)
+            .then(() => toast(`Opened ${game.title} in the Steam store.`, 'info', 4000))
+            .catch((e) => toast(`Could not open that. ${String(e)}`, 'error', 6000))
         }
       }
 
