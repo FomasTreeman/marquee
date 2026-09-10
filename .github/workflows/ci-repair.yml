@@ -191,7 +191,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
         if: steps.guard.outputs.go == 'true'
 
-      - uses: anthropics/claude-code-action@a874e9ecd7bb36efdad65429c6b35815f5a08f10 # v1.0.210
+      - uses: anthropics/claude-code-action@d75b94d5ad426cb8546e6628b6f5f19b84e5cce1 # v1.0.216
         id: claude
         if: steps.guard.outputs.go == 'true'
         with:
