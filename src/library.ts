@@ -260,6 +260,12 @@ export async function updateGame(id: string): Promise<string> {
   return call<string>('update_game', { id })
 }
 
+/** Open a Steam game's store page inside the Steam client. Returns the URI it
+ *  was handed. */
+export async function viewInStore(id: string): Promise<string> {
+  return call<string>('view_in_store', { id })
+}
+
 /** Toggle fullscreen, returning the new state. Remembered across launches. */
 export async function toggleFullscreen(): Promise<boolean> {
   if (!inApp) {

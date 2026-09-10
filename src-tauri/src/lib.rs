@@ -617,6 +617,34 @@ fn update_game(id: String, library: tauri::State<'_, Library>) -> Result<String,
     Ok(uri)
 }
 
+/// Open the game's Steam store page, inside the Steam client.
+///
+/// Same hand-off shape as `update_game` and `uninstall_game` above --
+/// `steam://store/<appid>` rather than `steam://install` or
+/// `steam://uninstall`. #108 also asked for a way back to Marquee once the
+/// store page is open; that would mean drawing into or dismissing Steam's own
+/// overlay, which is not ours to build. docs/PLAN.md §5 already names the
+/// Steam hand-off as a caveat that "does not go away" -- covered, not solved.
+#[tauri::command]
+fn view_in_store(id: String, library: tauri::State<'_, Library>) -> Result<String, String> {
+    let game = {
+        let games = library.0.lock().map_err(|_| "library state is poisoned")?;
+        games.iter().find(|g| g.id == id).cloned()
+    }
+    .ok_or_else(|| format!("no game with id {id}"))?;
+
+    if game.provider != "steam" {
+        return Err(format!(
+            "cannot open a store page for a {} game",
+            game.provider
+        ));
+    }
+    let uri = format!("steam://store/{}", game.provider_id);
+    run::open_uri(&uri)?;
+    log_info!("run", "opened the Steam store page for {}", game.title);
+    Ok(uri)
+}
+
 /// Keep the configured copy of the profile current.
 ///
 /// Called by every command that changes it. Silent when no folder is
@@ -925,6 +953,7 @@ pub fn run() {
             set_hidden,
             uninstall_game,
             update_game,
+            view_in_store,
             export_profile,
             import_profile,
             find_profile,

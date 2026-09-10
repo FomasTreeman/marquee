@@ -1,10 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDetail, nextActionFocus, renameIntent, revealThenFocus } from '../detail'
+import { viewInStore } from '../library'
 import type { Game } from '../library'
 
 vi.mock('../library', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../library')>()
-  return { ...actual, setHidden: vi.fn(() => Promise.resolve()) }
+  return {
+    ...actual,
+    setHidden: vi.fn(() => Promise.resolve()),
+    viewInStore: vi.fn(() => Promise.resolve('steam://store/220')),
+  }
 })
 
 /**
@@ -186,6 +191,57 @@ describe('createDetail hide button', () => {
     await new Promise((resolve) => setTimeout(resolve, 0))
     expect(view.isOpen).toBe(false)
     expect(onChanged).toHaveBeenCalledOnce()
+  })
+})
+
+/**
+ * View in Steam Store is Steam-only: a hand-added game has no store page for
+ * us to link, and nothing in its record to build one from. Before the
+ * `game.provider === 'steam'` guard, this button would have shown for a
+ * manual game too and handed Steam an id it has never heard of.
+ */
+describe('createDetail view in store button', () => {
+  const steamGame: Game = {
+    id: 'steam:220', provider: 'steam', providerId: '220', title: 'Half-Life 2',
+    installed: false, updateAvailable: false, updating: false, installDir: null, sizeBytes: 0, lastPlayed: null,
+    playtimeMinutes: 0, favourite: false, hidden: false, artAppId: null,
+  }
+  const manualGame: Game = {
+    id: 'manual:1', provider: 'manual', providerId: '1', title: 'Some Game',
+    installed: true, updateAvailable: false, updating: false, installDir: 'C:/game.exe', sizeBytes: 0, lastPlayed: null,
+    playtimeMinutes: 0, favourite: false, hidden: false, artAppId: null,
+  }
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  function stubDom(): { body: Record<string, unknown> } {
+    const body = fakeElement()
+    vi.stubGlobal('document', { createElement: () => fakeElement(), body })
+    vi.stubGlobal('window', { setTimeout: (cb: () => void, ms: number) => setTimeout(cb, ms) })
+    vi.stubGlobal('requestAnimationFrame', () => 0)
+    return { body }
+  }
+
+  it('shows for a Steam game and hands its id to Steam', async () => {
+    const { body } = stubDom()
+    const view = createDetail({ onPlay: vi.fn(), onChanged: vi.fn(), onFindArtwork: vi.fn() })
+    view.open(steamGame, undefined, {})
+
+    const root = (body.children as Record<string, unknown>[])[0]
+    const button = findByText(root, 'View in Steam Store')
+    expect(button).toBeDefined()
+    ;(button?.onclick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(viewInStore).toHaveBeenCalledWith('steam:220')
+  })
+
+  it('does not show for a hand-added game', () => {
+    const { body } = stubDom()
+    const view = createDetail({ onPlay: vi.fn(), onChanged: vi.fn(), onFindArtwork: vi.fn() })
+    view.open(manualGame, undefined, {})
+
+    const root = (body.children as Record<string, unknown>[])[0]
+    expect(findByText(root, 'View in Steam Store')).toBeUndefined()
   })
 })
 
