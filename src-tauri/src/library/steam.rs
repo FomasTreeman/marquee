@@ -436,7 +436,15 @@ impl Steam {
             match at.get(&p.id).copied() {
                 Some(i) => {
                     games[i].playtime_minutes = p.playtime_minutes;
-                    games[i].last_played = games[i].last_played.or(p.last_played);
+                    // Not `.or()`: that kept whichever LastPlayed the
+                    // manifest had the moment it was first written and never
+                    // let go, because the manifest field lags behind or sits
+                    // frozen while localconfig.vdf keeps updating on every
+                    // play. A game played again then never rose in the
+                    // "recently played" sort (issue #111). The larger of the
+                    // two is always the true last time played, whichever
+                    // file happened to record it.
+                    games[i].last_played = games[i].last_played.max(p.last_played);
                 }
                 // The same appid turns up once per Steam account on the
                 // machine, so the first one claims the slot.
@@ -545,6 +553,25 @@ mod tests {
         assert!(games[1].installed, "the manifest's record wins");
         assert_eq!(games[2].id, "steam:3");
         assert!(!games[2].installed);
+    }
+
+    /// The appmanifest's `LastPlayed` can lag behind or sit frozen at
+    /// whatever it read on install, while localconfig.vdf keeps updating on
+    /// every play. Taking the earlier of the two here regressed to the bug
+    /// in issue #111: a game played again after its manifest was written
+    /// never climbed back up the "recently played" sort, because the stale
+    /// manifest value always won.
+    #[test]
+    fn a_more_recent_localconfig_last_played_beats_a_stale_manifest_one() {
+        let mut installed = game("steam:1", true, 0);
+        installed.last_played = Some(100);
+        let mut newly_played = game("steam:1", false, 30);
+        newly_played.last_played = Some(500);
+
+        let mut games = vec![installed];
+        Steam::merge_played(&mut games, vec![newly_played]);
+
+        assert_eq!(games[0].last_played, Some(500));
     }
 
     /// `StateFlags` mixes "installed" with "needs an update" and "is
