@@ -308,13 +308,16 @@ async fn search_artwork(
             "art",
             "artwork search without a SteamGridDB key; Steam only"
         );
-        return Ok(steam);
+        return Ok(search::rank(&term, steam));
     };
 
+    // Cloned rather than moved, so `term` is still here for the ranking pass
+    // below once the search task has taken its copy.
+    let for_sgdb = term.clone();
     let from_sgdb = tauri::async_runtime::spawn_blocking(move || {
         let client = crate::meta::http_client().ok_or("no HTTP client")?;
         Ok::<_, String>(
-            sgdb::search(&client, &key, &term)
+            sgdb::search(&client, &key, &for_sgdb)
                 .into_iter()
                 .map(|e| search::SearchHit {
                     source: "sgdb",
@@ -328,7 +331,7 @@ async fn search_artwork(
     .await
     .map_err(|e| format!("search task failed: {e}"))??;
 
-    Ok(search::merge(from_sgdb, steam))
+    Ok(search::merge(&term, from_sgdb, steam))
 }
 
 /// Everything worth knowing about this machine, as one block of text.

@@ -147,14 +147,21 @@ pub async fn search_steam_hits(term: String) -> Result<Vec<SearchHit>, String> {
     search_steam(term).await
 }
 
-/// Put `first` in front, then anything from `second` naming a different game.
+/// Put `first` in front, then anything from `second` naming a different game,
+/// then bring an exact match for `term` to the very front of that.
 ///
 /// Both catalogues list the same popular games, and a picker showing "Hollow
 /// Knight" twice makes the person choosing wonder which one is the real one.
 /// Names are compared loosely because the two sources punctuate differently --
 /// Steam writes "Battlefield™ 6" where SteamGridDB writes "Battlefield 6", and
 /// treating those as separate answers is the same duplicate with extra steps.
-pub fn merge(first: Vec<SearchHit>, second: Vec<SearchHit>) -> Vec<SearchHit> {
+///
+/// SteamGridDB is community-tagged, so its own relevance ranking is not
+/// always relevance: a brand new game's exact-name entry has been seen
+/// sitting behind four re-uploads and fan packs with looser titles, on a
+/// picker that was supposed to make "find artwork" a last resort rather than
+/// a guessing game. An exact match, wherever it came from, wins.
+pub fn merge(term: &str, first: Vec<SearchHit>, second: Vec<SearchHit>) -> Vec<SearchHit> {
     let mut seen: Vec<String> = first.iter().map(|h| loose(&h.name)).collect();
     let mut out = first;
     for hit in second {
@@ -165,7 +172,21 @@ pub fn merge(first: Vec<SearchHit>, second: Vec<SearchHit>) -> Vec<SearchHit> {
         seen.push(key);
         out.push(hit);
     }
-    out
+    rank(term, out)
+}
+
+/// Move an exact (loose) match for `term` to the front, stable otherwise.
+///
+/// Only exact matches are reordered. Ranking approximate matches against each
+/// other is a job both catalogues already do better than a loose-name
+/// comparison could.
+pub fn rank(term: &str, hits: Vec<SearchHit>) -> Vec<SearchHit> {
+    let target = loose(term);
+    let mut hits = hits;
+    if !target.is_empty() {
+        hits.sort_by_key(|h| loose(&h.name) != target);
+    }
+    hits
 }
 
 /// A name reduced to the letters and digits in it, lowercased.
@@ -223,6 +244,7 @@ mod tests {
     #[test]
     fn merge_drops_the_same_game_listed_twice() {
         let out = merge(
+            "Hollow Knight",
             vec![hit("sgdb", "1", "Hollow Knight")],
             vec![hit("steam", "367520", "Hollow Knight")],
         );
@@ -240,7 +262,7 @@ mod tests {
             ("Marvel's Spider-Man", "Marvels Spider Man"),
             ("Rocket League®", "Rocket League"),
         ] {
-            let out = merge(vec![hit("sgdb", "1", a)], vec![hit("steam", "2", b)]);
+            let out = merge(a, vec![hit("sgdb", "1", a)], vec![hit("steam", "2", b)]);
             assert_eq!(out.len(), 1, "{a:?} and {b:?} are the same game");
         }
     }
@@ -248,6 +270,7 @@ mod tests {
     #[test]
     fn merge_keeps_a_game_only_the_second_list_has() {
         let out = merge(
+            "Rocket League",
             vec![hit("sgdb", "1", "Rocket League")],
             vec![hit("steam", "2", "Rocket League Sideswipe")],
         );
@@ -256,13 +279,62 @@ mod tests {
 
     #[test]
     fn merge_preserves_the_order_within_each_list() {
-        // Relevance order is the only ranking either catalogue gives us.
+        // Relevance order is the only ranking either catalogue gives us, when
+        // nothing is an exact match for the term.
         let out = merge(
+            "does not match any of these",
             vec![hit("sgdb", "1", "A"), hit("sgdb", "2", "B")],
             vec![hit("steam", "3", "C"), hit("steam", "4", "D")],
         );
         let names: Vec<&str> = out.iter().map(|h| h.name.as_str()).collect();
         assert_eq!(names, ["A", "B", "C", "D"]);
+    }
+
+    /// The bug this exists for: SteamGridDB's own relevance ranking is
+    /// community-tagged and not always relevance, and the exact match for a
+    /// brand new release has been seen sitting fifth, behind fan packs and
+    /// re-uploads with looser titles, on a picker meant to make "find
+    /// artwork" a last resort rather than a guessing game.
+    #[test]
+    fn merge_puts_an_exact_match_first_however_low_its_catalogue_ranked_it() {
+        let out = merge(
+            "WARDOGS",
+            vec![
+                hit("sgdb", "1", "War Dogs Redux Pack"),
+                hit("sgdb", "2", "Wardogs (Unofficial)"),
+                hit("sgdb", "3", "WAR DOGS Fan Edition"),
+            ],
+            vec![
+                hit("steam", "4", "War Dogs: The Board Game"),
+                hit("steam", "5", "WARDOGS"),
+            ],
+        );
+        assert_eq!(out[0].name, "WARDOGS");
+        assert_eq!(out[0].app_id, "5");
+    }
+
+    /// Punctuation and case must not stop the exact match from being
+    /// recognised as one, or Steam's own trademark symbol would defeat this.
+    #[test]
+    fn an_exact_match_is_found_loosely_too() {
+        let out = merge(
+            "Battlefield 6",
+            vec![hit("sgdb", "1", "Battlefield 6 Concept Art")],
+            vec![hit("steam", "2", "Battlefield™ 6")],
+        );
+        assert_eq!(out[0].name, "Battlefield™ 6");
+    }
+
+    /// With no exact match anywhere, the list is left exactly as ranked --
+    /// there is nothing here to prefer over the catalogues' own relevance.
+    #[test]
+    fn no_exact_match_leaves_the_order_untouched() {
+        let out = rank(
+            "Wardogs",
+            vec![hit("sgdb", "1", "War Dogs Redux"), hit("steam", "2", "War Dogs 2")],
+        );
+        let names: Vec<&str> = out.iter().map(|h| h.name.as_str()).collect();
+        assert_eq!(names, ["War Dogs Redux", "War Dogs 2"]);
     }
 
     #[test]
