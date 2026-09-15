@@ -331,7 +331,10 @@ mod tests {
     fn no_exact_match_leaves_the_order_untouched() {
         let out = rank(
             "Wardogs",
-            vec![hit("sgdb", "1", "War Dogs Redux"), hit("steam", "2", "War Dogs 2")],
+            vec![
+                hit("sgdb", "1", "War Dogs Redux"),
+                hit("steam", "2", "War Dogs 2"),
+            ],
         );
         let names: Vec<&str> = out.iter().map(|h| h.name.as_str()).collect();
         assert_eq!(names, ["War Dogs Redux", "War Dogs 2"]);
@@ -342,6 +345,7 @@ mod tests {
         // Two entries with unnameable titles would otherwise collapse into
         // one, or worse, swallow a real result whose name reduced to empty.
         let out = merge(
+            "Real",
             vec![hit("sgdb", "1", "Real")],
             vec![hit("steam", "2", "!!!")],
         );
