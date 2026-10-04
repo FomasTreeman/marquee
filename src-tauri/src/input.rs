@@ -538,6 +538,9 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
                 EventType::Disconnected => {
                     // Saturating, because a disconnect can arrive for a pad
                     // that was already gone when we enumerated at startup.
+                    // fetch_update was renamed to try_update in 1.95, but the
+                    // crate's MSRV is 1.77 (Cargo.toml), so the rename isn't available yet.
+                    #[allow(deprecated)]
                     let _ =
                         shared
                             .connected
