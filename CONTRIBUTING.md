@@ -67,14 +67,15 @@ failures are silent on screen and loud in the file.
 
 ## How the repository runs itself
 
-Most pull requests here are opened by an agent working from an issue, reviewed
-by a second agent and then by a person, merged through a queue and released
-automatically. If you file an issue it will be routed by that machinery, and
-the maintainer decides whether an agent or a person picks it up. If you open
-a pull request, CI, the staleness check and the review comment will run on it
-like any other. [docs/AUTOMATION.md](docs/AUTOMATION.md) describes the whole
-loop, including what the agent can and cannot do — it cannot merge, cannot
-push to `main`, and cannot start a release.
+Many pull requests here are opened by an AI agent (Claude Code) working from
+an issue. A second agent run leaves a review comment, and then a person reviews
+the pull request. Nothing merges until that person enables it, and a merge is
+released automatically.
 
-`CLAUDE.md` at the root is the brief that agent reads first. It is the same
-set of rules as this file, addressed to a different reader.
+If you file an issue, the maintainer decides whether an agent or a person
+picks it up. If you open a pull request, CI, the staleness check and the review
+comment run on it like any other.
+[docs/AUTOMATION.md](docs/AUTOMATION.md) describes the whole loop.
+
+`CLAUDE.md` at the root is the brief the agent reads first. It holds the same
+rules as this file.

@@ -1,456 +1,306 @@
-# DevSecOps: what is in place, and what is left
+# DevSecOps: what is in place and what is left
 
-A working list. Each entry says what the repository does today, what to do
-about it, and what the technique buys and costs, because a control adopted
-without its costs written down is one somebody removes the first time it is in
-the way.
+A working list. The first table is what the repository already does. After
+that are twenty things it does not do yet, each with the current state, the
+change, and the pros and cons.
 
-It came out of an audit on 4 October 2026 of the workflows, the repository
-settings as the API reports them, and the release chain. Settings drift without
-a commit, so check an entry's "today" before acting on it.
+It comes from a review on 4 October 2026 of the workflows, the repository
+settings and the release process. Settings can change without a commit, so
+check the "Now" line before starting an item.
 
-Effort is **S** for a setting or a few lines, **M** for an evening, **L** for
-something that reworks a workflow.
+Effort: **S** is a setting or a few lines, **M** is an evening, **L** reworks a
+workflow.
 
 ## Already in place
 
-| Technique | Where | What it costs |
+| Technique | Where | Cost |
 |---|---|---|
-| Actions pinned to a commit SHA, and a lint that refuses a tag | `tools/check-workflows.py` | A pin goes stale unless something bumps it, which is what `dependabot.yml` is for |
-| Every job declares `permissions` and `timeout-minutes` | `tools/check-workflows.py` | Nothing; the lint is the reminder |
-| Event data reaches a script through `env:`, never `${{ }}` in `run:` | `tools/check-workflows.py` | The lint sees `run:` only, see item 6 |
-| Signing key in the `release` environment, deployable from `main` only | `release.yml`, environment settings | A pull request cannot test the signing path |
-| Draft release, verified, then published | `release.yml`, `verify` job | Four serial builds, about half an hour |
-| Release waits for green CI on the exact commit | `release.yml`, `ci` job | A slow CI queue delays a release |
-| Secret scanning with push protection | repository setting | None |
-| Private vulnerability reporting | repository setting, `docs/SECURITY.md` | None |
-| Dependabot security updates for cargo and npm | repository setting | Opens a pull request only when an advisory has a fix |
-| `pull_request_target` checks out the base branch only | `board.yml` | The script cannot see the branch it is reconciling |
-| Agent starts only for a maintainer, with a named tool list | `claude.yml` | See item 1 for what the list does not cover |
-| A tight CSP and four Tauri permissions | `tauri.conf.json`, `capabilities/default.json` | `style-src 'unsafe-inline'`, argued in `docs/SECURITY.md` |
-| No shell on any launch path, and a URI allowlist behind it | `run.rs` | None |
+| Actions pinned to a commit SHA, with a lint that rejects a tag | `tools/check-workflows.py` | Pins go stale unless Dependabot bumps them |
+| Explicit `permissions` and `timeout-minutes` on every job | `tools/check-workflows.py` | None |
+| Event data passed to scripts through `env:`, not `${{ }}` | `tools/check-workflows.py` | The lint only checks `run:` steps (item 6) |
+| Signing key in a `release` environment that only `main` can use | `release.yml` | A pull request cannot test signing |
+| Release built as a draft, checked, then published | `release.yml` | Four builds in series, about half an hour |
+| Release waits for green CI on the exact commit | `release.yml` | A slow CI queue delays a release |
+| Secret scanning with push protection | Repository setting | None |
+| Private vulnerability reporting | Repository setting | None |
+| Dependabot security updates for cargo and npm | Repository setting | None |
+| `pull_request_target` only checks out the base branch | `board.yml` | The script cannot see the pull request's code |
+| Agent runs start only for the maintainer, with a fixed tool list | `claude.yml` | See item 1 |
+| Strict CSP and four Tauri permissions | `tauri.conf.json`, `capabilities/default.json` | Inline styles are allowed |
+| No shell on any launch path, plus a URI allowlist | `run.rs` | None |
 
-## A suggested order
+## Suggested order
 
-Settings first, because they are reversible in a click and several are free:
-items 3, 5, 9, 10, 12 and 14. Then the checks that live in CI: 6, 7, 11, 13,
-15, 16. Then the two that change how the project works: 1 and 8.
+1. Settings, which are quick and easy to undo: items 2, 3, 5, 9, 10, 12, 14.
+2. Checks that run in CI: items 6, 7, 11, 15, 16.
+3. The application and its security document: items 17 to 20.
+4. The larger changes: items 1, 8 and 13.
+5. Item 4, if at all.
 
 ---
 
-## Who can change `main`, and what a release is
+## Who can change `main`
 
-### 1. A second identity for the agent, and one required approval — L
-
-- [ ] Done
-
-**Today.** The ruleset on `main` requires a pull request and three green
-builds, and zero approvals. The agent acts through `CLAUDE_WORKFLOW_TOKEN`, a
-personal access token, so GitHub sees its pull requests as yours. What stops it
-merging is its instructions and its tool list. Neither is enforced by the
-platform, and merging is releasing.
-
-**Do.** Register a GitHub App with the permissions in
-`docs/AUTOMATION.md`, mint its token per run with
-`actions/create-github-app-token`, and retire the personal token. Set
-`required_approving_review_count` to 1. Give the admin role a bypass on the
-ruleset so your own pull requests still merge. Add `.github/CODEOWNERS` covering
-`.github/`, `src-tauri/tauri.conf.json` and `src-tauri/capabilities/`, and turn
-on `require_code_owner_review`.
-
-**For.** Separation of duties that GitHub enforces: the author of a change
-cannot approve it, and the agent is now a different author from you. App tokens
-last an hour, against a personal token that lasts until it is revoked. Events
-from an App token still start workflows, which is the property the personal
-token was chosen for.
-
-**Against.** The largest change on this list, touching every workflow that
-names the token. The App's private key is a new long-lived secret. Each agent
-pull request needs an approval as well as the auto-merge click. A session on
-your own machine still opens pull requests as you, so the bypass covers it: the
-control binds the unattended agent, not the attended one.
-
-### 2. Protect `v*` tags — S
+### 1. Give the agent its own identity and require one approval (L)
 
 - [ ] Done
+- **Now:** `main` needs a pull request and green CI but zero approvals. The
+  agent uses a personal access token, so GitHub sees its pull requests as the
+  maintainer's. The human review happens, but GitHub does not enforce it.
+- **Do:** Create a GitHub App for the agent and mint its token per run with
+  `actions/create-github-app-token`. Require one approving review. Let the
+  admin role bypass, so the maintainer's own pull requests still merge. Add
+  `CODEOWNERS` for `.github/`, `tauri.conf.json` and `capabilities/`.
+- **Pros:** The author of a change cannot approve it, and GitHub enforces that.
+  App tokens expire after an hour. This is also the base for giving separate
+  agent roles separate permissions.
+- **Cons:** The biggest change here, since every workflow that uses the token
+  changes. The App's private key is a new secret to look after. A session on
+  the maintainer's own machine still acts as the maintainer.
 
-**Today.** One ruleset, and it targets branches. Any token with Contents write
-can move or delete a `v*` tag, and `release.yml` reads the newest tag as the
-floor for the next version.
-
-**Do.** Add a tag ruleset on `refs/tags/v*` that blocks update and deletion.
-Leave creation open, because the release workflow creates the tag when it
-publishes.
-
-**For.** A tag that cannot move is the property a reader assumes a version
-already has.
-
-**Against.** Creation stays open, so a stray `v99.0.0` can still push the
-version floor up. A mistaken tag can only be removed by switching the rule off.
-
-### 3. Immutable releases — S
-
-- [ ] Done
-
-**Today.** Off. The assets on a published release, `latest.json` among them,
-can be replaced afterwards. The bundles are signed, but the version number in
-`latest.json` is not, so a manifest claiming a higher version and pointing at
-an older signed bundle would verify.
-
-**Do.** Settings → General → Releases → enable release immutability. The
-workflow already builds a draft and publishes last, which is the shape
-immutability wants.
-
-**For.** Closes the rollback and locks the tag in one setting. No workflow
-change. GitHub records a release attestation as a side effect.
-
-**Against.** A bad release cannot be repaired in place, only superseded.
-Anything added to a release, item 8's attestations or an SBOM, has to be
-attached while it is still a draft.
-
-### 4. Signed commits on `main` — S
+### 2. Protect `v*` tags (S)
 
 - [ ] Done
+- **Now:** The only ruleset covers branches. A token with write access can move
+  or delete a version tag.
+- **Do:** Add a tag ruleset for `v*` that blocks update and deletion. Leave
+  creation open, because the release workflow creates the tag.
+- **Pros:** A version always points at the same commit.
+- **Cons:** A stray tag can still be created. Removing a mistaken tag means
+  switching the rule off first.
 
-**Today.** Not required. Merge, squash and rebase are all allowed.
+### 3. Immutable releases (S)
 
-**Do.** Restrict the merge method to squash, then add `required_signatures` to
-the ruleset.
+- [ ] Done
+- **Now:** Off. Files on a published release, including the update manifest,
+  can be replaced later. The bundles are signed but the version number in the
+  manifest is not, so an older signed build could be offered as a newer one.
+- **Do:** Settings → General → Releases → enable release immutability.
+- **Pros:** One setting, no workflow change. The release already goes
+  draft-then-publish, which is what this needs.
+- **Cons:** A bad release cannot be fixed in place, only replaced by a new
+  version. Anything else attached to a release must be added while it is a
+  draft.
 
-**For.** Every commit on `main` carries a verified signature.
+### 4. Signed commits on `main` (S)
 
-**Against.** With squash, the signature is GitHub's, so it proves GitHub made
-the commit and says nothing about who wrote the change. Worth less than it
-looks; do it last.
+- [ ] Done
+- **Now:** Not required.
+- **Do:** Allow squash merges only, then require signatures in the ruleset.
+- **Pros:** Every commit on `main` shows as verified.
+- **Cons:** With squash merges the signature is GitHub's, so it says little
+  about who wrote the change. Low value; do it last.
 
 ---
 
 ## The pipeline
 
-### 5. Static analysis with CodeQL — S
+### 5. Static analysis with CodeQL (S)
 
 - [ ] Done
+- **Now:** Not configured. CodeQL supports all four languages here: Rust,
+  TypeScript, Python and Actions workflows.
+- **Do:** `gh api -X PATCH repos/FomasTreeman/marquee/code-scanning/default-setup -f state=configured`
+- **Pros:** Free for a public repository. Results show on pull requests and in
+  the Security tab. It also scans the workflows.
+- **Cons:** Default setup is a setting, not a file, so it does not show in the
+  repository. Rust support is the newest. False positives need triaging.
 
-**Today.** Not configured. The repository's languages are Rust, TypeScript,
-Python and Actions, and CodeQL covers all four.
-
-**Do.** `gh api -X PATCH repos/FomasTreeman/marquee/code-scanning/default-setup -f state=configured`.
-
-**For.** Free on a public repository, no workflow file to maintain, results in
-the Security tab and on pull requests. The Actions pack reads workflows for
-injection and excess permissions.
-
-**Against.** Default setup is not a file in the repository, so it is a control
-nobody can read in a diff; an advanced setup is, at the price of another
-workflow to pin. Rust support is the youngest of the four. Expect false
-positives, and each dismissal needs its reason.
-
-### 6. A workflow linter that knows more than ours — M
+### 6. A dedicated workflow linter (M)
 
 - [ ] Done
+- **Now:** `tools/check-workflows.py` checks pins, permissions, timeouts and
+  script injection in `run:` steps. It does not look inside `script:` or
+  `with:` blocks.
+- **Do:** Add `zizmor` for security checks and `actionlint` for the shell
+  scripts. Keep the Python lint for project-specific rules.
+- **Pros:** Maintained rule sets that cover far more than a home-made check.
+- **Cons:** The first run will be noisy and each exception needs recording. Two
+  more tools that overlap an existing one.
 
-**Today.** `tools/check-workflows.py` checks schema, pins, permissions,
-timeouts, and `${{ }}` in `run:` for three contexts. It does not look inside
-`script:` or `with:`, and knows nothing of cache poisoning or credential
-persistence.
-
-**Do.** Run `zizmor` over `.github/workflows` and upload its SARIF, and
-`actionlint` for the shell inside `run:`. Keep the Python check for the rules
-that are this repository's own.
-
-**For.** Two maintained rule sets written by people who study workflow attacks.
-`actionlint` runs shellcheck over every script in the release workflow.
-
-**Against.** A first run will be noisy: `pull_request_target`, the cache in the
-release job and `checkout` without `persist-credentials: false` all get
-flagged. Every exception needs a line in a config file. Two more tools to
-install or pin, overlapping one that already exists.
-
-### 7. Dependency audit and policy with cargo-deny — M
+### 7. Dependency auditing with cargo-deny (M)
 
 - [ ] Done
+- **Now:** Nothing in CI checks the 531 crates or the npm packages against an
+  advisory database. One Dependabot alert has been open since 2 September with
+  no decision: `glib` 0.18.5 (GHSA-wrw7-89jp-8q8g), which comes in through
+  Tauri on Linux and cannot be upgraded from here.
+- **Do:** Add `src-tauri/deny.toml` and run `cargo deny check` in CI and on a
+  weekly schedule. Add `pnpm audit --prod`. Record the `glib` decision as an
+  ignore with a reason and dismiss the alert.
+- **Pros:** Covers advisories, licences and where crates come from in one tool.
+  Accepted risks are written down with a reason.
+- **Cons:** Tauri's Linux dependencies will raise about a dozen "unmaintained"
+  warnings to ignore on day one. A new advisory can turn CI red on an unrelated
+  pull request.
 
-**Today.** Nothing in CI reads the 531 crates in `Cargo.lock` or the npm tree
-against an advisory database. Dependabot alert #1 has been open since 2
-September with no decision recorded: `glib` 0.18.5, GHSA-wrw7-89jp-8q8g, which
-arrives through Tauri's GTK stack on Linux and cannot be bumped from here.
-
-**Do.** Add `src-tauri/deny.toml` with the advisories, licences, bans and
-sources checks, and run `cargo deny check` in the Ubuntu leg of CI and on a
-weekly schedule. Add `pnpm audit --prod` beside it. Record the `glib` decision
-as an `ignore` with its reason, and dismiss the alert with the same words.
-
-**For.** An ignored advisory with a reason is this project's silence rule
-applied to dependencies. The licence check is real for a PolyForm project that
-links a few hundred crates. The sources check refuses a crate from anywhere but
-crates.io.
-
-**Against.** Tauri on Linux pulls in the unmaintained GTK3 bindings, so expect
-a dozen "unmaintained" advisories to ignore on day one. An advisory published
-overnight turns CI red on a pull request that did nothing; the schedule is what
-keeps that from being the first anyone hears of it. A new job is not in the
-required-checks list, so make it a step in the existing one. `CI` is not among
-the workflows `automation-broken.yml` watches, so a red scheduled run is silent
-unless it is added.
-
-### 8. Provenance and an SBOM for each release — M
+### 8. Build provenance and an SBOM (M)
 
 - [ ] Done
+- **Now:** Releases carry the updater's signature files only. The `.dmg` files
+  have no signature at all. Nothing links a download to the commit and workflow
+  that built it.
+- **Do:** Add `actions/attest-build-provenance` after the build, generate a
+  CycloneDX SBOM with `cargo cyclonedx`, and attach both to the draft release.
+  Document `gh attestation verify` in the README.
+- **Pros:** Anyone can verify a download was built by this repository's release
+  workflow. No new key to manage. An SBOM shows what went into each release.
+- **Cons:** It proves where a file was built, not that the code is safe. It
+  adds `id-token: write` to the job that holds the signing key. Few users will
+  verify.
 
-**Today.** A release carries the updater's `.sig` files and nothing else. The
-`.dmg` files have no signature of any kind. Nothing ties a bundle to the commit
-and workflow that built it, and there is no list of what went into it.
-
-**Do.** After the bundle step, run `actions/attest-build-provenance` over the
-bundles, with `id-token: write` and `attestations: write` on the build job.
-Generate a CycloneDX SBOM with `cargo cyclonedx`, attach it to the draft and
-attest it. Put `gh attestation verify <file> --repo FomasTreeman/marquee` in
-the README.
-
-**For.** Anyone can check that a download was built by `release.yml` at a named
-commit, which covers the `.dmg` and the installers the updater signature does
-not. The signing uses a short-lived certificate, so there is no new key to
-keep. An SBOM answers "am I affected" for a release already shipped.
-
-**Against.** Provenance says where a bundle was built, not that the source was
-sound. `id-token: write` lands in the one job that holds the signing key. The
-version is written into the working copy before the build, so the source built
-is the commit plus that edit. Nobody verifies unless told how.
-
-### 9. Workflow token read-only by default — S
+### 9. Read-only workflow token by default (S)
 
 - [ ] Done
+- **Now:** The repository default is `write`. Every job sets its own
+  permissions, so the default only applies if the lint misses one.
+- **Do:** `gh api -X PUT repos/FomasTreeman/marquee/actions/permissions/workflow -f default_workflow_permissions=read`,
+  then run the Board workflow by hand to confirm it can still write.
+- **Pros:** Least privilege even when a job forgets to declare it.
+- **Cons:** A comment in `ci.yml` says a read default stops jobs asking for
+  write. GitHub's documentation says otherwise, but test it and fix whichever
+  is wrong.
 
-**Today.** The repository default is `write`. Every job declares its own
-permissions, so the default is only reached by a job the lint missed.
-
-**Do.** `gh api -X PUT repos/FomasTreeman/marquee/actions/permissions/workflow -f default_workflow_permissions=read`,
-then run Board by hand and watch it write a label.
-
-**For.** The lint's guarantee becomes the platform's.
-
-**Against.** The comment at the top of `ci.yml` says a read default caps what a
-`permissions:` block can ask for. GitHub documents it as a default, not a cap,
-so that comment is probably recording a different failure, but it was written
-from something that happened. Test it, and correct whichever is wrong.
-
-### 10. Let GitHub enforce the pins — S
+### 10. Let GitHub enforce action pinning (S)
 
 - [ ] Done
+- **Now:** Any action is allowed and GitHub's own SHA-pinning requirement is
+  off. Pinning is enforced by the project's lint, which a pull request could
+  edit.
+- **Do:** Settings → Actions → General: allow selected actions only, list the
+  six owners in use, and require a full SHA.
+- **Pros:** A pull request cannot weaken a repository setting.
+- **Cons:** Adding an action needs a settings change first. Check whether the
+  rule also applies to actions called from inside other actions.
 
-**Today.** `allowed_actions` is `all` and `sha_pinning_required` is false. The
-pinning is enforced by our own lint, in a job a pull request can edit.
-
-**Do.** Settings → Actions → General: allow selected actions only, list the
-six owners in use, and require a full-length SHA.
-
-**For.** A pull request cannot weaken a repository setting. Adding an action
-becomes a deliberate act in two places.
-
-**Against.** Adding an action now needs a settings change before the pull
-request can go green. Check whether the requirement reaches into the `uses:`
-lines inside composite actions, because a pinned action that calls an unpinned
-one would then fail.
-
-### 11. Pin the toolchains — M
+### 11. Pin the toolchains (M)
 
 - [ ] Done
+- **Now:** Rust uses whatever `stable` is that day, pnpm is "9", and Node is
+  20, which reached end of life in April 2026. Cargo never runs with
+  `--locked`. This has already caused a failure: CI on the pull request that
+  added this file went red because a new Rust release deprecated a function.
+- **Do:** Add `rust-toolchain.toml` with an exact version, a `packageManager`
+  field for pnpm, and a current Node LTS through `.nvmrc`. Pass `--locked` to
+  cargo in CI. Move to pnpm 10, which does not run dependency install scripts
+  unless they are listed.
+- **Pros:** The same commit builds the same way next month. Toolchain upgrades
+  arrive as their own pull request.
+- **Cons:** Pins need something to bump them. The release job edits the version
+  in `Cargo.toml`, so `--locked` there needs the lock file edited too.
 
-**Today.** Rust is whatever `stable` is on the day. pnpm is `version: 9` with
-no `packageManager` field. Node is 20, which has been end of life since April
-2026. No cargo command passes `--locked`. pnpm 9 runs dependency install
-scripts by default.
-
-**Do.** Add `rust-toolchain.toml` with an exact channel. Add `packageManager`
-with an exact pnpm version and drop `version:` from the workflows. Move to a
-supported Node LTS through `.nvmrc` and `node-version-file`. Pass `--locked` to
-clippy and test in CI. Move to pnpm 10, which runs no dependency script unless
-it is named in `onlyBuiltDependencies`.
-
-**For.** A build from the same commit uses the same compiler next month. A new
-clippy lint arrives in a pull request that bumps the toolchain, not in whichever
-one happened to be open. `--locked` turns a stale lockfile from a silent
-re-resolve into a failure.
-
-**Against.** Pins go stale, so each needs something to bump it. The release job
-rewrites the version in `Cargo.toml`, which makes `Cargo.lock` stale by design:
-`--locked` there needs the same edit made to the lock first. pnpm 10 may need
-`esbuild` allowed by name.
-
-### 12. A cooldown on Dependabot — S
+### 12. A Dependabot cooldown (S)
 
 - [ ] Done
+- **Now:** Action updates are proposed weekly with no waiting period, so a
+  release from yesterday can be proposed for the signing job today.
+- **Do:** Add `cooldown: { default-days: 7 }` in `.github/dependabot.yml`.
+- **Pros:** One line. Most compromised releases are caught within days.
+- **Cons:** Ordinary fixes also wait a week. Security updates are not delayed.
 
-**Today.** Weekly, for `github-actions` only, with no cooldown. A release of
-`tauri-action` published on a Sunday is a pull request against the signing job
-on Monday.
-
-**Do.** Add `cooldown: { default-days: 7 }` to the entry in
-`.github/dependabot.yml`.
-
-**For.** Most compromised releases are found and pulled within days. One line.
-
-**Against.** A real fix waits the same week. Security updates are exempt, which
-is the case that matters.
-
-### 13. Keep the signing key away from the build — L
+### 13. Keep the signing key away from the build (L)
 
 - [ ] Done
+- **Now:** The key has no password, which `docs/UPDATES.md` explains. It is
+  present for the whole build step, which runs every dependency's build code.
+  There is no written procedure for a lost or leaked key.
+- **Do:** In order of cost: write the key rotation procedure; stop restoring a
+  build cache in the release job; then split the job so one builds with no
+  secrets and another only signs.
+- **Pros:** Dependency code never runs alongside the key. The rotation
+  procedure is useful whatever else happens.
+- **Cons:** The split reworks the most fragile workflow in the repository, and
+  the Tauri bundler expects the key at build time. No cache means slower
+  releases.
 
-**Today.** The key has no password, a trade argued in `docs/UPDATES.md`. It is
-in the environment of the whole bundling step, which runs vite, every build
-script and every proc macro in the tree. The same job restores a build cache.
-`docs/UPDATES.md` has no procedure for a key that is lost or leaked.
-
-**Do.** In order of cost. Write the rotation procedure, including the release
-signed with the old key that ships the new public key, without which every
-installed copy is stranded. Drop the cache from the release job. Then split the
-job: build with no secrets, upload the bundles, and sign them in a second job
-that runs nothing but `tauri signer sign`.
-
-**For.** The key is then visible only to a job that executes no dependency
-code. The runbook is the part most likely to be needed.
-
-**Against.** The split reworks the most fragile workflow here. The bundler
-refuses to produce updater artefacts without the key, and `tauri-action` writes
-`latest.json` from the signatures, so both need replacing by hand. Dropping the
-cache adds minutes to each of four serial builds.
-
-### 14. Wider secret scanning, and a check for the key itself — S
+### 14. Wider secret scanning (S)
 
 - [ ] Done
+- **Now:** Provider patterns and push protection are on. Generic patterns and
+  validity checks are off. `docs/SECURITY.md` says a ruleset blocks `*.key`
+  files, but no such rule exists; only `.gitignore` does that.
+- **Do:** Turn on the two settings if they are offered. Add a check under
+  `tools/` for the prefix every Tauri private key starts with
+  (`dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5`). Correct the
+  document.
+- **Pros:** Catches the key under any filename. No new dependency.
+- **Cons:** A CI check runs after the push, which on a public repository is
+  already too late. It shortens exposure but does not prevent it.
 
-**Today.** Provider patterns and push protection are on. Non-provider patterns
-and validity checks are off. `docs/SECURITY.md` says a ruleset refuses `*.key`;
-no such rule exists, and the protection is `.gitignore`.
-
-**Do.** Turn on the two toggles if they are offered. Add a check to
-`tools/` that fails on the base64 prefix every Tauri private key starts with,
-`dW50cnVzdGVkIGNvbW1lbnQ6IHJzaWduIGVuY3J5cHRlZCBzZWNyZXQga2V5`, whatever the
-file is called. Correct the sentence in `docs/SECURITY.md`.
-
-**For.** Catches the key pasted into a workflow, a doc or a test, which a
-filename rule never would. No dependency.
-
-**Against.** A check in CI runs after the push, and on a public repository that
-is already too late: it shortens the exposure, it does not prevent it. Only a
-local hook runs early enough, and a hook is per-clone and optional.
-
-### 15. OpenSSF Scorecard — S
+### 15. OpenSSF Scorecard (S)
 
 - [ ] Done
+- **Now:** Not present.
+- **Do:** Add the `ossf/scorecard-action` workflow and put the badge in the
+  README.
+- **Pros:** An independent, public score that is re-checked weekly.
+- **Cons:** Some checks assume a team, so a solo project scores low on code
+  review whatever it does. One more third-party action.
 
-**Today.** Absent.
-
-**Do.** Add the `ossf/scorecard-action` workflow on a schedule and on push to
-`main`, publish the results, and put the badge in the README.
-
-**For.** A public score from somebody else's rules, which is the point of a
-showcase. It re-checks pins, token permissions and branch protection weekly.
-
-**Against.** Several checks assume a team: code review will score low for a
-solo maintainer whatever is done. One more third-party action, and a number on
-the README that starts lower than the work deserves.
-
-### 16. Egress monitoring on the release job — M
+### 16. Network monitoring on the release job (M)
 
 - [ ] Done
-
-**Today.** A release build can reach any host.
-
-**Do.** Add `step-security/harden-runner` as the first step of the build job
-with `egress-policy: audit`, read a few runs, then move to `block` with the
-hosts it found.
-
-**For.** A build that only talks to crates.io, npm and GitHub cannot post the
-signing key anywhere else. A cheaper answer to item 13's threat than the split.
-
-**Against.** It puts a third-party agent in the most sensitive job to protect
-it, and sends its findings to a hosted service. Block mode has been strongest
-on Linux runners; check what it does on the macOS and Windows legs before
-relying on it.
+- **Now:** A release build can connect to any host.
+- **Do:** Add `step-security/harden-runner` in audit mode, review what the
+  build contacts, then switch to blocking everything else.
+- **Pros:** A build that can only reach crates.io, npm and GitHub cannot send
+  the key anywhere else. Cheaper than item 13.
+- **Cons:** It adds a third-party tool to the most sensitive job. Check how
+  well blocking works on the macOS and Windows runners.
 
 ---
 
 ## The application
 
-### 17. Bound what an artwork download can cost — S
+### 17. Limit artwork downloads (S)
 
 - [ ] Done
+- **Now:** `usable()` in `art.rs` downloads a response of any size and decodes
+  it with no limits. SteamGridDB images are uploaded by its users.
+- **Do:** Cap the download size, set `image::Limits` on the decoder, and log
+  when something is refused. Add a test with an oversized image.
+- **Pros:** A hostile or broken image cannot exhaust memory.
+- **Cons:** A cap set too low silently drops real artwork, so the refusal must
+  be logged.
 
-**Today.** `usable()` in `art.rs` reads a response of any size and decodes it
-with no limits. SteamGridDB artwork is uploaded by its users.
-
-**Do.** Cap the body, decode through `image::ImageReader` with `Limits` set, and
-log a refusal. Prove the test bites with an image over the cap.
-
-**For.** A hostile or broken image costs a log line, not the process.
-
-**Against.** A cap set too low drops real artwork, and a missing cover is the
-failure this project sees least well, so the refusal has to be logged loudly
-enough to find.
-
-### 18. Fuzz the parsers that read other people's files — M
+### 18. Fuzz or property-test the parsers (M)
 
 - [ ] Done
+- **Now:** The Steam file parser is written defensively but has no fuzz target
+  or property tests.
+- **Do:** Add `proptest` tests, or `cargo fuzz` targets, for the Steam parsers,
+  `SourceKey::parse` and `open_uri`.
+- **Pros:** `proptest` runs in the normal test suite on every platform.
+  `cargo fuzz` finds inputs nobody thought to try.
+- **Cons:** `proptest` is a new dependency. `cargo fuzz` needs nightly Rust and
+  does not run on Windows.
 
-**Today.** `docs/SECURITY.md` calls the VDF and ACF parser "fuzz-shaped". There
-is no fuzz target and no property test.
-
-**Do.** Either `proptest` as a dev-dependency, with properties for the Steam
-parsers, `SourceKey::parse` and `open_uri`; or `cargo fuzz` targets for the
-same three.
-
-**For.** `proptest` runs inside `cargo test` on stable, on all three platforms.
-`cargo fuzz` is coverage-guided and finds what a property does not think to
-ask.
-
-**Against.** `proptest` is a new dependency and needs its reason in the commit
-message. `cargo fuzz` needs nightly, does not run on Windows, and is not
-something CI runs for long, so it is a tool for an afternoon and a corpus to
-keep.
-
-### 19. Decide what an imported profile is trusted to do — S
+### 19. Decide how far to trust an imported profile (S)
 
 - [ ] Done
+- **Now:** A profile import sets each game's executable path from the file, and
+  Play runs it. `docs/SECURITY.md` says an executable is always chosen in a
+  file dialog.
+- **Do:** Either show how many executables a profile sets before importing, or
+  import without them. Update the document to match.
+- **Pros:** A profile from someone else cannot quietly add programs to run.
+- **Cons:** Carrying the paths is what makes a profile useful on your own
+  second machine.
 
-**Today.** `docs/SECURITY.md` says a manual game's executable is always a path
-chosen in a file dialog. A profile import sets it from the file, and Play then
-runs it.
-
-**Do.** Decide between importing executables as they are, with the count shown
-before the import is confirmed, and importing without them. Then make the
-document say what the code does.
-
-**For.** A profile from somebody else stops being a list of programs to run.
-
-**Against.** Carrying the paths is what makes a profile work on a second
-machine of your own, which is the case the feature exists for.
-
-### 20. Bring `docs/SECURITY.md` back in step — S
+### 20. Bring `docs/SECURITY.md` up to date (S)
 
 - [ ] Done
-
-**Today.** Four statements no longer match: the SteamGridDB key is said to be
-in an exported profile, and `profile.rs` has left it out since
-`a_profile_leaves_the_steamgriddb_key_behind`; a ruleset is said to refuse
-`*.key` (item 14); the agent is said to be unable to merge (item 1); every
-executable is said to come from a file dialog (item 19).
-
-**Do.** Correct each as its item lands. For the two the code can check, the
-permission list and the CSP, add a test that reads `docs/SECURITY.md` and
-compares it with the configuration.
-
-**For.** A security document that is wrong is worse than none, and a test is
-this project's usual answer to a comment that drifts.
-
-**Against.** A test over prose is brittle, and fails on a reworded sentence as
-readily as on a real change.
+- **Now:** Four statements no longer match the code or settings: the
+  SteamGridDB key being in an exported profile, a ruleset blocking `*.key`, the
+  agent being unable to merge, and every executable coming from a file dialog.
+- **Do:** Correct each one as items 1, 14 and 19 land. Add a test that compares
+  the permissions and CSP in the document with the real configuration.
+- **Pros:** A security document that is wrong is worse than none.
+- **Cons:** Tests over prose break on rewording.
 
 ---
 
-## Deliberately not here
+## Not planned
 
-Code signing for Windows and notarisation for macOS. `docs/PLAN.md` and
-`docs/UPDATES.md` already argue that one: both cost money every year, and the
-update signature covers the path that matters most.
+Windows code signing and macOS notarisation. Both cost money every year, and
+`docs/UPDATES.md` explains why the update signature is enough for now.
