@@ -1,77 +1,38 @@
 # Marquee
 
-A controller-first game launcher for the television. One grid, every store,
-pitch black, cover art doing the work.
+A controller-first game launcher for the television. One grid for every game
+you own, whichever store it came from.
 
-Windows, macOS and Linux. Tauri v2 — a Rust core with a web frontend, so the
-interface is a stylesheet and the parsers are memory-safe.
+Runs on Windows, macOS and Linux. Built with Tauri v2: a Rust core and a
+TypeScript frontend with no UI framework.
 
-## The idea in four lines
+## What it does
 
-1. Install it. Your Steam library is there, with art.
-2. Add anything else by typing its name. One field.
-3. **No API keys. No accounts. No configuration.**
-4. The whole interface is CSS.
+- **Reads your Steam library on its own**, with cover art, and launches games
+  with one button.
+- **Adds anything else by name.** Epic, GOG, emulators, an old installer: type
+  the title, pick the match, then point it at the executable.
+- **Needs no account and no API keys.** A free
+  [SteamGridDB](https://www.steamgriddb.com) key is optional and fills the gaps
+  in Steam's artwork.
+- **Works from the sofa.** Fullscreen by default, an on-screen keyboard, and
+  every action reachable with a pad, a keyboard or a mouse alone.
+- **Updates itself**, and checks every download against a public key built into
+  the copy already running.
 
-## Installing
+## Install
 
 Download the newest build from
-[Releases](https://github.com/FomasTreeman/marquee/releases/latest):
+[Releases](https://github.com/FomasTreeman/marquee/releases/latest).
 
-| | file | note |
+| | File | Note |
 |---|---|---|
-| Windows | `marquee_<version>_x64-setup.exe` | SmartScreen will object, because the installer is not code-signed: *More info → Run anyway*. The `.msi` is the same thing for people who prefer one |
-| macOS, Apple silicon | `marquee_<version>_aarch64.dmg` | Not notarised, so the first launch is a right-click → Open rather than a double-click |
-| macOS, Intel | `marquee_<version>_x64.dmg` | as above |
-| Linux | `.AppImage`, `.deb` or `.rpm` | The AppImage needs `chmod +x`. Linux builds and is released on every merge, and has had far less use than the other two |
-
-Installed copies update themselves. About twenty seconds after launch Marquee
-checks for a newer release and offers it when nothing else is on screen —
-never over a running game. "Not now" is remembered for that version. Every
-download is verified against a public key compiled into the copy already
-running; [docs/UPDATES.md](docs/UPDATES.md) explains the whole mechanism.
-
-## How it works
-
-**Steam is automated.** It reads Steam's own library manifests, so every
-installed game appears with its cover, its wide key art and its transparent
-logo, and launches with a button. If Steam is closed it is started silently to
-the tray first, so its window never appears in front of the game.
-
-**Everything else is a name.** Epic, GOG, EA, Ubisoft, emulators, a decade-old
-installer — type *"Hollow Knight"*, pick it from the results, and it lands in
-the library complete with metadata and artwork. Pointing at the executable is
-a separate one-click step afterwards, so a game looks finished before you have
-said anything about where it lives on disk. Every executable you choose
-teaches Marquee a folder, and it searches those first next time — a library
-on whichever drive had room gets found, which guessing at `Program Files`
-never would.
-
-That is one code path instead of five undocumented per-store parsers, and it
-is why there is no EA integration to break.
-
-**Metadata needs no keys**, because Steam's store search, app details and art
-CDN are public and unauthenticated, and a Steam *store page* exists for most
-PC games regardless of where you bought them. Steam's own art has real gaps —
-recent releases publish a grey placeholder where a cover should be, and plenty
-of games have no transparent wordmark at all — so a free
-[SteamGridDB](https://www.steamgriddb.com) key can be pasted into Settings to
-fill them. Strictly optional, and the app says so when artwork is missing and
-the key that would fix it is not set. When no box art exists anywhere, one is
-composed from the game's key art and wordmark.
-
-**It is built for a sofa.** Fullscreen by default, the screen kept awake while
-you browse, an on-screen keyboard when a pad is what you are holding, and the
-launcher minimised the moment a game starts. Favourites, hidden games, hand-
-added games, artwork corrections and settings can be exported as a profile,
-kept current in a folder of your choosing, and are found on their own after a
-reinstall if that folder was beside your games.
+| Windows | `marquee_<version>_x64-setup.exe` or `.msi` | Not code-signed, so SmartScreen asks first: *More info → Run anyway* |
+| macOS, Apple silicon | `marquee_<version>_aarch64.dmg` | Not notarised, so the first launch is right-click → Open |
+| macOS, Intel | `marquee_<version>_x64.dmg` | As above |
+| Linux | `.AppImage`, `.deb` or `.rpm` | The AppImage needs `chmod +x`. Linux has had much less use than the other two |
 
 ## Controls
-
-Everything is reachable with a pad alone, a keyboard alone, or a mouse alone.
-A test holds every pad action to having a keyboard route, because "add a
-game" once spent a year pad-only.
 
 | Pad | Keyboard | |
 |---|---|---|
@@ -79,40 +40,91 @@ game" once spent a year pad-only.
 | **A** | Enter, Space | Play |
 | **B** | Escape, Backspace | Back |
 | **X** | X | Favourite |
-| **Y** | Y | Details — rename, fix artwork, hide |
-| **LB / RB** | Q / E | Page between the preset tabs: All, Favourites, Installed, Never played, Hidden |
-| **L3** | O | Sort — recency, playtime, name, size; favourites lead every order |
-| **R3** | / or F | Search — matches genre and studio too, so "roguelike" or "larian" finds something |
-| **Start** (☰) | Tab, M | Main menu — settings, rescan, quit, restart, shut down |
-| **Select** (⧉) | N | Add a game by name |
-| | F11 | Windowed or fullscreen; remembered |
-| | P | The performance HUD |
+| **Y** | Y | Details: rename, fix artwork, hide |
+| **LB / RB** | Q / E | Switch tab: All, Favourites, Installed, Never played, Hidden |
+| **L3** | O | Sort by recency, playtime, name or size |
+| **R3** | / or F | Search, including genre and studio |
+| **Start** | Tab, M | Main menu: settings, rescan, quit, restart, shut down |
+| **Select** | N | Add a game by name |
+| | F11 | Windowed or fullscreen |
+| | P | Performance HUD |
 
-The legend along the bottom follows whatever you last used — pad buttons for
-a pad, keys for a keyboard, and what clicking does for a mouse — and every
-entry in it is clickable. In the grid, click selects and double-click plays.
+## How it is built and shipped
 
-Motion is tunable in `design/tokens.json`: `--scroll-ms` for the grid glide,
-`--motion` as a global multiplier. Both go to zero under
-`prefers-reduced-motion`, which makes everything instant rather than degraded.
+The pipeline is as much a part of this project as the launcher.
 
-## Status
+- **Every pull request is built and tested on Linux, Windows and macOS**, with
+  warnings treated as errors.
+- **Merging to `main` is the release.** The release workflow waits for green CI
+  on that exact commit, builds four targets, signs the update bundles, checks
+  that the update manifest lists every platform, and only then publishes.
+- **The update signing key** lives in a GitHub environment that only `main` can
+  deploy from, so a pull request cannot reach it.
+- **Every third-party action is pinned to a commit SHA.** A lint
+  (`tools/check-workflows.py`) fails the build on an unpinned action, a job
+  without explicit permissions or a timeout, or event data pasted into a shell
+  script.
+- **Secret scanning with push protection, private vulnerability reporting and
+  Dependabot** are switched on.
 
-In daily use on a Windows machine in a lounge and a Mac on a desk, with a
-real library of a couple of hundred games. Linux is built and released on the
-same commits and has not been lived with.
+[docs/SECURITY.md](docs/SECURITY.md) covers what the app itself can do and what
+limits it. [docs/DEVSECOPS.md](docs/DEVSECOPS.md) lists the controls in place
+and the ones still to add, with the trade-offs of each.
 
-Measured on macOS with 2,000 cards: 0–2 dropped frames in 180, 0.3–2 ms input
-latency, 0.35 ms IPC round trip. The budgets and how they were arrived at are
-in [docs/PLAN.md](docs/PLAN.md) §2 and [docs/DEBUGGING.md](docs/DEBUGGING.md).
+## How development works now
 
-Not built: categories and collections; anything about a game that is owned
-but has never been installed; running a hand-added Windows executable on
-Linux, which would need Proton.
+I built Marquee and then handed its ongoing development to an AI loop. People
+decide what gets worked on and what ships; Claude Code does the work in
+between.
+
+1. **A person files an issue.**
+2. **An agent fixes it.** Claude Code works from the issue and opens a pull
+   request. If the issue needs a decision, it asks one question on the issue
+   with the `needs-decision` label and waits for the reply.
+3. **CI checks it** on Linux, Windows and macOS. If CI fails, an agent gets up
+   to three attempts at a fix, then stops and asks.
+4. **A second agent run reviews the diff** and leaves a comment. It cannot
+   approve anything.
+5. **A person reviews every pull request.** Nothing merges until they enable
+   it, and merging starts the release.
+
+Only someone with write access can start an agent run, and issue text is
+treated as untrusted input. One gap is worth stating plainly: the human review
+is a rule the project follows, not yet one GitHub enforces. Enforcing it is
+the first item in [docs/DEVSECOPS.md](docs/DEVSECOPS.md).
+
+[docs/AUTOMATION.md](docs/AUTOMATION.md) describes the whole loop.
+
+## What is next
+
+- **Catching problems before anyone files them.** A service that runs the
+  launcher in a sandbox, exercises it the way a person would, and opens an
+  issue when something breaks. That would close the loop: issues would come
+  from testing as well as from people, and the agents would pick them up as
+  usual.
+- **Agents as a team with separate roles.** Today one agent writes and a
+  second run reviews. The next step is distinct roles, such as a project
+  manager that breaks down and prioritises issues, a developer and a reviewer,
+  each with its own identity and only the permissions that role needs. A person
+  still approves.
+- **Better context management.** Each agent run starts cold and reads the same
+  long instructions. Shorter briefs per role, and a summary carried from one
+  run to the next, would make runs cheaper and more focused.
+- **A route to running offline.** The loop depends on a hosted model through
+  one action. Putting that behind a small interface would let a local model
+  take some roles, for cost or for privacy. It is the least likely of these in
+  the near term, because hosted models are well ahead for this kind of work.
+- **The security list.** The open items in
+  [docs/DEVSECOPS.md](docs/DEVSECOPS.md): static analysis, dependency auditing,
+  build provenance and pinned toolchains among them.
+
+On the launcher itself, not built yet: collections, games that are owned but
+not installed, and running a hand-added Windows game on Linux.
 
 ## Building it
 
-Rust stable, Node 20 and pnpm 9. On Linux, the WebKitGTK toolchain first:
+Rust stable, Node 20 and pnpm 9. On Linux, install the WebKitGTK toolchain
+first:
 
 ```bash
 sudo apt-get install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libudev-dev
@@ -122,60 +134,55 @@ Then:
 
 ```bash
 pnpm install
-pnpm app        # the real thing: a Tauri window with a real library
-pnpm dev        # a plain browser tab, for CSS work only — no backend, ?mock=40 for a library
+pnpm app        # the app, in a Tauri window with your real library
+pnpm dev        # a browser tab for CSS work only; add ?mock=40 for a fake library
+pnpm test       # every check CI runs
 pnpm tokens     # regenerate src/css/tokens.css from design/tokens.json
-pnpm logs       # tail the log — both runtimes, one file
-pnpm test       # every check CI runs: silence, workflows, board rules, vitest, tsc, cargo test
-pnpm check      # the static checks alone
-pnpm build:windows   # cross-compile a Windows .exe from a Mac; docs/WINDOWS.md
+pnpm logs       # tail the log
+pnpm build:windows   # cross-compile a Windows build from a Mac
 ```
 
-`pnpm app` puts a HUD in the bottom right with frame rate, input latency, IPC
-round trip and the webview that drew it, because priority #1 is performance
-and a budget nobody can see is a budget nobody keeps. Do not trust frame
-numbers from `pnpm dev` — a backgrounded tab has `requestAnimationFrame`
-throttled and will report nonsense.
+`pnpm app` shows a HUD with frame rate, input latency and IPC round trip.
+Frame numbers from `pnpm dev` are not reliable, because a background tab
+throttles animation.
 
-Design tokens live in `design/tokens.json` and are generated into CSS. Never
-edit `src/css/tokens.css` by hand; CI checks that the two agree.
+Design tokens live in `design/tokens.json` and are generated into CSS. Do not
+edit `src/css/tokens.css` by hand; CI checks the two agree.
 
-[CONTRIBUTING.md](CONTRIBUTING.md) has the conventions, and the one unusual
-rule.
+## Status
 
-## The documents
+In daily use on a Windows machine in a lounge and a Mac on a desk, with a
+library of a couple of hundred games. Linux is built and released from the same
+commits but has not been lived with.
+
+Measured on macOS with 2,000 cards: 0–2 dropped frames in 180, 0.3–2 ms input
+latency, 0.35 ms IPC round trip.
+
+## Documentation
 
 | | |
 |---|---|
-| [docs/PLAN.md](docs/PLAN.md) | The plan it was built from, kept as the record of why: scope, stack, priorities as numbers, what was rejected |
-| [docs/DEBUGGING.md](docs/DEBUGGING.md) | The log, the self-check that hit-tests what is painted, and the four silent bugs that made it necessary |
-| [docs/SECURITY.md](docs/SECURITY.md) | What a launcher can do, and what bounds it. Read before running anything that starts other programs |
-| [docs/UPDATES.md](docs/UPDATES.md) | How it updates itself, and the one mistake in the flow you cannot undo |
-| [docs/AUTOMATION.md](docs/AUTOMATION.md) | How it is maintained: issue → agent → pull request → CI → review → merge queue → release |
-| [docs/WINDOWS.md](docs/WINDOWS.md) | Cross-compiling from a Mac, and what to read when a pad does nothing on Windows |
-
-## Licence
-
-[PolyForm Strict 1.0.0](LICENSE.md). You may run it, read it and learn from
-it; you may not distribute it or ship something built from it. That is a
-source-available licence, not an open-source one, chosen deliberately: the
-code is public so that the updater has an endpoint it can read and so that
-the reasoning in the documents is there for anyone, not so that the launcher
-gets forked into a product. GitHub's own terms still allow the on-site fork
-button; the licence governs what may be done with the copy.
-
-The licensor is Thomas Freeman. Contributions are welcome under the same
-terms — see [CONTRIBUTING.md](CONTRIBUTING.md).
+| [docs/PLAN.md](docs/PLAN.md) | Scope, stack and priorities, and what was rejected |
+| [docs/SECURITY.md](docs/SECURITY.md) | What a launcher can do, and what limits it |
+| [docs/DEVSECOPS.md](docs/DEVSECOPS.md) | Pipeline security: what is in place and what is left |
+| [docs/AUTOMATION.md](docs/AUTOMATION.md) | Issue to agent to pull request to review to release |
+| [docs/UPDATES.md](docs/UPDATES.md) | How self-updating and signing work |
+| [docs/DEBUGGING.md](docs/DEBUGGING.md) | The log and the self-check |
+| [docs/WINDOWS.md](docs/WINDOWS.md) | Cross-compiling from a Mac |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Conventions for changes |
 
 ## Why
 
 [Playnite](https://playnite.link) is the reference and it is excellent: one
-library across every store, user data that survives, a fullscreen mode built
-for a pad. It is also Windows-only, heavier than a television interface needs
-to be, and themed through WPF resource dictionaries, where one malformed file
-silently drops the whole theme and the platform has no letter-spacing and no
-saturation filter at all.
+library across every store and a fullscreen mode built for a pad. It is also
+Windows-only and heavier than a television interface needs to be. Marquee is
+the same idea, cross-platform, with an interface that is plain CSS.
 
-Marquee is the same design with no host to fight.
+Priorities, in the order they break ties: performance, stability, UI.
 
-Priorities, in the order they break ties: **performance, stability, UI.**
+## Licence
+
+[PolyForm Strict 1.0.0](LICENSE.md). You may run it, read it and learn from it;
+you may not redistribute it or ship something built from it. It is
+source-available, not open source. The licensor is Thomas Freeman, and
+contributions are welcome under the same terms.

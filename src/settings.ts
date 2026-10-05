@@ -1,18 +1,4 @@
-/**
- * Settings.
- *
- * Two sections, and both exist because of something that cannot be recovered
- * any other way:
- *
- *   * **Artwork** — Steam publishes a grey placeholder where some covers should
- *     be and no wordmark at all for plenty of games. A SteamGridDB key fills
- *     those in. Optional, and the screen says so rather than presenting an
- *     empty field as though setup were incomplete.
- *
- *   * **Your profile** — favourites, hidden games, hand-added games and where
- *     they live, artwork corrections. A fresh install wipes the database
- *     holding it and none of it can be rebuilt by scanning.
- */
+/** The settings panel. */
 import { open as openDialog, save as saveDialog } from '@tauri-apps/plugin-dialog'
 import {
   diagnosticReport, exportProfile, getSettings, importProfile, setAutostart, setProfileFolder, setSetting,
@@ -28,9 +14,7 @@ import { el } from './dom'
 
 /**
  * Which control `up`/`down` lands on next, skipping disabled ones; `undefined`
- * when the action is not a move or nothing can take focus. This replaced
- * `settingsScrollDelta`, which scrolled the panel without focusing anything,
- * so `A` always saved the SteamGridDB key wherever you had scrolled to.
+ * when the action is not a move or nothing can take focus.
  */
 export function nextSettingsFocus(
   action: string,
@@ -41,9 +25,7 @@ export function nextSettingsFocus(
   if (count <= 0) return undefined
   const delta = action === 'up' ? -1 : action === 'down' ? 1 : 0
   if (delta === 0) return undefined
-  // Nothing focused yet (the panel just opened, say): down should reach the
-  // first control and up the last, rather than both landing wherever -1
-  // happens to wrap to.
+  // With nothing focused, down reaches the first control and up the last.
   let next = current < 0 ? (delta > 0 ? -1 : 0) : current
   for (let step = 0; step < count; step++) {
     next = (next + delta + count) % count
@@ -121,10 +103,8 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
       .catch((e) => toast(`Could not save that. ${String(e)}`, 'error'))
   }
 
-  // Windows only -- there is no Task Manager Startup tab to register with
-  // elsewhere, and src-tauri/src/autostart.rs has nothing to call. Hidden
-  // rather than disabled until hostInfo confirms the platform, below, so it
-  // never flashes on a Mac or Linux machine.
+  // Windows only. Hidden until hostInfo confirms the platform, so it never
+  // flashes up elsewhere.
   const startOnLoginToggle = el('button', 'action', launching.controls)
   startOnLoginToggle.hidden = true
   let startOnLogin = false
@@ -168,11 +148,7 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
   }
 
   // --- updates --------------------------------------------------------
-  //
-  // The automatic check is deliberately quiet and only fires once, well after
-  // startup, on an idle screen. That is right for daily use and useless for
-  // finding out whether the thing works, so there is a button that asks now
-  // and reports whatever it finds, including "nothing".
+  // The automatic check is quiet, so this button reports whatever it finds.
   const updates = section(
     body,
     'Updates',
@@ -209,8 +185,7 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
         })
       })
       .catch((e) => {
-        // Asked for explicitly, so unlike the automatic check this reports its
-        // failure rather than swallowing it.
+        // Asked for explicitly, so report the failure.
         logWarn('update', 'manual update check failed', e)
         updateStatus.textContent = `Could not check for updates. ${String(e)}`
       })
@@ -218,10 +193,8 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
   }
 
   // --- controller -----------------------------------------------------
-  //
-  // Silence here is unhelpful: a pad that does not work looks identical to an
-  // app that does not support one. On Windows the usual cause is not a fault
-  // at all, and saying so is the whole value of this section.
+  // A pad that does not work looks the same as an app that does not support
+  // one, so this section says what the backends actually see.
   const pad = section(
     body,
     'Controller',
@@ -233,14 +206,8 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
   const padDetail = el('pre', 'settings-diagnostic', pad.root)
 
   /**
-   * Say what is actually happening, not what is probably happening.
-   *
-   * This screen used to guess -- it told Windows users that only
-   * Xbox-compatible pads are visible and to install DS4Windows, which was
-   * wrong: the backend is Windows.Gaming.Input, which enumerates any HID game
-   * controller. A confident wrong answer sends someone off installing drivers
-   * they do not need, so this now reports the backend, every device it saw,
-   * and anything the webview can see that the backend could not.
+   * Report the backend, every device it saw, and what the webview sees, rather
+   * than guessing. A guess once sent Windows users off to install DS4Windows.
    */
   async function describePad(): Promise<void> {
     try {
@@ -256,8 +223,7 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
         padStatusLine.textContent =
           'This machine reports no gamepad support at all. Keyboard and mouse only.'
       } else if (web.length) {
-        // The interesting case: the native path is running and saw nothing,
-        // but the webview can see the pad, so the fallback is driving it.
+        // The native backend saw nothing, so the webview fallback is driving.
         padStatusLine.textContent =
           `${status.backend} found no controller, but the webview can see ` +
           `${web.length === 1 ? 'one' : web.length}. Marquee is using that instead — ` +
@@ -272,9 +238,7 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
         ? 'the webview' : status.backend
       const lines = [`driving: ${driving}`, `${status.backend} sees:`]
       if (status.silenced.length) {
-        // A control that has been switched off must say so somewhere findable.
-        // Doing it silently is the same class of mistake as the fault it was
-        // added to work around.
+        // A silenced control must say so somewhere findable.
         lines.push(`ignoring: ${status.silenced.join(', ')} — reporting faster than a hand can`)
       }
       for (const d of status.devices) lines.push(`  ${d}`)
@@ -282,8 +246,7 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
       lines.push('the webview sees:')
       for (const d of web) lines.push(`  ${d}`)
       if (!web.length) lines.push('  (nothing)')
-      // The two read genuinely different APIs, so either can see a pad the
-      // other cannot. Which is the whole reason both exist.
+      // Different APIs, so either can see a pad the other cannot.
       if (web.length !== status.connected) {
         lines.push(`(the two disagree: ${status.connected} native, ${web.length} in the webview)`)
       }
@@ -297,36 +260,21 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
   }
 
   /**
-   * What the controller is actually sending.
-   *
-   * Enumerating devices answers "is it there". It does not answer "why does
-   * this button do nothing", which is a different question and the one that
-   * keeps being asked -- a pad whose buttons arrive under names we do not map
-   * behaves exactly like a pad that sends nothing at all, and no amount of
-   * staring at a device list separates the two.
-   *
-   * So: press a button, see what arrived. Including the ones that mapped to
-   * nothing, which are the interesting ones.
+   * Show each input as it arrives, including unmapped ones: a pad whose
+   * buttons we do not map looks the same as one that sends nothing.
    */
   const testButton = el('button', 'action', pad.controls)
   testButton.textContent = 'Test a controller'
   const testOut = el('pre', 'settings-diagnostic', pad.root)
   testOut.hidden = true
 
-  /**
-   * A report you can paste, rather than one you have to read out.
-   *
-   * Three rounds of this project's controller debugging turned on a
-   * distinction between two device lists that was on screen the whole time.
-   * Asking somebody to transcribe a diagnosis is a poor way to get one.
-   */
+  /** A diagnostic report to paste into an issue rather than transcribe. */
   const reportButton = el('button', 'action', pad.controls)
   reportButton.textContent = 'Copy a debug report'
   reportButton.onclick = () => {
     void diagnosticReport()
       .then(async (report) => {
-        // The webview's own view of the hardware is not visible to Rust, and
-        // it is half the answer whenever the two disagree.
+        // Rust cannot see what the webview sees, so add it here.
         const web = webviewPads()
         const full =
           `${report}\n-- the webview sees --\n` +
@@ -347,7 +295,7 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
   let stopTest: (() => void) | undefined
 
   function note(line: string): void {
-    // Newest first: the thing you just pressed should not be off the bottom.
+    // Newest first, so the latest press is never off the bottom.
     seen.unshift(line)
     seen = seen.slice(0, 12)
     testOut.textContent = seen.join('\n')
@@ -382,10 +330,8 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
   importButton.textContent = 'Import…'
   const folderButton = el('button', 'action action-primary', profile.controls)
   const folderStatus = el('p', 'settings-status', profile.root)
-  // The file used to carry the SteamGridDB key, with a note here saying so.
-  // It no longer does: a profile exists to be copied about, and a secret in
-  // it travels with every copy. Said out loud, because a key that quietly
-  // failed to arrive on the new machine would look like artwork breaking.
+  // The key stays out of the profile, which gets copied about. Said out loud,
+  // or a missing key on a new machine looks like broken artwork.
   const profileWarning = el('p', 'settings-status', profile.root)
   profileWarning.textContent =
     'Your SteamGridDB key is not in the file, so a new machine needs it pasted ' +
@@ -475,22 +421,14 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
     }
   }
 
-  /**
-   * Every control `up`/`down` should be able to reach, top to bottom in the
-   * order they read on screen. Kept as one flat list rather than per-section
-   * groups because a controller does not care which section it is in, only
-   * what is next.
-   */
+  /** Every control `up`/`down` can reach, in screen order. */
   const focusables: HTMLElement[] = [
     field, saveKey, minimiseToggle, startOnLoginToggle, backgroundToggle, updateButton,
     testButton, reportButton, exportButton, importButton, folderButton,
   ]
 
   function isDisabled(el: HTMLElement): boolean {
-    // Hidden is the same class of bug as disabled for focus purposes -- see
-    // nextSettingsFocus's own doc comment. startOnLoginToggle is hidden
-    // outside Windows, and landing the cursor on it there would be a control
-    // that looks focused and does nothing.
+    // Hidden counts as disabled: startOnLoginToggle is hidden outside Windows.
     return el.hidden || (el instanceof HTMLButtonElement && el.disabled)
   }
 
@@ -498,11 +436,9 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
     open = false
     root.hidden = true
     field.blur()
-    // Closing with the test running left it tapping every press in the
-    // library, and the panel reopened mid-test with a button that said Stop.
+    // Or the test keeps tapping every press in the library.
     setTesting(false)
-    // The field this screen owns is the only reason the on-screen keyboard is
-    // ever attached here; leaving it up after the field is gone is issue #18.
+    // Close the on-screen keyboard with the field (issue #18).
     onClose?.()
   }
 
@@ -547,9 +483,8 @@ export function createSettings(onChanged: () => void, onClose?: () => void): Set
       if (action === 'b') { close(); return true }
       if (action === 'a') {
         const active = document.activeElement
-        // The field keeps its old shortcut -- A saves the key -- because
-        // clicking a text input does nothing. Everything else is a real
-        // button now that it can actually be reached, so A is just a click.
+        // A on the field saves the key, since clicking a text input does
+        // nothing; elsewhere A is a click.
         if (active === field) void commitKey()
         else if (active instanceof HTMLElement && focusables.includes(active)) active.click()
         return true

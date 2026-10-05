@@ -1,12 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createFrameMeter, resolveBackgroundStyle } from '../perf'
 
-/**
- * The background style is read from a saved setting string, and the whole
- * point of this project's silence rule is that a value nobody expected must
- * not resolve to a background with neither grain nor blur -- a blank window
- * that looks fine in a screenshot and isn't.
- */
 describe('resolveBackgroundStyle', () => {
   it('recognises blur', () => {
     expect(resolveBackgroundStyle('blur')).toBe('blur')
@@ -19,11 +13,6 @@ describe('resolveBackgroundStyle', () => {
   })
 })
 
-/**
- * The meter is a development instrument, and it was running a callback every
- * frame in every release build from the moment the app started. It must cost
- * nothing until somebody opens the readout.
- */
 describe('the frame meter', () => {
   let frame: ((now: number) => void) | undefined
   let requests = 0

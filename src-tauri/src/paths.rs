@@ -1,7 +1,5 @@
-//! Where Marquee keeps its own files.
-//!
-//! Plain platform conventions with no dependency on an AppHandle, matching
-//! `log.rs`, so anything can find them at any point in startup.
+//! Where Marquee keeps its own files. No AppHandle needed, so anything can
+//! find them at any point in startup.
 
 use std::path::PathBuf;
 
@@ -12,14 +10,8 @@ fn home() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir)
 }
 
-/// Durable application data: the library, user data, settings.
-///
-/// Redirected under test for the same reason as the log directory: a test run
-/// must never touch a real user's database.
-///
-/// Kept strictly separate from `cache_dir` so that clearing the cache can
-/// never reach anything the user authored -- a mistake you cannot take back
-/// once people have libraries. `store.rs` puts marquee.db here.
+/// Durable application data: the library, user data, settings. Redirected
+/// under test so a test run never touches a real user's database.
 pub fn data_dir() -> PathBuf {
     if cfg!(test) {
         return std::env::temp_dir().join("marquee-test-data");
@@ -41,9 +33,8 @@ pub fn data_dir() -> PathBuf {
         .join("marquee");
 }
 
-/// Everything here is rebuildable by deleting it and running again. Metadata
-/// responses and, later, resized artwork. Kept separate from `data_dir` so
-/// "clear the cache" can never touch anything the user authored.
+/// Rebuildable data only. Kept apart from `data_dir` so clearing the cache
+/// can never delete anything the user authored.
 pub fn cache_dir() -> PathBuf {
     if cfg!(test) {
         return std::env::temp_dir().join("marquee-test-cache");
@@ -73,9 +64,6 @@ pub fn ensure(dir: &std::path::Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
 
-    /// The split these two enforce is not recoverable once it is wrong: if
-    /// user data ever lands under the cache directory, "clear the cache"
-    /// deletes someone's library and there is nothing to restore it from.
     #[test]
     fn data_and_cache_are_never_the_same_place() {
         assert_ne!(data_dir(), cache_dir());
@@ -83,8 +71,6 @@ mod tests {
         assert!(!cache_dir().starts_with(data_dir()));
     }
 
-    /// Both are redirected under test so a `cargo test` run can never touch
-    /// the database or the artwork cache of the person running it.
     #[test]
     fn tests_are_redirected_away_from_real_user_files() {
         let tmp = std::env::temp_dir();
@@ -120,8 +106,7 @@ mod tests {
 
     #[test]
     fn ensure_reports_a_path_it_cannot_create() {
-        // A file where a directory should be. Silently succeeding here is how
-        // a cache write fails on every launch with nothing in the log.
+        // A file where a directory should be.
         let f = std::env::temp_dir().join("marquee-paths-blocker");
         std::fs::write(&f, b"x").unwrap();
         assert!(ensure(&f.join("child")).is_err());

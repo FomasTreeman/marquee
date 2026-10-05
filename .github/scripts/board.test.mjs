@@ -1,12 +1,6 @@
 /**
- * The board rules, exercised without a network.
- *
+ * The board rules, exercised without a network, including the failure states.
  * Run with: node .github/scripts/board.test.mjs
- *
- * These are the rules that decide what a person sees when they come back to a
- * pile of work, so every state a real issue can reach is checked -- including
- * the ones that only happen when something goes wrong, which are the ones that
- * used to leave a card lying about a thing nobody was doing.
  */
 import { readFileSync } from 'node:fs'
 import { CONFIG, statusFor, labelsFor, factsFor, reconcile, shouldPickUp } from './board.mjs'
@@ -40,16 +34,12 @@ check('a red pull request is not review-ready even while working',
   statusFor(issue({ openPr: 7, prFailing: true, labels: ['claude-working'] })), S.inProgress)
 check('a pull request outranks a stale working label',
   statusFor(issue({ openPr: 7, labels: ['claude-working'] })), S.inReview)
-// Both mean "waiting on a person", and the question is the more specific of
-// the two: a `no-ai` issue that the agent was nonetheless asked about, and
-// stopped to ask on, is a card someone has to answer, not one to file away.
+// A question the agent stopped on still needs a person's answer.
 check('a question outranks the human queue',
   statusFor(issue({ labels: ['no-ai', 'needs-decision'] })), S.needsDecision)
 
 console.log('\nthe card never goes backwards')
-// `claude-working` comes off when a run ends. With no pull request the answer
-// used to fall through to Todo, so a card went from In Progress back to the
-// queue it started in and a failed run looked like an untouched issue.
+// A failed run used to send the card from In Progress back to Todo.
 check('one attempt, nothing to show, still queued',
   statusFor(issue({ labels: ['claude'], attempts: 1 })), S.todo)
 check('two attempts, still queued',
@@ -67,8 +57,7 @@ check('a human queue is not pushed to Needs Decision',
 
 console.log('\nwho gets picked up out of Todo')
 check('queued for the agent, never offered', shouldPickUp(issue({ labels: ['claude'] })), true)
-// The sweep passes whatever it computed, and "no handover comment" has been
-// both `undefined` and `null` depending on who wrote the caller.
+// Callers have passed both `undefined` and `null` for "never offered".
 check('null for never offered means the same', shouldPickUp(issue({ labels: ['claude'] }), null), true)
 check('queued for a person is not ours', shouldPickUp(issue({ labels: ['no-ai'] })), false)
 check('already running', shouldPickUp(issue({ labels: ['claude-working'] })), false)
@@ -77,18 +66,14 @@ check('a pull request is already open', shouldPickUp(issue({ openPr: 7 })), fals
 check('a red pull request is still not ours', shouldPickUp(issue({ openPr: 7, prFailing: true })), false)
 check('closed', shouldPickUp(issue({ state: 'CLOSED' })), false)
 
-// The cooldown is what stops a sweep re-offering the same failing issue
-// every time it runs. It is short, because three attempts already bound the
-// cost; it exists so two sweeps in quick succession do not both offer it.
+// The cooldown stops two sweeps in quick succession offering the same issue.
 check('offered twenty minutes ago, so not again yet', shouldPickUp(issue({ labels: ['claude'] }), 0.33), false)
 check('offered an hour ago, so try again', shouldPickUp(issue({ labels: ['claude'] }), 1), true)
 check('exactly at the boundary counts', shouldPickUp(issue({ labels: ['claude'] }), 6, 6), true)
 check('a longer cooldown holds it back', shouldPickUp(issue({ labels: ['claude'] }), 6, 12), false)
 
-// Triage put the label on eleven seconds ago. A run is starting and has not
-// yet set `claude-working`, so the issue reads as Todo with nobody on it, and
-// a sweep that fires on the previous run finishing lands in exactly that gap.
-// It handed over, a second run started, and the two cancelled each other.
+// A run just triggered has not yet set `claude-working`; handing over in that
+// gap started a second run and the two cancelled each other.
 check('labelled moments ago, so a run is already on its way',
   shouldPickUp(issue({ labels: ['claude'], minutesSinceTrigger: 0.2 })), false)
 check('labelled a while ago and still nobody on it, so it is really waiting',
@@ -114,9 +99,7 @@ check('nothing to do is nothing to do',
 check('it never sets claude-working itself',
   labelsFor(issue({ labels: [] })).add.includes('claude-working'), false)
 
-// The column said Needs Decision at three attempts while the label did not,
-// and the label is what claude.yml reads to let a plain reply restart the
-// issue. A card in Needs Decision with no label was one nobody could resume.
+// claude.yml reads the label to let a reply restart the issue.
 check('three attempts with nothing to show earns needs-decision',
   labelsFor(issue({ labels: ['claude'], attempts: 3 })), { add: ['needs-decision'], remove: [] })
 check('two attempts do not',
@@ -138,10 +121,8 @@ check('already correct, so no writes', labelsFor(settled), { add: [], remove: []
 check('and the same column', statusFor(settled), S.inReview)
 
 // ---------------------------------------------------------------------------
-// Reading the facts. `factsFor` takes `github` as an argument precisely so it
-// can be handed a fake one, and the two bugs below were both in the shape of
-// the query rather than in the rules -- which is why the rules all passed
-// while the card sat still.
+// Reading the facts, through a fake `github`. Both past bugs here were in the
+// query shape, not the rules.
 // ---------------------------------------------------------------------------
 
 const pr = (number, over = {}) => ({
@@ -154,8 +135,6 @@ const labelled = (name, createdAt) => ({ __typename: 'LabeledEvent', label: { na
 const reopened = () => ({ __typename: 'ReopenedEvent' })
 const unlabelled = (name) => ({ __typename: 'UnlabeledEvent', label: { name } })
 
-// A fake `github` that records the query it was given and replays the linked
-// pull requests and the label timeline.
 const fakeGithub = ({ prs = [], events = [] }, spy = {}) => ({
   graphql: async (query) => {
     spy.query = query
@@ -194,10 +173,8 @@ check('checks still running are not a failure',
   (await facts({ prs: [pr(7, {
     commits: { nodes: [{ commit: { statusCheckRollup: { state: 'PENDING' } } }] } })] })).prFailing, false)
 
-// Three unrelated pull requests cited #76 in their commit messages, and a
-// timeline scan for CrossReferencedEvent took the newest of them as its pull
-// request. The card sat In Review with nothing to review. Only a pull request
-// that *closes* the issue counts, and that is a different field entirely.
+// A timeline cross-reference scan once took an unrelated PR that mentioned
+// the issue as its pull request. Only a closing reference counts.
 const spy = {}
 await facts({ prs: [pr(7)] }, spy)
 check('a mere mention is not a pull request for the issue',
@@ -211,9 +188,7 @@ check('no runs yet', (await facts({})).attempts, 0)
 check('each time the working label goes on is a run',
   (await facts({ events: [labelled('claude-working'), labelled('claude'), labelled('claude-working')] })).attempts, 2)
 
-// A fix merged, the issue closed, and a person reopened it because the fix
-// did not do what was intended. The run that delivered that fix was not a
-// failed attempt at the amendment, so it does not count towards the three.
+// A reopen starts a new brief, so earlier runs do not count.
 check('attempts restart when the issue is reopened',
   (await facts({ events: [labelled('claude-working'), labelled('claude-working'), reopened(), labelled('claude-working')] })).attempts, 1)
 check('a reopen with no run since counts none',
@@ -221,9 +196,8 @@ check('a reopen with no run since counts none',
 check('reopens are asked for, or nothing separates the old attempts from the new',
   /REOPENED_EVENT/.test(spy.query), true)
 
-// A run that stops to ask a question did its job. The answer is a new brief,
-// and the count starts again from it -- the moment claude.yml takes
-// `needs-decision` off to mark the answering run in progress.
+// An answered question is a new brief: the count restarts when claude.yml
+// removes `needs-decision`.
 check('attempts restart when a needs-decision question is answered',
   (await facts({ events: [labelled('claude-working'), labelled('needs-decision'), unlabelled('needs-decision'), labelled('claude-working')] })).attempts, 1)
 check('taking off some other label restarts nothing',
@@ -231,8 +205,7 @@ check('taking off some other label restarts nothing',
 check('a label coming off is not a run starting',
   (await facts({ events: [labelled('claude-working'), unlabelled('claude-working')] })).attempts, 1)
 
-// A timeline is oldest first. `first: 50` on an issue with any history returns
-// the opening chatter and drops the newest labels off the end.
+// The timeline is oldest first, so `first: 50` dropped the newest labels.
 check('the timeline is read from the newest end', /timelineItems\(last: 50/.test(spy.query), true)
 
 console.log('\nhow recently the agent was asked')
@@ -247,9 +220,8 @@ check('the label event carries its time, or there is nothing to measure',
   /on LabeledEvent \{ createdAt/.test(spy.query), true)
 
 // ---------------------------------------------------------------------------
-// Reconciling. The hourly sweep visits every open issue whether or not
-// anything changed, so what it does when nothing has changed is the case that
-// decides what the sweep costs.
+// Reconciling. The hourly sweep visits every open issue, so the unchanged
+// case decides what it costs.
 // ---------------------------------------------------------------------------
 
 const project = {
@@ -257,7 +229,6 @@ const project = {
   field: { id: 'F_1', options: Object.values(S).map((name, i) => ({ id: `O_${i}`, name })) },
 }
 
-// Records every call so a run that should be silent can be shown to be silent.
 function harness({ column, labels = [], prs = [pr(7)], card = true, gone = false }) {
   const calls = { mutations: [], labelWrites: [], logs: [] }
   const github = {
@@ -291,8 +262,7 @@ function harness({ column, labels = [], prs = [pr(7)], card = true, gone = false
 
 console.log('\nreconciling an issue that has not changed')
 
-// A green pull request already in In Review and already labelled: the sweep's
-// ordinary case, and it used to cost a mutation per issue per hour regardless.
+// The sweep's ordinary case, which used to cost a mutation every hour.
 const settledRun = harness({ column: S.inReview, labels: ['in-review'] })
 await settledRun.run()
 check('nothing is written when nothing moved', settledRun.calls.mutations, [])
@@ -310,39 +280,26 @@ check('a correct column with a missing label still writes the label',
   relabelRun.calls.labelWrites, ['+in-review'])
 check('but does not rewrite the column', relabelRun.calls.mutations, [])
 
-// An issue with no card yet: the `issues: opened` path, and what the hourly
-// sweep does for an issue that was filed while the board was broken.
+// No card yet: a new issue, or one filed while the board was broken.
 const newRun = harness({ column: undefined, labels: [], card: false })
 await newRun.run()
 check('an issue with no card is added and then placed', newRun.calls.mutations, ['add', 'update'])
 
-// A number that no longer resolves -- transferred, deleted, or a pull
-// request's number handed to the issue path by mistake -- must write nothing
-// rather than add a card for it.
+// A number that no longer resolves must write nothing.
 const goneRun = harness({ column: S.todo, gone: true })
 await goneRun.run()
 check('an issue that is not there writes nothing', goneRun.calls.mutations, [])
 check('and touches no labels', goneRun.calls.labelWrites, [])
 
 // ---------------------------------------------------------------------------
-// The queries themselves, read from the source.
-//
-// Everything above hands `projectApi` and `github.graphql` a fake, and a fake
-// will accept any string at all. So a query can be malformed in a way that
-// every test passes and the board still dies on its next real run -- which is
-// exactly what happened: a `$field` variable was declared, filtered on in
-// JavaScript instead, and never used in the query body. GraphQL rejects that
-// outright ("Variable $field is declared by anonymous query but not used"),
-// the hourly sweep failed on every issue, and nothing here noticed.
-//
-// This reads the actual file, so it cannot be fooled by a stub.
+// The queries, read from source, since the fakes above accept any string.
+// An unused `$field` variable once broke every real sweep while tests passed.
 // ---------------------------------------------------------------------------
 
 console.log('\nthe queries are well formed')
 
 const source = readFileSync(new URL('./board.mjs', import.meta.url), 'utf8')
-// Every query lives in a backtick literal. Odd-numbered pieces of a backtick
-// split are the literals themselves.
+// Odd-numbered pieces of a backtick split are the literals.
 const literals = source.split('`').filter((_, i) => i % 2 === 1)
 const operations = literals.filter((l) => /\b(query|mutation)\s*\(/.test(l))
 

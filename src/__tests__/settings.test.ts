@@ -1,14 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { nextSettingsFocus } from '../settings'
 
-/**
- * The settings overlay swallows every action while open (so closing it never
- * lands the grid selection somewhere unexpected), and up/down used to just
- * scroll the panel by a fixed pixel amount -- so the left stick moved the
- * view, but nothing was ever actually focused, and A always did the one
- * thing it had always done (saved the SteamGridDB key) no matter where you
- * had scrolled to. See src/settings.ts's `handle`.
- */
 describe('nextSettingsFocus', () => {
   const noneDisabled = () => false
 

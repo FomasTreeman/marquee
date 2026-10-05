@@ -1,51 +1,24 @@
-# The automation itself goes red. Somebody has to be told, and it should not
-# have to be a person who happened to look at the Actions tab.
-#
-# ci-repair.yml covers a pull request whose CI failed: there is a branch, a
-# diff and an open pull request, so the fix has somewhere to go. Nothing
-# covered the other shape. Board failed on `main` on every run for half an
-# hour -- one unused GraphQL variable, a one-line fix -- and the only sign was
-# a cross on a tab nobody had open. There is no branch to push to and no pull
-# request to comment on, so there was nowhere for a repair to happen.
-#
-# So this turns it into the thing this repository already knows how to work
-# through: an issue, with `@claude` in the body, which claude.yml picks up and
-# turns into a pull request against main.
-#
-# ---------------------------------------------------------------------------
-# The failure mode of a workflow that files issues is filing forty of them.
-# Board runs hourly, so a break that lasts a day is twenty-four chances to spam
-# the tracker. Two things stop that:
-#
-#   * one open issue per workflow, found by a marker in the body and updated
-#     rather than duplicated
-#   * main only -- a failure on a branch belongs to that branch's pull request
-#
-# It files the issue with CLAUDE_WORKFLOW_TOKEN when that exists, for the same
-# reason everything else here does: an issue opened by GITHUB_TOKEN wakes
-# nothing, so the `@claude` in its body would sit there being read by nobody.
-# Without the secret the issue is still filed and still correct, and says
-# plainly that it needs a person to start it.
-# ---------------------------------------------------------------------------
+# Files an issue, with `@claude` in the body, when an automation workflow fails
+# on main, so claude.yml picks it up. ci-repair.yml covers failed pull requests;
+# this covers failures with no branch or pull request to fix them on. Keeps one
+# open issue per workflow. Uses CLAUDE_WORKFLOW_TOKEN when present, because an
+# issue opened by GITHUB_TOKEN triggers no workflows.
 
 name: Automation broken
 
 on:
   workflow_run:
-    # Pick up Todo, Merge queue and Triage failing on main have the same
-    # shape: no branch, no pull request, nobody looking. A queue that stopped
-    # draining is the failure this repository is worst at noticing.
+    # Workflows that run on main with no pull request for a failure to land on.
     workflows: [Board, Release, Token check, Pick up Todo, Merge queue, Triage]
     types: [completed]
 
 permissions:
   issues: write
-  # For the one retry below, and nothing else in here uses it.
+  # Only for the retry below.
   actions: write
 
 concurrency:
-  # Serialised, so two workflows failing at once cannot both decide no issue
-  # exists yet and both file one.
+  # Serialised so two simultaneous failures cannot both file an issue.
   group: automation-broken
   cancel-in-progress: false
 
@@ -57,15 +30,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      # Once, before anyone is told. A release leg died on a single 403 from
-      # the Releases API while the three legs either side of it went through,
-      # and the issue filed for it cost two agent runs to conclude "retry it"
-      # and then stop to ask whether it could. A second failure in a row is
-      # not a blip, and that one is filed.
-      #
-      # Re-running failed jobs only. The jobs that passed keep their outputs,
-      # which for Release means the version already decided and the draft
-      # already half-built are picked up rather than started over.
+      # Retry failed jobs once before filing: a single transient 403 once cost
+      # two agent runs. Passed jobs keep their outputs, so Release resumes.
       - name: Retry it once first
         id: retry
         if: github.event.workflow_run.run_attempt == 1
@@ -80,13 +46,8 @@ jobs:
           echo "retried=true" >> "$GITHUB_OUTPUT"
           echo "::notice::$NAME failed on its first attempt; re-running the failed jobs before filing anything."
 
-      # Two steps, two tokens, on purpose. The "failed again" note on an issue
-      # that already exists is bookkeeping and goes through GITHUB_TOKEN, which
-      # wakes nothing. It used to go through the PAT, and claude.yml now
-      # restarts a `needs-decision` issue on any owner comment -- so an
-      # automation issue that had stopped to ask a question would have been
-      # restarted every hour by its own "failed again" note, and the question
-      # never answered.
+      # The "failed again" comment uses GITHUB_TOKEN so it wakes nothing. Through
+      # the PAT it would restart a `needs-decision` issue every hour.
       - id: existing
         if: steps.retry.outputs.retried != 'true'
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
@@ -95,8 +56,7 @@ jobs:
           script: |
             const { owner, repo } = context.repo
             const run = context.payload.workflow_run
-            // The marker is per workflow, so Board breaking does not silence a
-            // later Release break.
+            // Per workflow, so one broken workflow does not hide another.
             const marker = `<!-- automation-broken:${run.name} -->`
             core.setOutput('marker', marker)
 
@@ -106,8 +66,7 @@ jobs:
             const existing = open.find((i) => !i.pull_request && (i.body || '').includes(marker))
             if (!existing) return
 
-            // Updated, not duplicated. Board runs hourly; a break that lasts
-            // a day would otherwise be twenty-four identical issues.
+            // Comment rather than file a duplicate every hour.
             await github.rest.issues.createComment({
               owner, repo, issue_number: existing.number,
               body: `${run.name} failed again: ${run.html_url}`,

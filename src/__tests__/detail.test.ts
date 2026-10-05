@@ -12,21 +12,12 @@ vi.mock('../library', async (importOriginal) => {
   }
 })
 
-/**
- * Renaming is the one place the user overrides metadata by hand, so the rule
- * for when an override is written matters more than it looks. Storing a title
- * identical to the one already showing pins the name against everything the
- * metadata worker learns later, and it does it invisibly -- the game looks
- * unchanged the day you do it.
- */
 describe('renameIntent', () => {
   it('does nothing when the name is unchanged', () => {
     expect(renameIntent('Portal 2', 'Portal 2')).toEqual({ kind: 'none' })
   })
 
   it('ignores whitespace either side when deciding that', () => {
-    // Opening the field and pressing save should never write anything, and a
-    // stray space from an on-screen keyboard is not a change.
     expect(renameIntent('Portal 2', '  Portal 2  ')).toEqual({ kind: 'none' })
     expect(renameIntent(' Portal 2', 'Portal 2')).toEqual({ kind: 'none' })
   })
@@ -36,15 +27,12 @@ describe('renameIntent', () => {
   })
 
   it('treats an empty field as "restore the original"', () => {
-    // The only route back to the provider's own name. Storing '' instead would
-    // leave a game with no title at all and no way to fix it.
     expect(renameIntent('My Name', '')).toEqual({ kind: 'clear' })
     expect(renameIntent('My Name', '   ')).toEqual({ kind: 'clear' })
   })
 
   it('clears rather than doing nothing when the game had no name either', () => {
-    // A game with no title yet and an empty field still has to clear: there
-    // may be an override behind the blank that the user is trying to remove.
+    // There may be an override behind the blank that the user wants removed.
     expect(renameIntent('', '')).toEqual({ kind: 'clear' })
   })
 
@@ -53,14 +41,7 @@ describe('renameIntent', () => {
   })
 })
 
-/**
- * The bug this guards against: `beginRename` used to unhide the field and
- * call `.focus()` in the same synchronous tick. WebKit ignores a focus() on
- * an element that is still `display: none` at the moment it runs, so the
- * field opened looking focused and a physical keyboard typed into nothing.
- * picker.ts and settings.ts already defer with `requestAnimationFrame`; this
- * proves rename does the same rather than calling focus straight away.
- */
+// WebKit ignores focus() on an element revealed in the same tick.
 describe('revealThenFocus', () => {
   it('does not focus until the scheduled frame runs', () => {
     const calls: string[] = []
@@ -76,11 +57,7 @@ describe('revealThenFocus', () => {
   })
 })
 
-/**
- * A stand-in for the DOM elements `createDetail` builds: this project has no
- * jsdom, but `el()` only ever calls createElement/appendChild and sets a
- * handful of properties, so a plain object with those covers it.
- */
+/** Enough of a DOM element for `el()` and `createDetail`, since there is no jsdom. */
 function fakeElement(): Record<string, unknown> {
   let text = ''
   let kids: Record<string, unknown>[] = []
@@ -110,17 +87,8 @@ function findByText(
   return undefined
 }
 
-/**
- * The bug this guards against (issue #16): the hide button called a bare
- * `close()`. `createDetail` never declared a local `function close()`, only a
- * `close()` *method* on the returned view, so the bare call resolved to the
- * global `Window.close()` -- which does not exist under Node and throws
- * `ReferenceError: close is not defined`. That was thrown inside the
- * `.then()`, so it was swallowed by the handler's own `.catch()` and turned
- * into a toast; `onChanged()` was never reached and the overlay never closed,
- * which is why hiding a game looked like the whole screen going blank rather
- * than the library reloading without that game.
- */
+// Issue #16: a bare `close()` once resolved to `window.close()`, so the
+// overlay never closed and the library never reloaded.
 describe('createDetail hide button', () => {
   const game: Game = {
     id: 'steam:220', provider: 'steam', providerId: '220', title: 'Half-Life 2',
@@ -149,13 +117,6 @@ describe('createDetail hide button', () => {
     expect(onChanged).toHaveBeenCalledOnce()
   })
 
-  /**
-   * Hide and Uninstall sit in the corner, outside the action row, and the pad
-   * only ever moved along the row -- so for a long while they were reachable
-   * with a mouse and nothing else, on a launcher whose whole premise is a
-   * sofa. `left` from the first action wraps onto the corner, and `a` presses
-   * whatever the pad landed on.
-   */
   it('reaches Hide from the pad, by wrapping left off the action row', async () => {
     const body = fakeElement()
     const doc: Record<string, unknown> = {
@@ -194,12 +155,6 @@ describe('createDetail hide button', () => {
   })
 })
 
-/**
- * View in Steam Store is Steam-only: a hand-added game has no store page for
- * us to link, and nothing in its record to build one from. Before the
- * `game.provider === 'steam'` guard, this button would have shown for a
- * manual game too and handed Steam an id it has never heard of.
- */
 describe('createDetail view in store button', () => {
   const steamGame: Game = {
     id: 'steam:220', provider: 'steam', providerId: '220', title: 'Half-Life 2',
@@ -245,12 +200,6 @@ describe('createDetail view in store button', () => {
   })
 })
 
-/**
- * Before this, `handle()` sent every `a` straight to `onPlay()` and left
- * `left`/`right` unhandled -- swallowed along with everything else while the
- * view was open, per the comment on `handle`. That meant no route to Find
- * artwork or Rename, and no way to move between action buttons, at all.
- */
 describe('nextActionFocus', () => {
   it('moves right from nothing focused to the first button', () => {
     expect(nextActionFocus('right', -1, 3)).toBe(0)

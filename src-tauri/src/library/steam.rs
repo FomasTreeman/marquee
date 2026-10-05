@@ -1,30 +1,21 @@
-//! The Steam provider — the only automated one.
-//!
-//! Reads `libraryfolders.vdf` for the library roots, then every
-//! `appmanifest_*.acf` inside each. The format is byte-identical on Windows,
-//! macOS and Linux; only the base path differs, which is most of why §7 of the
-//! plan no longer sequences platforms.
+//! The Steam provider. Reads `libraryfolders.vdf` for the library roots, then each
+//! `appmanifest_*.acf` in them. The format is the same on every OS; only the path differs.
 
 use std::path::{Path, PathBuf};
 
 use super::{Game, LibraryProvider};
 use crate::{log_warn, vdf};
 
-/// Steam sets bit 2 on a fully installed app. A manifest can exist for a game
-/// that is only queued or partially downloaded, and those should not appear as
-/// playable.
+/// Steam sets bit 2 on a fully installed app. Queued or partial downloads also have
+/// manifests and should not appear as playable.
 const STATE_FULLY_INSTALLED: u64 = 4;
 
-/// Steam sets this bit when the local content is out of date and needs
-/// downloading before the game will run -- separate from whether it is
-/// currently doing that download, which is `STATE_UPDATING_MASK` below.
+/// The local content is out of date and must download before the game runs. Whether it
+/// is downloading now is `STATE_UPDATING_MASK`.
 const STATE_UPDATE_REQUIRED: u64 = 2;
 
-/// Every bit observed set while Steam is actively fetching or applying an
-/// update. `StateFlags` is undocumented, like everything else this file reads
-/// off Valve -- docs/PLAN.md §11 -- so this is a best effort checked against a
-/// real captured manifest (`appmanifest_partial.acf`, 1026 = update required
-/// + update started) rather than a specification.
+/// Bits set while Steam fetches or applies an update. `StateFlags` is undocumented, so this
+/// is checked against a real manifest (`appmanifest_partial.acf`, 1026), not a spec.
 const STATE_UPDATING_MASK: u64 = 0x100 // Update Running
     | 0x200 // Update Paused
     | 0x400 // Update Started
@@ -35,8 +26,7 @@ const STATE_UPDATING_MASK: u64 = 0x100 // Update Running
     | 0x80000 // Staging
     | 0x100000; // Committing
 
-/// Valve's own tools and runtimes have appmanifests like any game. Nobody
-/// wants Proton in their library.
+/// Valve's tools and runtimes have appmanifests like any game; keep them out of the library.
 fn is_tool(appid: &str, name: &str) -> bool {
     const TOOL_IDS: &[&str] = &[
         "228980",  // Steamworks Common Redistributables
@@ -53,8 +43,7 @@ fn is_tool(appid: &str, name: &str) -> bool {
 pub struct Steam;
 
 impl Steam {
-    /// Where Steam keeps itself. Ordered by likelihood; the first that exists
-    /// wins.
+    /// Where Steam keeps itself, most likely first.
     fn roots() -> Vec<PathBuf> {
         let home = dirs_home();
         let mut out = Vec::new();
@@ -96,18 +85,12 @@ impl Steam {
             .find(|p| p.join("steamapps").is_dir())
     }
 
-    /// Is the Steam client up?
-    ///
-    /// Matters because of *how* a game gets launched. Handing `steam://` to the
-    /// system when Steam is closed makes Steam start, and a cold Steam start
-    /// opens its library window over everything -- on a television, the
-    /// launcher disappearing behind a storefront. If Steam is already running,
-    /// the same URI launches the game without raising anything.
+    /// Whether the Steam client is running. Opening `steam://` while Steam is closed starts it
+    /// cold, and a cold start raises its library window over the launcher.
     pub fn is_running() -> bool {
         #[cfg(target_os = "windows")]
         {
-            // Steam keeps a live pid here, and we already read this hive.
-            // Cheaper and more reliable than shelling out to tasklist.
+            // Steam keeps a live pid here; cheaper and more reliable than tasklist.
             use winreg::enums::HKEY_CURRENT_USER;
             use winreg::RegKey;
             RegKey::predef(HKEY_CURRENT_USER)
@@ -134,22 +117,11 @@ impl Steam {
         }
     }
 
-    /// The appid Steam currently reports as running, if any.
+    /// The appid Steam reports as running, if any. A `steam://` launch leaves no child process
+    /// of ours to wait on, so `run::start` polls this to see the session end.
     ///
-    /// Steam updates it the instant a game starts or stops, and it is the
-    /// only live signal available for when a `steam://` hand-off session
-    /// ends: the game belongs to Steam's process tree from the moment the
-    /// URI is opened, not ours, so there is no child of our own to wait on
-    /// -- see `run`'s module doc, which is why `run::start` polls this.
-    ///
-    /// #94 first put this under `ActiveProcess`, by analogy with the `pid`
-    /// `is_running` reads there -- but a real Steam session never made it
-    /// fire, because `RunningAppID` is a client-wide flag, not part of the
-    /// process bookkeeping `ActiveProcess` holds (`pid`, `ActiveUser`, the
-    /// client DLL paths); it sits directly under the `Steam` key. Checked
-    /// there first, with the original `ActiveProcess` location as a fallback
-    /// in case a different Steam version does shape it the other way -- one
-    /// extra registry read, only on the miss.
+    /// `RunningAppID` sits directly under the `Steam` key. #94 read only `ActiveProcess`,
+    /// which never fired; that location stays as a fallback for other Steam versions.
     #[cfg(target_os = "windows")]
     fn running_app_id_from(steam: &winreg::RegKey) -> Option<u32> {
         steam
@@ -174,17 +146,11 @@ impl Steam {
             .and_then(|k| Self::running_app_id_from(&k))
     }
 
-    /// Start Steam without showing its window.
-    ///
-    /// `-silent` puts it straight in the tray. The alternative -- letting the
-    /// `steam://` URI start it -- opens the library window in front of
-    /// everything, which is the thing worth avoiding.
+    /// Start Steam with `-silent`, straight to the tray, so its library window does not appear.
     pub fn start_silently() -> Result<(), String> {
         #[cfg(target_os = "macos")]
         let mut command = {
-            // Steam's own binary rather than `open -a Steam`: going through
-            // `open` activates the app, which is exactly the window we are
-            // trying not to show.
+            // Not `open -a Steam`: that activates the app and shows the window.
             let mut c =
                 std::process::Command::new("/Applications/Steam.app/Contents/MacOS/steam_osx");
             c.arg("-silent");
@@ -215,18 +181,15 @@ impl Steam {
             .map_err(|e| format!("could not start Steam: {e}"))
     }
 
-    /// Every library folder Steam knows about, including the root itself.
-    ///
-    /// Steam stores games across multiple drives and records them here. Only
-    /// reading the install root is the classic way to miss most of a library.
+    /// Every library folder Steam knows about, including the root. Games on other drives
+    /// are only recorded here.
     fn library_paths(root: &Path) -> Vec<PathBuf> {
         let mut out = vec![root.to_path_buf()];
         let file = root.join("steamapps/libraryfolders.vdf");
         let Ok(text) = std::fs::read_to_string(&file) else {
             return out;
         };
-        // Loud, because the failure looks like a small library rather than
-        // a broken one: every game on the second drive is simply absent.
+        // Warn, because a parse failure looks like a small library rather than a broken one.
         let parsed = match vdf::parse(&text) {
             Ok(p) => p,
             Err(e) => {
@@ -259,19 +222,9 @@ impl Steam {
         out
     }
 
-    /// Games this account has played on this machine, from
-    /// `userdata/<id>/config/localconfig.vdf`.
-    ///
-    /// This is why the library is not just the handful of games currently
-    /// installed. Steam records real playtime and last-played per app, locally
-    /// and with no API key -- and unlike the Web API it needs no account
-    /// linking, and unlike the community profile endpoint it does not require
-    /// the profile to be public. Both of those were tried and neither works
-    /// without authentication any more.
-    ///
-    /// It is not the *owned* library: it covers apps with local config, which
-    /// in practice means anything launched or configured on this machine. That
-    /// is a far better default than nothing, and it is honest about what it is.
+    /// Games this account has played on this machine, from `userdata/<id>/config/localconfig.vdf`.
+    /// Gives playtime and last-played without an API key or a public profile. It covers apps
+    /// launched or configured here, not the whole owned library.
     fn played_games(root: &Path) -> Vec<Game> {
         let mut out = Vec::new();
         let Ok(users) = std::fs::read_dir(root.join("userdata")) else {
@@ -311,9 +264,7 @@ impl Steam {
                     id: format!("steam:{app_id}"),
                     provider: "steam".into(),
                     provider_id: app_id.clone(),
-                    // Filled in by the metadata worker. Empty rather than
-                    // "App 220", so the interface can show that it is still
-                    // arriving instead of showing something wrong.
+                    // Filled in by the metadata worker; empty so the UI shows it is loading.
                     title: String::new(),
                     installed: false,
                     update_available: false,
@@ -336,7 +287,7 @@ impl Steam {
         let app = match vdf::parse(&text) {
             Ok(v) => v.root_child()?.clone(),
             Err(e) => {
-                // One missing game with no trace is the silent kind of bug.
+                // Log it, or the game silently vanishes from the library.
                 log_warn!("steam", "{}: {e}; skipped", path.display());
                 return None;
             }
@@ -393,8 +344,7 @@ impl LibraryProvider for Steam {
         for lib in Self::library_paths(&root) {
             let dir = lib.join("steamapps");
             let Ok(entries) = std::fs::read_dir(&dir) else {
-                // A library folder recorded on a drive that is not plugged in
-                // is normal, not an error.
+                // A library on a drive that is not plugged in is normal.
                 continue;
             };
             for entry in entries.flatten() {
@@ -418,14 +368,8 @@ impl LibraryProvider for Steam {
 }
 
 impl Steam {
-    /// Played-but-not-installed games fill out the rest of the library. An
-    /// installed manifest is the better record, so it wins on the fields it
-    /// has -- but playtime only exists in localconfig, so it is merged in
-    /// either way.
-    ///
-    /// By index rather than a search of the list per played game: a couple of
-    /// thousand played against a few hundred installed is a few hundred
-    /// thousand string compares, on every scan.
+    /// Merge in played-but-not-installed games. The installed manifest wins on its own fields,
+    /// but playtime only exists in localconfig. Indexed by id to avoid a search per game.
     fn merge_played(games: &mut Vec<Game>, played: Vec<Game>) {
         let mut at: std::collections::HashMap<String, usize> = games
             .iter()
@@ -436,18 +380,12 @@ impl Steam {
             match at.get(&p.id).copied() {
                 Some(i) => {
                     games[i].playtime_minutes = p.playtime_minutes;
-                    // Not `.or()`: that kept whichever LastPlayed the
-                    // manifest had the moment it was first written and never
-                    // let go, because the manifest field lags behind or sits
-                    // frozen while localconfig.vdf keeps updating on every
-                    // play. A game played again then never rose in the
-                    // "recently played" sort (issue #111). The larger of the
-                    // two is always the true last time played, whichever
-                    // file happened to record it.
+                    // The later of the two: the manifest's LastPlayed lags or freezes while
+                    // localconfig keeps updating, so `.or()` kept replayed games out of
+                    // "recently played" (#111).
                     games[i].last_played = games[i].last_played.max(p.last_played);
                 }
-                // The same appid turns up once per Steam account on the
-                // machine, so the first one claims the slot.
+                // One entry per Steam account on the machine; the first claims the slot.
                 None => {
                     at.insert(p.id.clone(), games.len());
                     games.push(p);
@@ -465,9 +403,7 @@ fn dirs_home() -> Option<PathBuf> {
 
 #[cfg(target_os = "windows")]
 fn windows_steam_path() -> Option<PathBuf> {
-    // Steam records its own location here on install. Reading it beats
-    // guessing Program Files, because a lot of people move it to another
-    // drive.
+    // Steam records its location here on install; many people move it off Program Files.
     use winreg::enums::HKEY_CURRENT_USER;
     use winreg::RegKey;
     let key = RegKey::predef(HKEY_CURRENT_USER)
@@ -483,8 +419,7 @@ mod tests {
 
     #[test]
     fn only_fully_installed_games_are_playable() {
-        // Per process: two checkouts can run `cargo test` at once, and with
-        // one shared directory the first to finish deletes the other's fixture.
+        // Per process, so concurrent `cargo test` runs do not delete each other's fixtures.
         let base = std::env::temp_dir().join(format!("marquee-test-steam-{}", std::process::id()));
         let dir = base.join("steamapps");
         std::fs::create_dir_all(&dir).unwrap();
@@ -500,7 +435,7 @@ mod tests {
         assert_eq!(game.title, "Blender");
         assert!(game.installed);
 
-        // StateFlags 1026 -- a manifest exists but the game is still updating.
+        // StateFlags 1026: a manifest exists but the game is still updating.
         let partial = dir.join("appmanifest_1145360.acf");
         std::fs::write(
             &partial,
@@ -533,9 +468,6 @@ mod tests {
         }
     }
 
-    /// Playtime lives only in localconfig.vdf, so a played game that is also
-    /// installed has to come out as one entry carrying both facts -- not two
-    /// entries, and not the installed one showing no hours.
     #[test]
     fn playtime_is_merged_into_the_installed_entry() {
         let mut games = vec![game("steam:1", true, 0), game("steam:2", true, 0)];
@@ -555,12 +487,7 @@ mod tests {
         assert!(!games[2].installed);
     }
 
-    /// The appmanifest's `LastPlayed` can lag behind or sit frozen at
-    /// whatever it read on install, while localconfig.vdf keeps updating on
-    /// every play. Taking the earlier of the two here regressed to the bug
-    /// in issue #111: a game played again after its manifest was written
-    /// never climbed back up the "recently played" sort, because the stale
-    /// manifest value always won.
+    /// The manifest's LastPlayed goes stale; preferring it was #111.
     #[test]
     fn a_more_recent_localconfig_last_played_beats_a_stale_manifest_one() {
         let mut installed = game("steam:1", true, 0);
@@ -574,15 +501,13 @@ mod tests {
         assert_eq!(games[0].last_played, Some(500));
     }
 
-    /// `StateFlags` mixes "installed" with "needs an update" and "is
-    /// currently downloading one" in the same bitfield, and each of the three
-    /// example manifests here isolates one of those states.
+    /// Each fixture isolates one state in the `StateFlags` bitfield.
     #[test]
     fn update_state_is_read_from_state_flags() {
         let dir = std::env::temp_dir().join("marquee-test-steam-update/steamapps");
         std::fs::create_dir_all(&dir).unwrap();
 
-        // StateFlags 4 -- fully installed, nothing pending.
+        // StateFlags 4: fully installed, nothing pending.
         let current = dir.join("appmanifest_365670.acf");
         std::fs::write(
             &current,
@@ -594,8 +519,7 @@ mod tests {
         assert!(!game.update_available, "4 has no update-required bit");
         assert!(!game.updating);
 
-        // StateFlags 6 (4 + 2) -- installed, but Steam wants to update it and
-        // has not started.
+        // StateFlags 6 (4 + 2): installed, update waiting but not started.
         let waiting = dir.join("appmanifest_367520.acf");
         std::fs::write(
             &waiting,
@@ -607,7 +531,7 @@ mod tests {
         assert!(game.update_available, "6 sets the update-required bit");
         assert!(!game.updating, "nothing is downloading yet");
 
-        // StateFlags 1026 (1024 + 2) -- update required and already under way.
+        // StateFlags 1026 (1024 + 2): update required and under way.
         let downloading = dir.join("appmanifest_1145360.acf");
         std::fs::write(
             &downloading,
@@ -624,8 +548,6 @@ mod tests {
         std::fs::remove_dir_all(std::env::temp_dir().join("marquee-test-steam-update")).ok();
     }
 
-    /// Nobody wants Proton and the Steamworks redistributables in their
-    /// library, and they have appmanifests exactly like games do.
     #[test]
     fn valve_tooling_is_filtered_out() {
         assert!(is_tool("228980", "Steamworks Common Redistributables"));
@@ -635,9 +557,7 @@ mod tests {
         assert!(!is_tool("367520", "Hollow Knight"));
     }
 
-    /// Not an assertion about *this* machine -- it depends on whether Steam
-    /// happens to be open -- but it must answer without panicking, and it must
-    /// agree with itself twice in a row.
+    /// Depends on whether Steam is open, so it only checks the answer is consistent.
     #[test]
     fn detecting_steam_is_stable_and_cheap() {
         let first = Steam::is_running();
@@ -646,9 +566,7 @@ mod tests {
         println!("  steam running on this machine: {first}");
     }
 
-    /// Same shape as `detecting_steam_is_stable_and_cheap`: this depends on
-    /// whatever this machine happens to be running, but it must answer
-    /// without panicking and agree with itself.
+    /// Depends on this machine's state, so it only checks the answer is consistent.
     #[cfg(target_os = "windows")]
     #[test]
     fn reading_the_running_appid_is_stable_and_cheap() {
@@ -658,15 +576,8 @@ mod tests {
         println!("  steam running appid on this machine: {first:?}");
     }
 
-    /// #90's real bug: `running_app_id` looked only under `ActiveProcess`,
-    /// which never fired against a live Steam session, so a Steam-launched
-    /// game never brought Marquee's window back. This pins the actual shape
-    /// -- `RunningAppID` directly under the `Steam` key -- against a scratch
-    /// registry tree rather than a real Steam install, so it does not depend
-    /// on this machine having Steam, and does not touch a real one's state.
-    ///
-    /// Reverting `running_app_id_from` to check only `ActiveProcess` makes
-    /// the second assertion here fail, which is what shipped in #94.
+    /// #94 read only `ActiveProcess`, which never fired against a live session. A scratch
+    /// registry key means no Steam install is needed.
     #[cfg(target_os = "windows")]
     #[test]
     fn running_app_id_is_read_from_the_steam_key_not_only_active_process() {
@@ -680,9 +591,7 @@ mod tests {
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
         let (steam, _) = hkcu.create_subkey(&scratch).expect("create scratch key");
 
-        // The shape #94 shipped: only reachable under ActiveProcess, next to
-        // pid. Must still be found, in case some Steam version does shape it
-        // this way.
+        // The shape #94 shipped, under ActiveProcess. Kept as a fallback.
         let (active_process, _) = steam
             .create_subkey("ActiveProcess")
             .expect("create ActiveProcess subkey");
@@ -693,8 +602,7 @@ mod tests {
             "must still find it nested under ActiveProcess as a fallback"
         );
 
-        // The shape a real session actually uses: directly under the Steam
-        // key, sibling to ActiveProcess rather than inside it.
+        // The shape a real session uses: directly under the Steam key.
         steam.delete_subkey_all("ActiveProcess").unwrap();
         steam.set_value("RunningAppID", &1234u32).unwrap();
         assert_eq!(

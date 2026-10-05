@@ -1,16 +1,6 @@
-//! Artwork: fetched once, resized on ingest, served from disk.
-//!
-//! docs/PLAN.md §4 is blunt about this being the whole performance story. Two
-//! thousand covers at 600×900 is roughly 200 MB of decoded bitmap if handled
-//! carelessly, and the rules that avoid it are:
-//!
-//!   * **Resize on ingest**, to the size actually displayed, never at paint.
-//!   * **Serve through a custom protocol**, never base64 into the DOM and
-//!     never image bytes in the database.
-//!
-//! It also buys the thing a launcher on a television needs more than speed:
-//! **it works offline.** After the first pass the library renders with no
-//! network at all, so a Steam CDN outage or a dropped connection is invisible.
+//! Artwork: fetched once, resized on ingest to the displayed size, served from
+//! disk through a custom protocol (never base64 in the DOM or bytes in the
+//! database). See docs/PLAN.md §4. Once cached, the library works offline.
 
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -21,11 +11,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{log_debug, log_if_err, log_info, log_warn, paths};
 
-/// Longest edge, in device pixels, for each kind.
-///
-/// A cover is 188 design px wide and the design scales up to 2×, so 480 covers
-/// a HiDPI television with room to spare while being a quarter the pixels of
-/// the 600×900 original. The hero is full-bleed, so it keeps real width.
+/// Longest edge in device pixels. A cover is 188 design px at up to 2×, so 480
+/// is enough; the hero is full-bleed.
 const COVER_MAX: u32 = 480;
 const HERO_MAX: u32 = 1920;
 const LOGO_MAX: u32 = 640;
@@ -47,13 +34,8 @@ impl Kind {
         })
     }
 
-    /// Every filename Steam publishes this asset under, best first.
-    ///
-    /// More than one, because Steam is inconsistent about which it has.
-    /// Rainbow Six Siege 404s on `library_600x900.jpg` and serves a perfect
-    /// 600x900 `portrait.png`; Battlefield 6 has both and both are grey
-    /// placeholders. Trying one name and giving up was leaving real artwork on
-    /// the table.
+    /// Every filename Steam publishes this asset under, best first. Steam is
+    /// inconsistent about which exist (Rainbow Six Siege has only `portrait.png`).
     fn files(self) -> &'static [&'static str] {
         match self {
             Kind::Cover => &[
@@ -87,9 +69,7 @@ impl Kind {
         }
     }
 
-    /// The wordmark is transparent and must stay PNG. Photographs re-encode to
-    /// JPEG, which is a quarter the size for no visible difference at these
-    /// dimensions.
+    /// The wordmark is transparent and stays PNG; photographs go to JPEG.
     fn keeps_alpha(self) -> bool {
         matches!(self, Kind::Logo)
     }
@@ -111,22 +91,14 @@ impl Kind {
     }
 }
 
-/// Steam serves a flat grey placeholder rather than a 404 when an asset does
-/// not exist, and it does this for a lot of recent releases -- Battlefield 6's
-/// `library_600x900.jpg` is 1.6 KB of grey, while its `library_hero.jpg` is
-/// 250 KB of real art. A 200 is therefore not evidence of anything.
-///
-/// Detected by content rather than by size, because a size threshold is a guess
-/// that fails on genuinely small artwork. A placeholder is near-uniform; real
-/// cover art is not, by an enormous margin.
+/// Steam serves a flat grey placeholder with a 200 for missing assets, so
+/// check pixel variance. File size is unreliable for genuinely small art.
 fn is_placeholder(img: &image::DynamicImage) -> bool {
     let grey = img.to_luma8();
     let (w, h) = (grey.width(), grey.height());
     if w == 0 || h == 0 {
         return true;
     }
-    // Sample a grid rather than every pixel: a few thousand points settle this
-    // question and the full decode is the expensive part anyway.
     let step_x = (w / 48).max(1);
     let step_y = (h / 48).max(1);
     let mut samples = Vec::new();
@@ -140,46 +112,33 @@ fn is_placeholder(img: &image::DynamicImage) -> bool {
     }
     let mean = samples.iter().sum::<i32>() / samples.len() as i32;
     let deviation = samples.iter().map(|s| (s - mean).abs()).sum::<i32>() / samples.len() as i32;
-    // Real artwork sits far above this. Measured: Steam's placeholder is
-    // effectively 0, Team Fortress 2's cover is in the high tens.
+    // Steam's placeholder is near 0; real covers are in the tens.
     deviation < 8
 }
 
-/// Is this the right shape for the slot it is going into?
-///
-/// A cover is portrait and a hero is wide, and neither substitutes for the
-/// other. A banner letterboxed into a 2:3 card looks broken -- which it did --
-/// and cropping one to portrait gives a narrow vertical slice of the middle.
-/// So a wrong-shaped asset is rejected outright, and §compose_cover builds a
-/// real portrait image instead.
+/// A banner letterboxed or cropped into a 2:3 card looks broken, so reject
+/// wrong-shaped art outright and let `compose_cover` build a portrait.
 fn right_shape(kind: Kind, width: u32, height: u32) -> bool {
     if width == 0 || height == 0 {
         return false;
     }
     let ratio = width as f32 / height as f32;
     match kind {
-        // Real box art is 2:3. Allow some latitude either side, but never
-        // anything wider than it is tall.
+        // Box art is 2:3; allow latitude, but never wider than tall.
         Kind::Cover => ratio < 0.95,
         Kind::Hero => ratio > 1.6,
         Kind::Logo => true,
     }
 }
 
-/// Crop away fully transparent margins.
-///
-/// Steam's wordmarks are frequently a small logo inside a large transparent
-/// canvas -- Rainbow Six Siege's has so much padding that the artwork renders
-/// tiny and visibly off-centre inside its own box. Trimming to the ink makes
-/// every wordmark fill the space it is given, which is what the hero layout
-/// assumes.
+/// Crop away transparent margins. Steam wordmarks often sit in a large padded
+/// canvas and would render tiny and off-centre.
 fn trim_transparent(img: &image::DynamicImage) -> image::DynamicImage {
     use image::GenericImageView;
     let rgba = img.to_rgba8();
     let (w, h) = (rgba.width(), rgba.height());
 
-    // Not fully-opaque: soft edges and drop shadows are part of the artwork,
-    // and trimming to them would clip the glow off a wordmark.
+    // Low threshold so soft edges and glows count as ink.
     const INK: u8 = 8;
     let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0u32, 0u32);
     for y in 0..h {
@@ -198,12 +157,8 @@ fn trim_transparent(img: &image::DynamicImage) -> image::DynamicImage {
     img.view(x0, y0, x1 - x0 + 1, y1 - y0 + 1).to_image().into()
 }
 
-/// Bumped when the pipeline's *output* changes, not merely its code.
-///
-/// Cached art written before banners were rejected is a banner sitting in a
-/// card, and no amount of new logic reaches it -- the cache answers first. The
-/// metadata cache learned this lesson one release earlier; this is the same
-/// lesson applied before it bites rather than after.
+/// Bump when the pipeline's output changes, or stale cached art is served
+/// before any new logic runs.
 const ART_VERSION: u32 = 5;
 
 /// Throw the artwork cache away if it was written by an older pipeline.
@@ -227,8 +182,7 @@ pub fn migrate_cache() {
         );
     }
     log_if_err!("art", paths::ensure(&dir), "cache dir {}", dir.display());
-    // Without the stamp the cache reads as version 1 and is cleared again next
-    // launch, so every start re-downloads everything and nothing says why.
+    // Without the stamp the cache is cleared again on every launch.
     log_if_err!(
         "art",
         std::fs::write(&stamp, ART_VERSION.to_string()),
@@ -248,21 +202,15 @@ fn path_for(slug: &str, kind: Kind) -> PathBuf {
     ))
 }
 
-/// Build a portrait cover out of a game's other artwork.
-///
-/// No portrait art anywhere -- Steam or SteamGridDB -- used to mean the wide
-/// capsule letterboxed into the card. Instead: the key art blurred and
-/// darkened with the wordmark centred, in the game's own colours, so it sits
-/// beside real covers. A wordmark is required; without one the result is an
-/// anonymous blur, which identifies less than the typed card it replaces.
+/// Build a portrait cover from blurred, darkened key art with the wordmark
+/// centred. Needs a wordmark: an anonymous blur is worse than a text card.
 fn compose_cover(hero: &image::DynamicImage, logo: &image::DynamicImage) -> image::DynamicImage {
     use image::imageops;
 
     const W: u32 = 600;
     const H: u32 = 900;
 
-    // Fill, not fit: the background must reach every edge, and it is about to
-    // be blurred past recognition anyway.
+    // Fill, not fit: the background must reach every edge.
     let scale = (W as f32 / hero.width() as f32).max(H as f32 / hero.height() as f32);
     let filled = hero.resize(
         (hero.width() as f32 * scale).ceil() as u32,
@@ -273,8 +221,7 @@ fn compose_cover(hero: &image::DynamicImage, logo: &image::DynamicImage) -> imag
     let y = (filled.height().saturating_sub(H)) / 2;
     let cropped = filled.crop_imm(x, y, W, H);
 
-    // Blurred at a small size and then enlarged: a gaussian over 600x900 is
-    // slow, and the result is indistinguishable once it is this soft.
+    // Blur small then enlarge; a gaussian at full size is slow.
     let small = cropped.resize_exact(60, 90, imageops::FilterType::Triangle);
     let blurred = image::imageops::blur(&small.to_rgba8(), 6.0);
     let mut canvas =
@@ -292,8 +239,6 @@ fn compose_cover(hero: &image::DynamicImage, logo: &image::DynamicImage) -> imag
 
     {
         let logo = trim_transparent(logo);
-        // Bounded on both axes so a very wide or very tall wordmark still fits
-        // inside the card with margin.
         let max_w = (W as f32 * 0.76) as u32;
         let max_h = (H as f32 * 0.34) as u32;
         let fit = (max_w as f32 / logo.width() as f32).min(max_h as f32 / logo.height() as f32);
@@ -311,11 +256,8 @@ fn compose_cover(hero: &image::DynamicImage, logo: &image::DynamicImage) -> imag
     canvas
 }
 
-/// Where each of a game's three assets came from.
-///
-/// Recorded rather than inferred. "Is the artwork working" was previously only
-/// answerable by looking at the screen; now every game carries a manifest
-/// saying what was tried, what was rejected and why.
+/// Where each of a game's three assets came from, recorded so artwork
+/// problems can be diagnosed without looking at the screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Source {
@@ -330,8 +272,8 @@ pub enum Source {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Manifest {
-    /// `steam-1091500` or `sgdb-8452`: the cache key, not an appid. Named
-    /// `appId` on the wire because the interface already reads it as such.
+    /// The cache key (`steam-1091500`, `sgdb-8452`), named `appId` on the wire
+    /// for the interface.
     #[serde(rename = "appId")]
     pub slug: String,
     pub cover: Source,
@@ -357,11 +299,8 @@ pub fn manifest(slug: &str) -> Option<Manifest> {
     Some(m)
 }
 
-/// Download a URL and return it only if it is genuinely usable for `kind`.
-///
-/// Both halves matter. A 200 means nothing -- Steam answers with a flat grey
-/// placeholder rather than a 404 -- and neither does a decodable image, because
-/// a banner decodes perfectly and is still not box art.
+/// Download a URL and return it only if it is the right shape for `kind` and
+/// not a placeholder. Neither a 200 nor a clean decode proves either.
 fn usable(
     client: &reqwest::blocking::Client,
     url: &str,
@@ -373,7 +312,7 @@ fn usable(
     }
     let bytes = response.bytes().ok()?;
     let img = image::load_from_memory(&bytes).ok()?;
-    // Shape first: two comparisons, against a scan of every pixel.
+    // Shape first: it is far cheaper than the placeholder scan.
     if !right_shape(kind, img.width(), img.height()) {
         log_debug!(
             "art",
@@ -397,11 +336,8 @@ fn steam_urls(app_id: &str, kind: Kind) -> Vec<String> {
         .collect()
 }
 
-/// Which catalogue a game's artwork is being looked up in.
-///
-/// Source-qualified: keyed by Steam appid alone, the artwork picker could only
-/// re-point a game at another Steam game, which is no help when the missing
-/// artwork is Steam's.
+/// Which catalogue a game's artwork is looked up in, so the picker can point a
+/// game at SteamGridDB when Steam's artwork is the missing one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceKey {
     Steam(String),
@@ -409,11 +345,8 @@ pub enum SourceKey {
 }
 
 impl SourceKey {
-    /// Parses `steam-1091500` or `sgdb-8452`, the form used in art:// URLs.
-    ///
-    /// Ids reach this from files on disk and from a database, so they are
-    /// validated as digits rather than trusted -- a path segment that cannot
-    /// contain a slash or a dot cannot traverse anywhere.
+    /// Parses `steam-1091500` or `sgdb-8452` from art:// URLs. Ids must be
+    /// digits, so they can never carry a slash or dot into a cache path.
     pub fn parse(s: &str) -> Option<Self> {
         let (prefix, id) = s.split_once('-')?;
         if id.is_empty() || id.len() > 12 || !id.chars().all(|c| c.is_ascii_digit()) {
@@ -426,8 +359,7 @@ impl SourceKey {
         }
     }
 
-    /// Cache filename stem. Distinct per source, so re-pointing a game's
-    /// artwork cannot collide with the original.
+    /// Cache filename stem, distinct per source so re-pointed art cannot collide.
     fn slug(&self) -> String {
         match self {
             SourceKey::Steam(id) => format!("steam-{id}"),
@@ -438,13 +370,7 @@ impl SourceKey {
 
 const KINDS: [Kind; 3] = [Kind::Cover, Kind::Hero, Kind::Logo];
 
-/// Resolve all three assets for a game, and record where each came from.
-///
-/// Deliberately per-game rather than per-request. Steam is tried first for
-/// everything; only if it cannot supply the complete set does SteamGridDB get
-/// asked, and then it is asked for **every** field rather than just the missing
-/// ones -- a Steam cover beside a SteamGridDB wordmark is two artists' work in
-/// one card, and it shows.
+/// Resolve all three assets for a game and record where each came from.
 fn resolve(key: &SourceKey, sgdb_key: Option<&str>) -> Manifest {
     let slug = key.slug();
     let mut m = Manifest {
@@ -463,8 +389,6 @@ fn resolve(key: &SourceKey, sgdb_key: Option<&str>) -> Manifest {
     let mut found: Vec<(Kind, bytes::Bytes, image::DynamicImage, Source)> = Vec::new();
 
     match key {
-        // A SteamGridDB entry has no Steam assets by definition: it was chosen
-        // precisely because Steam's were missing or wrong.
         SourceKey::SteamGridDb(game_id) => {
             if let Some(k) = sgdb_key {
                 for kind in KINDS {
@@ -479,7 +403,6 @@ fn resolve(key: &SourceKey, sgdb_key: Option<&str>) -> Manifest {
         }
 
         SourceKey::Steam(app_id) => {
-            // Steam first, for the whole set.
             for kind in KINDS {
                 for url in steam_urls(app_id, kind) {
                     if let Some((b, i)) = usable(&client, &url, kind) {
@@ -490,9 +413,8 @@ fn resolve(key: &SourceKey, sgdb_key: Option<&str>) -> Manifest {
             }
             m.steam_complete = found.len() == KINDS.len();
 
-            // Only if Steam cannot complete the set does SteamGridDB get
-            // asked, and then for every field -- a Steam cover beside a
-            // SteamGridDB wordmark is two artists' work in one card.
+            // If Steam's set is incomplete, prefer a full SteamGridDB set so a
+            // card does not mix two artists' work.
             if !m.steam_complete {
                 if let Some(k) = sgdb_key {
                     let mut replacements = Vec::new();
@@ -518,9 +440,8 @@ fn resolve(key: &SourceKey, sgdb_key: Option<&str>) -> Manifest {
                 }
             }
 
-            // A hero may fall back to the wide store capsule: same shape, so a
-            // legitimate substitute even at lower quality. A cover never falls
-            // back this way -- that is what composing is for.
+            // A hero may fall back to the wide store capsule, which is the same
+            // shape. A cover never does; it is composed instead.
             if !found.iter().any(|(k, ..)| *k == Kind::Hero) {
                 let mut capsules = Vec::new();
                 if let crate::meta::Fetched::Found(meta) = crate::meta::fetch_one(&client, app_id) {
@@ -543,11 +464,8 @@ fn resolve(key: &SourceKey, sgdb_key: Option<&str>) -> Manifest {
 
     let mut have: std::collections::HashMap<Kind, image::DynamicImage> = Default::default();
     for (kind, raw, img, source) in found {
-        // From the image `usable` already decoded, not from the bytes again:
-        // decoding a 250 KB hero is the expensive step, and it ran twice.
+        // Reuse the decode from `usable`; decoding is the expensive step.
         let encoded = if kind == Kind::Logo {
-            // Wordmarks are frequently a small image inside a large transparent
-            // canvas; trimmed, they fill the space they are given.
             let trimmed = trim_transparent(&img);
             let capped = downscale(&trimmed, kind).unwrap_or(trimmed);
             encode(&capped, kind)
@@ -555,8 +473,6 @@ fn resolve(key: &SourceKey, sgdb_key: Option<&str>) -> Manifest {
             shrink(&img, kind).unwrap_or_else(|| Ok(raw.to_vec()))
         }
         .unwrap_or_else(|e| {
-            // The original is still a usable image, so serve that rather than
-            // nothing -- but say so, or an oversized cache is a mystery.
             log_warn!(
                 "art",
                 "{slug}: re-encoding {} failed, caching the original: {e}",
@@ -573,8 +489,6 @@ fn resolve(key: &SourceKey, sgdb_key: Option<&str>) -> Manifest {
         }
     }
 
-    // No box art anywhere: build one, but only if there is a wordmark to put
-    // on it. Key art alone is a handsome blur that identifies nothing.
     if m.cover == Source::None {
         if let (Some(hero), Some(logo)) = (have.get(&Kind::Hero), have.get(&Kind::Logo)) {
             let composed = compose_cover(hero, logo);
@@ -618,12 +532,8 @@ fn resolve(key: &SourceKey, sgdb_key: Option<&str>) -> Manifest {
     m
 }
 
-/// One resolution per game at a time.
-///
-/// A card asks for its cover and the hero asks for its key art at the same
-/// moment, and both used to find no manifest and both used to do the whole job
-/// -- every download twice. The lock is per game rather than global so
-/// unrelated games still resolve in parallel.
+/// One resolution per game at a time, or the cover and hero requests both
+/// download everything. Per game so unrelated games still run in parallel.
 static IN_FLIGHT: std::sync::Mutex<
     Option<std::collections::HashMap<String, std::sync::Arc<std::sync::Mutex<()>>>>,
 > = std::sync::Mutex::new(None);
@@ -636,12 +546,8 @@ fn lock_for(slug: &str) -> std::sync::Arc<std::sync::Mutex<()>> {
         .clone()
 }
 
-/// Games known to have a current manifest on disk.
-///
-/// The manifest is the authority on whether a game has been resolved -- a file
-/// alone is not, because a zero-byte miss and a not-yet-fetched asset look
-/// identical -- but reading and parsing it for every one of the hundreds of
-/// requests a scroll makes is a cost paid for nothing after the first.
+/// Games known to have a current manifest on disk, so a scroll does not
+/// re-read and parse it for every request.
 static RESOLVED: std::sync::RwLock<Option<std::collections::HashSet<String>>> =
     std::sync::RwLock::new(None);
 
@@ -651,7 +557,6 @@ fn is_resolved(slug: &str) -> bool {
         return true;
     }
     drop(known);
-    // The first request this launch for a game an earlier launch resolved.
     if manifest(slug).is_some() {
         mark_resolved(slug);
         return true;
@@ -674,13 +579,10 @@ pub fn fetch(key: &SourceKey, kind: Kind, sgdb_key: Option<&str>) -> Option<Vec<
     if !is_resolved(&slug) {
         let gate = lock_for(&slug);
         let _held = gate.lock().unwrap_or_else(|e| e.into_inner());
-        // Checked again inside the lock: whoever held it may have just done
-        // the work, and doing it twice is the thing this exists to prevent.
+        // Whoever held the lock may have just done the work.
         if !is_resolved(&slug) {
             resolve(key, sgdb_key);
-            // Recorded whether or not the manifest reached the disk: the
-            // assets did, and re-resolving on every request because one
-            // write failed would download the lot again and again.
+            // Even if the manifest write failed, or every request re-downloads.
             mark_resolved(&slug);
         }
     }
@@ -696,8 +598,8 @@ pub fn artwork_report(app_ids: Vec<String>) -> Vec<Manifest> {
     app_ids.iter().filter_map(|id| manifest(id)).collect()
 }
 
-/// Temp-then-rename, so a half-written file is never mistaken for a cached one
-/// -- and never for a miss, which is the same thing at zero bytes.
+/// Temp-then-rename, so a half-written file is never read as cached or as a
+/// zero-byte miss.
 fn write_cached(path: &std::path::Path, bytes: &[u8]) {
     let name = path.file_name().unwrap_or_default().to_string_lossy();
     if let Some(dir) = path.parent() {
@@ -705,23 +607,19 @@ fn write_cached(path: &std::path::Path, bytes: &[u8]) {
     }
     let tmp = path.with_extension("tmp");
     match std::fs::write(&tmp, bytes) {
-        // Rename is the step that publishes the file. Losing it leaves a .tmp
-        // behind and the next launch re-downloads, so it has to be audible.
         Ok(()) => log_if_err!("art", std::fs::rename(&tmp, path), "caching {name}"),
         Err(e) => log_warn!("art", "caching {name}: {e}"),
     }
 }
 
-/// Scale an already-decoded image down to its cap, or None if it is small
-/// enough already.
+/// Scale down to the cap, or None if already small enough.
 fn downscale(img: &image::DynamicImage, kind: Kind) -> Option<image::DynamicImage> {
     let (w, h) = (img.width(), img.height());
     if w.max(h) <= kind.max_edge() {
         return None;
     }
     let scale = kind.max_edge() as f32 / w.max(h) as f32;
-    // Lanczos3 costs more than Triangle and this runs once per asset ever, off
-    // the UI thread. Downscaled cover art is looked at closely.
+    // Lanczos3 is slower but runs once per asset, off the UI thread.
     Some(img.resize(
         (w as f32 * scale) as u32,
         (h as f32 * scale) as u32,
@@ -729,11 +627,8 @@ fn downscale(img: &image::DynamicImage, kind: Kind) -> Option<image::DynamicImag
     ))
 }
 
-/// Throw away every cached image and every recorded miss.
-///
-/// Called when the artwork sources change -- adding a SteamGridDB key must
-/// re-resolve everything that previously found nothing, or the key appears to
-/// do nothing at all for the games that needed it most.
+/// Throw away every cached image and recorded miss, so adding a SteamGridDB
+/// key re-resolves games that previously found nothing.
 pub fn clear_cache() -> std::io::Result<()> {
     let dir = paths::cache_dir().join("art");
     if dir.exists() {
@@ -741,20 +636,14 @@ pub fn clear_cache() -> std::io::Result<()> {
     }
     paths::ensure(&dir)?;
     std::fs::write(dir.join(".version"), ART_VERSION.to_string())?;
-    // Or the games that found nothing keep answering from memory while the
-    // disk has been wiped precisely so they would be asked again.
+    // Or misses keep answering from memory after the disk is wiped.
     *RESOLVED.write().unwrap_or_else(|e| e.into_inner()) = None;
     Ok(())
 }
 
-/// The bytes to cache for an asset over its cap, or None when the original
-/// bytes should be stored unchanged.
-///
-/// Never upscale: an asset smaller than the target is already as good as it
-/// is going to get, and enlarging it only costs memory. And when no resize is
-/// needed, keep the original bytes rather than re-encoding them. Steam serves
-/// many `library_600x900` assets at 300×450 already, and running those through
-/// the JPEG encoder again is a second generation of loss for nothing.
+/// Re-encoded bytes for an asset over its cap, or None to store the original.
+/// Never upscale, and never re-encode when no resize is needed (a second
+/// generation of JPEG loss).
 fn shrink(img: &image::DynamicImage, kind: Kind) -> Option<image::ImageResult<Vec<u8>>> {
     Some(encode(&downscale(img, kind)?, kind))
 }
@@ -786,31 +675,21 @@ mod tests {
         let img = image::load_from_memory(&out).unwrap();
         assert_eq!(img.height(), COVER_MAX, "longest edge should hit the cap");
         assert_eq!(img.width(), 320);
-        // Pixel count is the assertion that matters: it is what decode cost
-        // and bitmap memory are proportional to. Byte size deliberately is
-        // not asserted -- it depends entirely on content, and a synthetic
-        // gradient compresses better as PNG than as JPEG, which is true of
-        // almost no real cover art.
+        // Pixel count, not byte size: it drives decode cost and memory, and
+        // byte size depends on content.
         assert!(
             img.width() * img.height() < 600 * 900 / 3,
             "should be well under a third of the pixels"
         );
     }
 
-    /// Enlarging an already-small asset costs memory and buys nothing, and
-    /// re-encoding it is a second generation of loss for nothing. Steam serves
-    /// plenty of `library_600x900` assets at 300×450, so this is the common
-    /// case, not the edge case.
     #[test]
     fn a_small_asset_is_left_completely_alone() {
         assert!(shrink(&gradient(120, 180), Kind::Cover).is_none());
         assert!(shrink(&gradient(300, 450), Kind::Cover).is_none());
-        // Exactly at the cap still counts as no work needed.
         assert!(shrink(&gradient(320, COVER_MAX), Kind::Cover).is_none());
     }
 
-    /// The transparent wordmark is the whole design. Flattening it to JPEG
-    /// would put a black box behind every hero.
     #[test]
     fn the_wordmark_keeps_its_alpha() {
         let out = shrink(&gradient(1800, 600), Kind::Logo).unwrap().unwrap();
@@ -820,10 +699,6 @@ mod tests {
         assert_eq!(Kind::Cover.mime(), "image/jpeg");
     }
 
-    /// Steam answers with a flat grey image rather than a 404 when an asset
-    /// does not exist. Battlefield 6's cover is 1.6 KB of exactly that, while
-    /// its wide art is 250 KB of the real thing -- so a 200 proves nothing and
-    /// this is the check that decides.
     #[test]
     fn a_flat_image_is_recognised_as_a_placeholder() {
         let flat = image::DynamicImage::ImageLuma8(image::GrayImage::from_pixel(
@@ -833,8 +708,7 @@ mod tests {
         ));
         assert!(is_placeholder(&flat));
 
-        // Very slightly noisy, as a JPEG of a grey box would be after
-        // compression. Still a placeholder.
+        // Slight noise, as JPEG compression of a grey box gives.
         let dithered =
             image::DynamicImage::ImageLuma8(image::GrayImage::from_fn(300, 450, |x, y| {
                 image::Luma([128 + ((x + y) % 3) as u8])
@@ -844,15 +718,13 @@ mod tests {
 
     #[test]
     fn real_artwork_is_not_mistaken_for_a_placeholder() {
-        // Strong structure, as any cover has.
         let art = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(300, 450, |x, y| {
             let v = if (x / 20 + y / 20) % 2 == 0 { 20 } else { 230 };
             image::Rgba([v, v, v, 255])
         }));
         assert!(!is_placeholder(&art));
 
-        // A gentle gradient -- dark to light across the frame. Low contrast for
-        // artwork, but nowhere near uniform, and it must survive.
+        // Low contrast, but not uniform.
         let gradient =
             image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(300, 450, |_, y| {
                 let v = (y * 255 / 450) as u8;
@@ -868,10 +740,6 @@ mod tests {
         assert!(is_placeholder(&one));
     }
 
-    /// Adding a SteamGridDB key clears the cache so the games that found
-    /// nothing get asked again. The record of what was resolved has to go with
-    /// it, or those games keep serving the old answer until a restart -- and
-    /// the key appears to do nothing for the games that needed it most.
     #[test]
     fn clearing_the_cache_forgets_what_was_resolved() {
         mark_resolved("steam-forgotten");
@@ -880,8 +748,6 @@ mod tests {
         assert!(!is_resolved("steam-forgotten"));
     }
 
-    /// A banner in a 2:3 card looks broken however it is fitted. This is the
-    /// check that stopped one being used as box art.
     #[test]
     fn a_banner_is_never_accepted_as_a_cover() {
         assert!(!right_shape(Kind::Cover, 460, 215));
@@ -899,9 +765,6 @@ mod tests {
         assert!(right_shape(Kind::Logo, 10, 400));
     }
 
-    /// Steam's wordmarks are frequently a small logo inside a large
-    /// transparent canvas. Rainbow Six Siege's has enough padding that the
-    /// artwork renders tiny and visibly off-centre in its own box.
     #[test]
     fn a_wordmark_is_trimmed_to_its_ink() {
         let padded =
@@ -913,8 +776,6 @@ mod tests {
         assert_eq!((trimmed.width(), trimmed.height()), (200, 200));
     }
 
-    /// Soft edges and drop shadows are part of the artwork; trimming to fully
-    /// opaque pixels would clip the glow off a wordmark.
     #[test]
     fn faint_edges_survive_trimming() {
         let glow = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(100, 100, |x, y| {
@@ -951,8 +812,6 @@ mod tests {
         assert_eq!(trim_transparent(&blank).width(), 50);
     }
 
-    /// Every card must carry a real portrait image, so when no box art exists
-    /// anywhere, one is built from the game's own key art.
     #[test]
     fn a_cover_is_composed_at_the_right_shape() {
         let hero = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(1920, 620, |x, _| {
@@ -970,25 +829,20 @@ mod tests {
             composed.width(),
             composed.height()
         ));
-        // Built from real artwork, so it must not itself look like a
-        // placeholder -- the wordmark alone guarantees variation.
+        // The wordmark alone guarantees variation.
         assert!(!is_placeholder(&composed));
     }
 
-    /// Steam is inconsistent about which filename it publishes an asset under,
-    /// and trying one and giving up was leaving real artwork unfetched.
     #[test]
     fn every_kind_has_more_than_one_name_to_try() {
         for kind in [Kind::Cover, Kind::Hero, Kind::Logo] {
             assert!(kind.files().len() > 1, "{kind:?} should have alternatives");
             assert_eq!(kind.file(), kind.files()[0], "canonical name is the first");
         }
-        // Rainbow Six Siege 404s on the jpg and serves a perfect 600x900 png.
+        // Rainbow Six Siege has only the png.
         assert!(Kind::Cover.files().contains(&"portrait.png"));
     }
 
-    /// Ids reach this from files on disk and from a database, so anything that
-    /// is not a plain number must not become a path segment.
     #[test]
     fn a_source_key_round_trips_and_rejects_rubbish() {
         assert_eq!(
@@ -1022,7 +876,6 @@ mod tests {
         }
     }
 
-    /// Re-pointing a game's artwork must not overwrite the original's cache.
     #[test]
     fn each_source_gets_its_own_cache_slot() {
         let a = SourceKey::Steam("440".into()).slug();
@@ -1048,12 +901,8 @@ mod tests {
 mod live {
     use super::*;
 
-    /// Prints the resolution report for a spread of real games: an old one
-    /// Steam has everything for, a recent one it does not, and a couple in
-    /// between. Battlefield 6 is the fixture that exercises every part of the
-    /// fallback: its `library_600x900.jpg` and `logo.png` are 1.6 KB of grey,
-    /// its `library_hero.jpg` is real, and its capsule exists only under a
-    /// hashed path.
+    /// Prints the resolution report for real games. Battlefield 6 exercises
+    /// every fallback: its cover and logo are grey placeholders.
     ///
     ///     cargo test live -- --ignored --nocapture
     #[test]
@@ -1106,9 +955,7 @@ mod live {
 
 #[cfg(test)]
 mod compose_preview {
-    /// Renders a composed cover from a real game's assets so a human can look
-    /// at it. Not an assertion -- the question "does this look right" is not
-    /// one a test can answer.
+    /// Writes composed covers from real games to temp for a human to inspect.
     ///
     ///     cargo test compose_preview -- --ignored --nocapture
     #[test]

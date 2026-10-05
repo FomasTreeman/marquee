@@ -1,18 +1,6 @@
-//! SteamGridDB: the second source of artwork.
-//!
-//! Steam's own CDN is not enough, and the gaps are not edge cases. Recent
-//! releases publish a grey placeholder where a portrait cover should be,
-//! plenty of games have no transparent wordmark at all, and anything Steam
-//! never sold has nothing. SteamGridDB is community-maintained and covers all
-//! three, keyed by Steam appid so it slots in behind what we already have.
-//!
-//! It needs a free per-user key — generated from a profile page, **no client
-//! secret**, so no proxy and no server. That is the whole reason it is the
-//! chosen second source rather than something needing infrastructure; see
-//! docs/PLAN.md §6.
-//!
-//! Strictly optional. With no key configured this does nothing at all, and the
-//! interface must stay entirely usable in that state.
+//! SteamGridDB, the fallback artwork source for covers, logos and heroes that
+//! Steam's CDN lacks. It needs only a free per-user key, so no proxy or server
+//! (docs/PLAN.md §6). Optional: with no key it does nothing.
 
 use serde::Deserialize;
 
@@ -75,16 +63,10 @@ impl Want {
         }
     }
 
-    /// Query parameters, tuned per kind.
-    ///
-    /// Animated assets are excluded everywhere: an APNG in a card is a
-    /// per-frame repaint for every visible tile, which is exactly the cost
-    /// docs/PLAN.md §4 spends its rules avoiding.
+    /// Static only: an animated card repaints every frame (docs/PLAN.md §4).
     fn query(self) -> Vec<(&'static str, &'static str)> {
         let mut q = vec![("types", "static")];
         match self {
-            // The design is built on 2:3 box art. Asking for the right shape
-            // avoids picking up a square or a banner and cropping it badly.
             Want::Grid => q.push(("dimensions", "600x900,660x930,512x512")),
             Want::Hero => q.push(("dimensions", "1920x620,3840x1240")),
             Want::Logo => {}
@@ -92,10 +74,7 @@ impl Want {
         q
     }
 
-    /// Is this asset the right shape to use?
-    ///
-    /// SteamGridDB's dimension filter is advisory and its data is community
-    /// supplied, so the answer is checked rather than assumed.
+    /// The API's dimension filter is advisory, so check the shape ourselves.
     fn accepts(self, width: u32, height: u32) -> bool {
         if width == 0 || height == 0 {
             return true; // unknown; let the download decide
@@ -109,18 +88,10 @@ impl Want {
     }
 }
 
-/// How many community submissions to consider for one asset.
-///
-/// Bounded rather than unlimited: a popular game can have hundreds, each one is
-/// a download to validate, and if the first eight are all unusable the ninth
-/// will not save the day.
+/// Each candidate is a download to validate, and popular games have hundreds.
 const MAX_CANDIDATES: usize = 8;
 
-/// Pull the usable candidate URLs out of a response, in the API's own ranking
-/// order.
-///
-/// Separated from the request so the filtering can be tested without a key or
-/// a network, which is the part that actually decides what appears on screen.
+/// Usable candidate URLs from a response, in the API's ranking order.
 fn candidates_from(body: &Response, want: Want) -> Vec<String> {
     if !body.success {
         return Vec::new();
@@ -134,16 +105,8 @@ fn candidates_from(body: &Response, want: Want) -> Vec<String> {
         .collect()
 }
 
-/// Every usable asset URL for a Steam appid, best first.
-///
-/// A list rather than one URL, and that is the point: SteamGridDB is community
-/// submitted, so a given entry may be a dead link, the wrong shape despite its
-/// metadata, or an image that turns out to be a placeholder once downloaded.
-/// Taking only the top-ranked one meant a single bad submission left a game
-/// with no artwork while a dozen good ones sat behind it.
-///
-/// Never an error: this is a fallback, and a fallback that fails loudly is
-/// worse than one that quietly does not apply.
+/// Every usable asset URL for a Steam appid, best first. A list because any
+/// one submission may be a dead link or a placeholder. Empty on any failure.
 pub fn candidates_for_steam_app(
     client: &reqwest::blocking::Client,
     key: &str,
@@ -161,8 +124,7 @@ pub fn candidates_for_steam_app(
     )
 }
 
-/// One request-and-parse path, shared by the Steam-appid and SteamGridDB-id
-/// lookups so they cannot drift apart in what they accept.
+/// Shared by both lookups so they cannot drift apart in what they accept.
 fn fetch_candidates(
     client: &reqwest::blocking::Client,
     key: &str,
@@ -210,12 +172,8 @@ pub struct Entry {
     pub cover: String,
 }
 
-/// Search SteamGridDB by name.
-///
-/// The artwork picker searched the *Steam store*, which cannot help a game
-/// whose Steam artwork is the thing that is missing -- picking the obvious
-/// match just re-pointed a game at its own appid and changed nothing. This
-/// searches the source that actually has the art.
+/// Search SteamGridDB by name. The artwork picker searches here rather than
+/// the Steam store, which cannot help when Steam's own art is what is missing.
 pub fn search(client: &reqwest::blocking::Client, key: &str, term: &str) -> Vec<Entry> {
     if key.is_empty() || term.trim().len() < 2 {
         return Vec::new();
@@ -235,8 +193,7 @@ pub fn search(client: &reqwest::blocking::Client, key: &str, term: &str) -> Vec<
         return Vec::new();
     }
 
-    // A thumbnail per result costs a request each, so only the first few get
-    // one. A picker with eight rows and no pictures is not a picker.
+    // Each thumbnail costs a request, so only the first few results get one.
     const WITH_ART: usize = 6;
     body.data
         .into_iter()
@@ -267,8 +224,7 @@ pub fn candidates_for_game(
     )
 }
 
-/// Percent-encode a search term. Game names contain spaces, colons and
-/// apostrophes, all of which break a bare path segment.
+/// Percent-encode a search term for use as a path segment.
 fn urlencode(s: &str) -> String {
     s.bytes()
         .map(|b| match b {
@@ -294,21 +250,16 @@ mod tests {
         assert!(Want::Hero.accepts(1920, 620));
         assert!(!Want::Hero.accepts(600, 900));
 
-        // A wordmark is any shape at all.
         assert!(Want::Logo.accepts(1000, 200));
         assert!(Want::Logo.accepts(400, 400));
     }
 
-    /// Community data, so dimensions are sometimes absent. Unknown must not
-    /// mean rejected, or a perfectly good asset is discarded unseen.
     #[test]
     fn unknown_dimensions_are_accepted_and_judged_on_download() {
         assert!(Want::Grid.accepts(0, 0));
         assert!(Want::Hero.accepts(0, 900));
     }
 
-    /// With no key this must do nothing, without a request and without an
-    /// error -- the whole source is optional.
     #[test]
     fn no_key_means_no_request() {
         let client = reqwest::blocking::Client::new();
@@ -330,9 +281,6 @@ mod tests {
         }
     }
 
-    /// The reason this returns a list at all. Community submissions include
-    /// dead links and mislabelled images, so one bad top-ranked entry must not
-    /// leave a game blank while a dozen good ones sit behind it.
     #[test]
     fn every_usable_submission_is_offered_in_order() {
         let got = candidates_from(
@@ -355,9 +303,6 @@ mod tests {
         assert_eq!(got, vec!["cover"]);
     }
 
-    /// A popular game can have hundreds of submissions and each one is a
-    /// download to validate. If the first eight are unusable the ninth will
-    /// not save the day.
     #[test]
     fn the_candidate_list_is_bounded() {
         let many: Vec<(u32, u32, String)> = (0..50).map(|i| (600, 900, format!("u{i}"))).collect();
@@ -380,8 +325,7 @@ mod tests {
         assert!(candidates_from(&failed, Want::Grid).is_empty());
     }
 
-    /// A blank URL is not a candidate, and would otherwise waste one of the
-    /// eight slots on a guaranteed failure.
+    /// A blank URL would otherwise use up one of the eight slots.
     #[test]
     fn blank_urls_are_skipped() {
         let got = candidates_from(&body(&[(600, 900, "   "), (600, 900, "real")]), Want::Grid);

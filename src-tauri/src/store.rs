@@ -1,17 +1,8 @@
-//! Persistent storage.
+//! Persistent storage, in SQLite.
 //!
-//! The structural decision from docs/PLAN.md §8, and the most important one in
-//! the schema:
-//!
-//! > **Scanner-owned data and user-owned data live in different tables.**
-//!
-//! `manual_game` and `user_game` are authored by the user. **No scanner may
-//! ever delete from them.** If Steam is uninstalled and its games vanish from
-//! a scan, favourites and hand-added games survive untouched. That single
-//! property is most of what "stability" means to somebody two years in.
-//!
-//! Migrations are versioned from the first release, because a schema change
-//! after other people have libraries is otherwise unrecoverable.
+//! Scanner-owned and user-owned data live in separate tables (docs/PLAN.md §8). No scanner
+//! may delete from `manual_game` or `user_game`, so favourites and hand-added games survive
+//! a provider vanishing. Migrations are versioned so later schema changes are recoverable.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -21,8 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::{log_info, log_warn, paths};
 
-/// Each entry runs once, in order, and is never edited afterwards -- an edited
-/// migration is a schema that differs between a fresh install and an upgrade.
+/// Each entry runs once, in order, and is never edited: an edited migration gives a fresh
+/// install a different schema from an upgraded one.
 const MIGRATIONS: &[&str] = &[
     // v1
     "CREATE TABLE manual_game (
@@ -39,39 +30,22 @@ const MIGRATIONS: &[&str] = &[
         hidden       INTEGER NOT NULL DEFAULT 0,
         custom_title TEXT
      );",
-    // v2. Artwork is keyed by Steam appid, and the appid a game *is* is not
-    // always the appid whose artwork it should borrow. A Steam release with no
-    // cover on the CDN, a game listed under a different name, a hand-added
-    // GOG copy matched to the wrong entry -- all are fixed by pointing the art
-    // somewhere else, and none of them are fixed by editing a title.
-    //
-    // In user_game deliberately: it is a correction the user made, and no
-    // scanner may ever clear it.
+    // v2. Artwork can borrow another appid's art: a release with no cover, a renamed listing,
+    // a hand-added game matched wrongly. In user_game, since no scanner may clear it.
     "ALTER TABLE user_game ADD COLUMN art_app_id TEXT;",
-    // v3. Where this person actually keeps games.
-    //
-    // Guessing at Program Files and C:\\Games is worthless for anyone whose
-    // library lives in a custom folder on whichever drive had room -- which is
-    // most people with a large collection. So instead of guessing, learn: every
-    // time an executable is chosen by hand, remember the directory its game
-    // folder sits in, and search there first next time.
+    // v3. Directories where the user keeps games, learned from hand-picked executables
+    // rather than guessed from Program Files.
     "CREATE TABLE game_root (
         path     TEXT PRIMARY KEY,
         added_at INTEGER NOT NULL
      );",
-    // v4. Settings.
-    //
-    // A plain key/value table rather than typed columns, because settings
-    // arrive one at a time and a migration per setting is a poor trade.
+    // v4. Settings as key/value, so a new setting needs no migration.
     "CREATE TABLE setting (
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
      );",
-    // v5. Steam learns "last played" from localconfig.vdf on every rescan, but
-    // a hand-added game has no such file anywhere -- nothing ever wrote the
-    // timestamp, so it read as "never played" forever regardless of how often
-    // it was launched. Recorded here instead, at the moment we spawn it
-    // ourselves, since a manual game is the one case where we own the launch.
+    // v5. Manual games have no localconfig.vdf, so their last-played time is recorded
+    // when we launch them.
     "ALTER TABLE manual_game ADD COLUMN last_played INTEGER;",
 ];
 
@@ -82,12 +56,7 @@ fn db_path() -> PathBuf {
 }
 
 impl Store {
-    /// A fresh, empty database that exists only for the duration of a test.
-    ///
-    /// Tests previously shared the on-disk database, so one that inserted a row
-    /// changed what the next one saw -- and a second run of the suite behaved
-    /// differently from the first. Isolation is not optional for a test that
-    /// asserts "importing twice adds one row".
+    /// A fresh, empty database for one test, so tests do not see each other's rows.
     #[cfg(test)]
     pub fn in_memory() -> Self {
         let conn = Connection::open_in_memory().expect("in-memory database");
@@ -102,10 +71,8 @@ impl Store {
         }
         let conn = Connection::open(&path)
             .map_err(|e| format!("could not open {}: {e}", path.display()))?;
-        // Survives a power cut mid-write, and lets the metadata worker read
-        // while the interface writes. Refused on some network and read-only
-        // volumes, where the default rollback journal still works, so a
-        // refusal is not worth failing the open for.
+        // WAL survives a power cut mid-write and lets the metadata worker read during writes.
+        // Some network and read-only volumes refuse it; the rollback journal still works there.
         if let Err(e) = conn.pragma_update(None, "journal_mode", "WAL") {
             log_warn!("store", "WAL refused, using a rollback journal: {e}");
         }
@@ -144,15 +111,12 @@ fn migrate(conn: &Connection) -> Result<(), String> {
 pub struct ManualGame {
     pub id: i64,
     pub title: String,
-    /// Set when the game was identified through the Steam store search, which
-    /// is what lets a GOG or Epic copy borrow Steam's artwork and metadata.
-    /// It does not mean the game came from Steam.
+    /// Set when identified through the Steam store search, so a GOG or Epic copy can borrow
+    /// Steam's artwork and metadata. It does not mean the game came from Steam.
     pub steam_app_id: Option<String>,
     pub executable: Option<String>,
     pub args: String,
-    /// Unix seconds this was last launched through us. `None` until the first
-    /// successful launch -- there is no scanner that could ever learn this from
-    /// elsewhere, unlike Steam's `localconfig.vdf`.
+    /// Unix seconds of the last launch through us, `None` until the first. Nothing else tracks it.
     pub last_played: Option<i64>,
 }
 
@@ -176,10 +140,7 @@ impl Store {
         })
     }
 
-    /// Record that a hand-added game was just launched.
-    ///
-    /// Called when we spawn its process ourselves -- the one moment a manual
-    /// game's "last played" can be learned, since nothing external tracks it.
+    /// Record that a hand-added game was just launched; nothing external tracks this.
     pub fn record_manual_play(&self, id: i64) -> Result<(), String> {
         self.with(|c| {
             c.execute(
@@ -218,8 +179,7 @@ impl Store {
     pub fn remove_manual_game(&self, id: i64) -> Result<(), String> {
         self.with(|c| {
             c.execute("DELETE FROM manual_game WHERE id = ?1", params![id])?;
-            // The user data keyed to it goes too -- this is the one deletion
-            // that is the user's own instruction rather than a scanner's.
+            // Its user data goes too: this deletion is the user's instruction, not a scanner's.
             c.execute(
                 "DELETE FROM user_game WHERE game_id = ?1",
                 params![format!("manual:{id}")],
@@ -263,11 +223,8 @@ impl Store {
         })
     }
 
-    /// Toggle a flag, returning the new value.
-    ///
-    /// Upserts, because a game acquires a row here the first time the user
-    /// expresses an opinion about it and not before -- there is no reason to
-    /// carry a row per game in the library.
+    /// Toggle a flag, returning the new value. Upserts, because a game gets a row only once
+    /// the user sets something on it.
     pub fn toggle_favourite(&self, game_id: &str) -> Result<bool, String> {
         self.with(|c| {
             c.execute(
@@ -285,14 +242,9 @@ impl Store {
 }
 
 impl Store {
-    /// Point a game's artwork at a different Steam appid.
-    ///
-    /// Passing None clears the override and returns the game to its own
-    /// artwork, which is the escape hatch when a correction was itself wrong.
+    /// Point a game's artwork at a different Steam appid, or back at its own with `None`.
     pub fn set_art_source(&self, game_id: &str, app_id: Option<&str>) -> Result<(), String> {
-        // Either a bare Steam appid or a `sgdb:<id>` reference. Both end up in
-        // a URL, so both are validated as digits after the prefix rather than
-        // trusted.
+        // A bare Steam appid or `sgdb:<id>`. Both end up in a URL, so require digits.
         if let Some(id) = app_id {
             let digits = id.strip_prefix("sgdb:").unwrap_or(id);
             if digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
@@ -335,11 +287,8 @@ impl Store {
         })
     }
 
-    /// Store a setting, or remove it when the value is blank.
-    ///
-    /// Blank-means-remove matters for the SteamGridDB key: clearing the field
-    /// must actually turn the source off, not store an empty key that fails
-    /// every request.
+    /// Store a setting, or remove it when blank, so clearing the SteamGridDB key turns the
+    /// source off rather than storing an empty key that fails every request.
     pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
         let value = value.trim();
         self.with(|c| {
@@ -365,11 +314,8 @@ impl Store {
         })
     }
 
-    /// Write a game's user data wholesale, for import.
-    ///
-    /// One statement rather than four separate toggles: an import that applied
-    /// favourite, hidden, title and artwork as four writes would leave a
-    /// half-imported game if it failed partway.
+    /// Write a game's user data in one statement, for import, so a failure cannot leave it
+    /// half-imported.
     pub fn set_user_game(
         &self,
         game_id: &str,
@@ -408,13 +354,8 @@ impl Store {
         })
     }
 
-    /// Remember where a game was found, so the next one nearby is found for
-    /// free.
-    ///
-    /// Records the *grandparent* and great-grandparent of the executable, not
-    /// its own directory: `E:\\Games\\Elden Ring\\Game\\eldenring.exe` means
-    /// the useful root is `E:\\Games`, and scanning the game's own folder would
-    /// never help find a different game.
+    /// Remember where a game was found, to search there first next time. Records the
+    /// executable's grandparent and great-grandparent, since its own folder holds only that game.
     pub fn remember_root(&self, executable: &str) -> Result<(), String> {
         let path = std::path::Path::new(executable);
         let mut roots = Vec::new();
@@ -437,10 +378,8 @@ impl Store {
         Ok(())
     }
 
-    /// A root as given, for a profile import. Importing used to go through
-    /// `remember_root` with a fake file appended, which records the parent
-    /// of what it is given: every export-then-import climbed each root one
-    /// directory towards `/`.
+    /// Add a root as given, for import. Going through `remember_root` climbed each root one
+    /// directory towards `/` on every export and import.
     pub fn add_root(&self, path: &str) -> Result<(), String> {
         self.with(|c| {
             c.execute(
@@ -476,8 +415,7 @@ mod tests {
     fn migrations_are_idempotent() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        // Running again on an up-to-date database must do nothing rather than
-        // fail on "table already exists".
+        // An up-to-date database must not fail on "table already exists".
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
@@ -497,10 +435,6 @@ mod tests {
         assert_eq!(games[0].executable.as_deref(), Some("/games/hk/hk.exe"));
     }
 
-    /// A hand-added game has no `localconfig.vdf` for anything to learn its
-    /// last-played time from, so before `record_manual_play` existed the
-    /// column stayed NULL forever and the game showed "never played" no
-    /// matter how many times it had actually run.
     #[test]
     fn a_manual_game_remembers_when_it_was_last_played() {
         let s = memory();
@@ -538,7 +472,6 @@ mod tests {
         let flags = s.user_flags().unwrap();
         assert_eq!(flags[0].1.art_app_id.as_deref(), Some("1091500"));
 
-        // A correction can itself be wrong, so it must be reversible.
         s.set_art_source("steam:4254230", None).unwrap();
         assert_eq!(s.user_flags().unwrap()[0].1.art_app_id, None);
     }
@@ -574,7 +507,6 @@ mod tests {
         assert_eq!(s.user_flags().unwrap()[0].1.custom_title, None);
     }
 
-    /// Corrections and favourites share a row and must not clobber each other.
     #[test]
     fn user_edits_compose_rather_than_overwrite() {
         let s = memory();
@@ -593,8 +525,6 @@ mod tests {
         s.remember_root("/Volumes/Big/Games/Elden Ring/Game/eldenring.exe")
             .unwrap();
         let roots = s.game_roots().unwrap();
-        // The game's own folder is useless for finding a *different* game; its
-        // parent is the one worth scanning.
         assert!(roots.contains(&"/Volumes/Big/Games/Elden Ring".to_string()));
         assert!(roots.contains(&"/Volumes/Big/Games".to_string()));
         assert!(!roots.iter().any(|r| r.ends_with("eldenring.exe")));
@@ -610,8 +540,7 @@ mod tests {
         assert_eq!(roots.iter().filter(|r| *r == "/games").count(), 1);
     }
 
-    /// Scanning from a filesystem root is a full-disk walk, which is exactly
-    /// what this feature exists to avoid.
+    /// Scanning from a filesystem root would walk the whole disk.
     #[test]
     fn a_filesystem_root_is_never_recorded() {
         let s = memory();
@@ -626,8 +555,6 @@ mod tests {
         assert_eq!(s.setting("sgdb_key").unwrap(), None);
         s.set_setting("sgdb_key", "  abc123  ").unwrap();
         assert_eq!(s.setting("sgdb_key").unwrap().as_deref(), Some("abc123"));
-        // Clearing the field must turn the source off, not store an empty key
-        // that fails every request.
         s.set_setting("sgdb_key", "   ").unwrap();
         assert_eq!(s.setting("sgdb_key").unwrap(), None);
     }

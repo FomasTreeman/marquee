@@ -7,21 +7,13 @@ edition = "2021"
 rust-version = "1.77"
 
 [lib]
-# Tauri v2 wants the app in a lib so mobile targets can link it. We are
-# desktop-only, but keeping the split costs nothing and matches every example.
+# Tauri v2's lib/bin split, kept although we are desktop-only.
 name = "marquee_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
-# Tauri decides whether to load the dev server or its embedded interface from
-# this feature, not from the build profile: `dev = !custom-protocol`, in tauri's
-# own build.rs. It is on by default so any ordinary `cargo build` produces a
-# real application, and `tauri dev` turns it off for itself by running with
-# --no-default-features.
-#
-# Without this section every build was a dev build, and the resulting binary
-# opened http://localhost:1420 and showed "localhost refused to connect" on a
-# machine with no dev server. Hand-writing the manifest rather than using the
-# template is what lost it.
+# Tauri sets `dev = !custom-protocol`, ignoring the build profile. Removing this
+# ships a build that loads http://localhost:1420 instead of its own interface.
+# `tauri dev` runs with --no-default-features to turn it off.
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]
@@ -43,48 +35,37 @@ bytes = "1"
 # Native file picker, for pointing a hand-added game at its executable.
 tauri-plugin-dialog = "2"
 
-# Gamepad input. Uses SDL_GameControllerDB mappings, which is what makes an
-# off-brand pad work without a per-device patch. See src/input.rs.
+# Gamepad input, with SDL_GameControllerDB mappings for off-brand pads.
 gilrs = "0.11"
 
-# Bundled so there is no system SQLite dependency to differ across the three
-# platforms. docs/PLAN.md §8: user data must survive, so it gets a real
-# database with real migrations rather than a JSON file.
+# User data with real migrations; bundled so no system SQLite is needed.
 rusqlite = { version = "0.32", features = ["bundled"] }
 
-# Artwork resizing on ingest. Only the codecs we actually fetch, so the build
-# does not carry decoders for formats Steam never serves.
+# Artwork resizing, with only the codecs Steam serves.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
-# Steam's store endpoints, for names and metadata. rustls rather than the
-# system TLS stack so a Linux build does not depend on which OpenSSL the
-# distribution shipped.
+# Steam store metadata; rustls so Linux builds do not depend on system OpenSSL.
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 
 # Only so the app can restart itself after an update lands.
 tauri-plugin-process = "2"
 
 [target.'cfg(windows)'.dependencies]
-# Only for SetThreadExecutionState, to stop the screen blanking while someone
-# is browsing with a controller. See src/screen.rs.
+# SetThreadExecutionState, to stop the screen blanking during controller use.
 windows-sys = { version = "0.59", features = [
     "Win32_System_Power",
-    # ShellExecuteW, for opening steam:// without a console window flashing
-    # up. See run::shell_execute.
+    # ShellExecuteW, to open steam:// without a console window. See run.rs.
     "Win32_UI_Shell",
 ] }
-# Steam records its own install path in the registry. Reading it beats
-# guessing Program Files, because a lot of people move Steam to another drive.
+# Reads Steam's install path from the registry, as many move it off C:.
 winreg = "0.52"
 
-# Over-the-air updates. Desktop only, which is every platform we ship on --
-# the target filter is what the plugin's own documentation asks for, since it
-# has no meaning on mobile. See docs/UPDATES.md for how the whole thing works.
+# Over-the-air updates; desktop-only per the plugin docs. See docs/UPDATES.md.
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
 tauri-plugin-updater = "2"
 
 [profile.dev]
-# The debug build is what we dogfood, so it should not feel like a debug build.
+# We dogfood the debug build, so it gets some optimisation.
 opt-level = 1
 
 [profile.dev.package."*"]

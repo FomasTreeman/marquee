@@ -1,9 +1,5 @@
-/**
- * The library, as the interface sees it.
- *
- * A typed client over the Rust scan. Nothing here knows what a `.acf` file is;
- * that is the whole point of the provider boundary in docs/PLAN.md §5.
- */
+/** A typed client over the Rust scan. Store formats stay on the Rust side
+ *  (docs/PLAN.md §5). */
 import { listen } from '@tauri-apps/api/event'
 import { call, inApp } from './host'
 import { logWarn } from './log'
@@ -12,15 +8,11 @@ export interface Game {
   id: string
   provider: string
   providerId: string
-  /** Empty until the metadata worker fills it in. Deliberately empty rather
-   *  than a placeholder like "App 220", so the interface can show that a name
-   *  is still arriving instead of showing something wrong. */
+  /** Empty, not a placeholder, until the metadata worker fills it in. */
   title: string
   installed: boolean
-  /** Steam has a newer version of this game queued. Always false for a
-   *  manual game -- nothing here tracks its own version. */
+  /** Steam has an update queued. Always false for a manual game. */
   updateAvailable: boolean
-  /** Steam is downloading or applying that update right now. */
   updating: boolean
   installDir: string | null
   sizeBytes: number
@@ -45,8 +37,7 @@ export interface Meta {
 
 export interface ProviderResult {
   provider: string
-  /** False means the store simply is not installed here, which is not an
-   *  error and must not be shown as one. */
+  /** False means the store is not installed, which is not an error. */
   detected: boolean
   error: string | null
   tookMs: number
@@ -59,12 +50,8 @@ export interface ScanResult {
 }
 
 /**
- * Ask for metadata, in priority order.
- *
- * Returns whatever is already cached, immediately. The rest arrives through
- * `onMeta` as the background worker fetches it -- Steam's store endpoint
- * allows roughly 200 requests per five minutes, so a library of two hundred
- * games takes a few minutes on first run and is instant forever after.
+ * Ask for metadata, in priority order. Returns what is cached now; the rest
+ * arrives through `onMeta`, slowly, as Steam rate-limits its store endpoint.
  */
 export async function requestMeta(appIds: string[]): Promise<Meta[]> {
   if (!inApp) return []
@@ -74,10 +61,9 @@ export async function requestMeta(appIds: string[]): Promise<Meta[]> {
 export interface SearchHit {
   appId: string
   name: string
-  /** Which catalogue this came from. A Steam hit carries an appid that unlocks
-   *  metadata; a SteamGridDB one carries artwork and nothing else. */
+  /** A Steam hit brings metadata; a SteamGridDB one only artwork. */
   source: 'steam' | 'sgdb'
-  /** The source's own thumbnail. A last resort — see `coverFor`. */
+  /** The source's own thumbnail. The last resort; see `coverFor`. */
   thumbnail: string
 }
 
@@ -86,49 +72,29 @@ export function artKeyFor(hit: SearchHit): string {
   return `${hit.source}-${hit.appId}`
 }
 
-/**
- * The value `set_art_source` wants for this hit.
- *
- * A SteamGridDB id has to keep its prefix or it is read as a Steam appid --
- * which is a different game that probably exists, so the mistake shows up as
- * the wrong artwork rather than as an error.
- */
+/** The value `set_art_source` wants. A SteamGridDB id keeps its prefix, or it
+ *  is read as some other game's Steam appid. */
 export function artSourceFor(hit: SearchHit): string {
   return hit.source === 'sgdb' ? `sgdb:${hit.appId}` : hit.appId
 }
 
-/** A search result's cover, built the same way a card's is, so it goes through
- *  placeholder detection and the fallback chain rather than pointing at a raw
- *  CDN path that is a grey box for a lot of recent games. */
+/** Built like a card's cover, so it gets placeholder detection rather than
+ *  Steam's grey box. */
 export function coverFor(hit: SearchHit): string | undefined {
   return steamArtwork(artKeyFor(hit)).cover
 }
 
-/**
- * Search for artwork to borrow, from both catalogues.
- *
- * Answers "whose artwork should this use", where `searchGames` answers "which
- * game is this". SteamGridDB leads, because it has what Steam is missing;
- * Steam follows, because a game listed there under a name you would not guess
- * is a real answer too.
- */
+/** Search both catalogues for artwork to borrow, SteamGridDB first as it has
+ *  what Steam lacks. */
 export async function searchArtwork(term: string): Promise<SearchHit[]> {
   if (!inApp) return []
   return call<SearchHit[]>('search_artwork', { term })
 }
 
-/**
- * Find a game by name.
- *
- * Steam's store search, which needs no key. That it is Steam's index does not
- * make this a Steam feature -- a Steam *store page* exists for most PC games
- * whoever sold them, so a GOG or Epic copy is identified here and then borrows
- * Steam's artwork by appid.
- */
+/** Find a game by name in Steam's store, which needs no key and lists most PC
+ *  games wherever they were bought. */
 export async function searchGames(term: string): Promise<SearchHit[]> {
-  // `pnpm dev` has no backend. Rather than an overlay that can never show a
-  // result, fall back to the sample titles so the flow is inspectable during
-  // pure CSS work. Never reached in the app.
+  // `pnpm dev` has no backend, so search the sample titles instead.
   if (!inApp) {
     const { searchSample } = await import('./sample')
     return searchSample(term)
@@ -151,23 +117,18 @@ export async function removeManualGame(id: number): Promise<void> {
 
 export interface Settings {
   steamgriddbKey: string
-  /** Sort order, remembered across launches. */
   sort: string
   /** Folder an up-to-date copy of the profile is kept in, if any. */
   profileFolder: string
-  /** Whether to get out of a launching game's way. */
   minimiseOnLaunch: boolean
-  /** 'grain' or 'blur'. See resolveBackgroundStyle in src/perf.ts, which is
-   *  also what turns a blank or unrecognised value into 'grain'. */
+  /** 'grain' or 'blur'; see resolveBackgroundStyle in src/perf.ts. */
   backgroundStyle: string
-  /** The version an update prompt was last refused for. See src/update.ts. */
+  /** The version an update prompt was last refused for. */
   updateDeclined: string
-  /** Whether Marquee is registered in Windows' own startup list. Read live
-   *  from the registry, not a stored preference -- see src-tauri/src/autostart.rs. */
+  /** Read live from the Windows registry, not stored. */
   startOnLogin: boolean
 }
 
-/** Store any single setting. */
 export async function setSetting(key: string, value: string): Promise<void> {
   if (!inApp) return
   return call<void>('set_setting', { key, value })
@@ -184,7 +145,7 @@ export async function getSettings(): Promise<Settings> {
   return call<Settings>('get_settings')
 }
 
-/** Windows only -- see src-tauri/src/autostart.rs for why. */
+/** Windows only; see src-tauri/src/autostart.rs. */
 export async function setAutostart(enabled: boolean): Promise<void> {
   if (!inApp) return
   return call<void>('set_autostart', { enabled })
@@ -197,13 +158,8 @@ export interface ImportSummary {
   roots: number
 }
 
-/**
- * Everything the user authored, as a file.
- *
- * Favourites, hidden games, hand-added games and where they live, artwork
- * corrections, learned folders, settings. Kilobytes. Artwork and metadata are
- * deliberately excluded — they are a cache and rebuild themselves.
- */
+/** Export everything the user authored. Artwork and metadata are a cache and
+ *  are left out. */
 export async function exportProfile(path: string): Promise<void> {
   return call<void>('export_profile', { path })
 }
@@ -213,8 +169,7 @@ export async function importProfile(path: string): Promise<ImportSummary> {
   return call<ImportSummary>('import_profile', { path })
 }
 
-/** A profile already on this machine, if there is one — the configured folder,
- *  then the folders games are known to live in. */
+/** A profile on this machine: the configured folder, then game folders. */
 export async function findProfile(): Promise<string | null> {
   if (!inApp) return null
   return call<string | null>('find_profile')
@@ -225,43 +180,35 @@ export async function setProfileFolder(folder: string): Promise<void> {
   return call<void>('set_profile_folder', { folder })
 }
 
-/**
- * Everything worth knowing about this machine, as one block of text.
- *
- * For pasting into an issue. Nothing here leaves the machine on its own.
- */
+/** Machine details as text for pasting into an issue. Never sent anywhere. */
 export async function diagnosticReport(): Promise<string> {
   if (!inApp) return 'Not running in the app.'
   return call<string>('diagnostic_report')
 }
 
-/** Quit, minimise, restart or shut down. The last two end the whole session,
- *  so the interface arms them with a second press first. */
+/** Quit, minimise, restart or shut down. */
 export async function systemAction(action: string): Promise<void> {
   if (!inApp) throw new Error('that needs the app, not a browser tab')
   return call<void>('system_action', { action })
 }
 
-/** Hide a game from the library, or bring it back. Survives every rescan. */
+/** Hide or unhide a game. Survives rescans. */
 export async function setHidden(gameId: string, hidden: boolean): Promise<void> {
   return call<void>('set_hidden', { gameId, hidden })
 }
 
-/** Hand a Steam game to Steam to uninstall; for a hand-added one, forget where
- *  it lives. Returns a description of what happened. */
+/** Steam uninstalls its own games; a hand-added one just loses its path. */
 export async function uninstallGame(id: string): Promise<string> {
   return call<string>('uninstall_game', { id })
 }
 
-/** Ask Steam to download a pending update. Marquee never fetches anything
- *  itself, docs/PLAN.md §1 -- this only hands the appid to the client that
- *  already owns the files. Returns the URI it was handed. */
+/** Ask Steam to download a pending update; Marquee never fetches game files
+ *  itself (docs/PLAN.md §1). */
 export async function updateGame(id: string): Promise<string> {
   return call<string>('update_game', { id })
 }
 
-/** Open a Steam game's store page inside the Steam client. Returns the URI it
- *  was handed. */
+/** Open a game's store page in the Steam client. */
 export async function viewInStore(id: string): Promise<string> {
   return call<string>('view_in_store', { id })
 }
@@ -269,7 +216,6 @@ export async function viewInStore(id: string): Promise<string> {
 /** Toggle fullscreen, returning the new state. Remembered across launches. */
 export async function toggleFullscreen(): Promise<boolean> {
   if (!inApp) {
-    // A browser tab has its own fullscreen and no window to remember.
     if (document.fullscreenElement) { await document.exitFullscreen(); return false }
     await document.documentElement.requestFullscreen()
     return true
@@ -277,8 +223,7 @@ export async function toggleFullscreen(): Promise<boolean> {
   return call<boolean>('toggle_fullscreen')
 }
 
-/** Saving also clears the artwork cache, so games that previously found
- *  nothing are re-resolved against the new source. */
+/** Also clears the artwork cache, so missing art is retried with the key. */
 export async function setSteamGridDbKey(key: string): Promise<void> {
   return call<void>('set_steamgriddb_key', { key })
 }
@@ -297,12 +242,7 @@ export async function artworkReport(appIds: string[]): Promise<ArtworkManifest[]
   return call<ArtworkManifest[]>('artwork_report', { appIds })
 }
 
-/**
- * Point a game's artwork at a different Steam appid, or null to undo.
- *
- * The appid a game *is* is not always the appid whose artwork it should
- * borrow, and no amount of renaming fixes that.
- */
+/** Point a game's artwork at another source, or null to undo. */
 export async function setArtSource(gameId: string, appId: string | null): Promise<void> {
   return call<void>('set_art_source', { gameId, appId })
 }
@@ -312,46 +252,28 @@ export async function setCustomTitle(gameId: string, title: string | null): Prom
   return call<void>('set_custom_title', { gameId, title })
 }
 
-/**
- * Look for a game's executable.
- *
- * Searches the folders previous choices have taught it about first, then a
- * short list of conventional install locations. A suggestion, not a decision:
- * the user confirms whatever comes back, because launching the wrong program
- * is worse than asking.
- */
+/** Suggest a game's executable from learned folders, then common install
+ *  locations. The user confirms it. */
 export async function findExecutable(title: string): Promise<string | null> {
   if (!inApp) return null
   return call<string | null>('find_executable', { title })
 }
 
-/** Toggle, returning the new value. User data, and no scanner can clear it. */
+/** Returns the new value. */
 export async function toggleFavourite(gameId: string): Promise<boolean> {
   return call<boolean>('toggle_favourite', { gameId })
 }
 
 /**
- * Start a game.
- *
- * Resolves to a description of what happened -- the steam:// URI or the
- * executable path -- so the interface can say "handing off to Steam" rather
- * than showing a generic spinner. Rejects with a human-readable reason.
- *
- * The game is resolved from the library Rust already holds. The interface is
- * never the authority on what a game is.
+ * Start a game by id; Rust resolves it from its own library. Resolves to how
+ * it was launched, or rejects with a readable reason.
  */
 export async function launchGame(id: string): Promise<string> {
   if (!inApp) throw new Error('launching needs the app, not a browser tab')
   return call<string>('launch_game', { id })
 }
 
-/**
- * A game that spawned and then died.
- *
- * Reported after the fact because `spawn` succeeding says nothing about
- * whether the program ran — a missing runtime or a wrong working directory
- * looks identical to a successful launch until the process is gone.
- */
+/** A game that spawned and then died, which a successful spawn cannot reveal. */
 export async function onLaunchFailed(
   cb: (info: { title: string; detail: string }) => void,
 ): Promise<() => void> {
@@ -369,17 +291,8 @@ export async function scanLibrary(): Promise<ScanResult> {
   return call<ScanResult>('scan_library')
 }
 
-/**
- * Artwork.
- *
- * In the app these are `art://` URLs served from our own cache: fetched once,
- * resized on ingest, and thereafter available with no network at all. See
- * src-tauri/src/art.rs.
- *
- * In a browser tab there is no protocol handler, so they fall back to Steam's
- * CDN directly. Same three assets either way — cover, wide key art, and the
- * transparent wordmark the whole design is built around.
- */
+/** In the app, artwork is served from the local cache via `art://` (see
+ *  src-tauri/src/art.rs); a browser tab falls back to Steam's CDN. */
 const CDN = 'https://cdn.cloudflare.steamstatic.com/steam/apps'
 
 export interface Artwork {
@@ -396,20 +309,14 @@ export async function initArtwork(): Promise<void> {
   try {
     artBase = await call<string>('art_url_base')
   } catch (e) {
-    // Survivable: the CDN still works, it just costs the network every launch
-    // instead of reading the cache. Silent, though, it looks like slow art.
+    // The CDN still works, but silently it would just look like slow art.
     logWarn('art', 'no local art protocol; falling back to the CDN', e)
     artBase = ''
   }
 }
 
-/**
- * The source-qualified key a game's artwork is looked up under.
- *
- * `steam-1091500` or `sgdb-8452`. Qualified because a game can borrow artwork
- * from a SteamGridDB entry that has no Steam appid at all — which is the whole
- * point when the missing artwork is Steam's.
- */
+/** The artwork key, `steam-1091500` or `sgdb-8452`: a SteamGridDB entry may
+ *  have no Steam appid. */
 export function artIdFor(game: Pick<Game, 'providerId' | 'artAppId'>): string | undefined {
   const override = game.artAppId
   if (override?.startsWith('sgdb:')) {
@@ -428,9 +335,7 @@ export function steamArtwork(key: string): Artwork {
       logo: `${artBase}${key}/logo`,
     }
   }
-  // No protocol handler in a plain browser tab, so straight to the CDN. Only
-  // Steam keys can be served that way; a SteamGridDB one has no public URL we
-  // can construct.
+  // Only Steam keys have a CDN URL we can build.
   const appid = key.startsWith('steam-') ? key.slice(6) : ''
   if (!appid) return {}
   return {
@@ -440,8 +345,7 @@ export function steamArtwork(key: string): Artwork {
   }
 }
 
-/** Deterministic tint from the title, so a game with no artwork still looks
- *  designed rather than broken. */
+/** A stable tint per title, so a card without artwork does not look broken. */
 export function tintFor(title: string): string {
   let h = 0
   for (let i = 0; i < title.length; i++) h = (h * 31 + title.charCodeAt(i)) | 0

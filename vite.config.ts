@@ -1,12 +1,10 @@
 import { defineConfig } from 'vite'
 
-// Tauri drives this dev server; the port is fixed so tauri.conf.json can
-// point at it, and we fail loudly rather than silently hopping to 1421.
+// The port is fixed for tauri.conf.json; strictPort fails rather than hop.
 export default defineConfig({
   test: {
-    // The board rules are a plain node script -- no DOM, no vitest, and it
-    // calls process.exit, which vitest reasonably objects to. It runs on its
-    // own in `pnpm test`, immediately before this.
+    // Excludes the board rules script, which calls process.exit and runs
+    // separately in `pnpm test`.
     include: ['src/**/*.test.ts'],
   },
   clearScreen: false,

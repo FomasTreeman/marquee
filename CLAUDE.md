@@ -3,6 +3,10 @@
 A controller-first game launcher. Tauri v2, Rust core, TypeScript frontend, no
 UI framework. Read `docs/PLAN.md` for why any of it is the way it is.
 
+Development runs through an AI loop: a person files an issue, an agent fixes it
+or asks a question with `needs-decision`, and a person reviews every pull
+request before it merges. `docs/AUTOMATION.md` describes the loop.
+
 **Priorities, in tie-breaking order: performance, then stability, then UI.**
 
 ## Before you finish
@@ -44,9 +48,12 @@ So:
 
 - **Comments say why, never what.** The code says what. If a line needs a
   comment to explain what it does, rewrite the line.
-- **Record the bug in the comment.** Most comments here name a real failure
-  that happened, because "don't remove this" is not an argument and "this was
-  how filtering to two results still showed forty-eight cards" is.
+- **Keep comments short.** One or two lines, three at most, in plain
+  sentences. If the reason is a real bug, name it in a clause ("Steam returns
+  a grey placeholder with a 200"), not as a story. No anecdotes, no
+  measurements kept as narrative, no history of earlier versions unless it
+  stops someone bringing a bug back. Workflow and script headers are two to
+  five lines.
 - **British English**, in comments, identifiers and user-facing text.
   `favourite`, `minimise`, `colour`.
 - **No new dependencies without a reason in the commit message.** The
@@ -66,17 +73,15 @@ So:
 
 ## Commits
 
-Prose, not bullet-point changelogs. Say what changed, and why it was wrong
-before — a reader in six months needs the reasoning, not the diff, which git
-already has. Subject line in the imperative, no prefix tags, no trailing full
-stop.
+A short paragraph, not a bullet-point changelog: what changed and why it was
+wrong before. Git already has the diff. Subject line in the imperative, no
+prefix tags, no trailing full stop.
 
 **Finished work ends in a pull request, not in the working tree.** When a
 change is done and `pnpm test` and clippy have passed, branch it, commit it and
-open the PR without being asked. Leaving it uncommitted is not the cautious
-option: more than one agent works in this checkout, and a session that ran
-`git commit -a` once swept another's unrelated, unreviewed changes into its own
-commit and onto main under a commit message about something else.
+open the PR without being asked. More than one agent works in this checkout, so
+stage files by name, never `git commit -a`, which once swept another session's
+changes into an unrelated commit.
 
 Never commit to `main` — a ruleset refuses it. Never commit anything matching
 `*.key`: the update signing key must not enter the repository. See

@@ -5,21 +5,10 @@ import {
 } from './grid-math'
 
 /**
- * Virtualised cover grid.
- *
- * This is the load-bearing performance component: docs/PLAN.md §2 budgets a
- * locked frame rate with 2,000 games on integrated graphics, and a naive grid
- * of 2,000 DOM nodes does not come close on any of the three webviews.
- *
- * Three rules make it work, and all three matter:
- *
- *   1. Only the visible window plus an overscan margin exists in the DOM.
- *   2. Card elements are POOLED. Scrolling reassigns content to existing
- *      nodes; it never creates or destroys them, so there is no allocation
- *      churn and no style recalculation for nodes that merely moved.
- *   3. Position is a `transform`, never `top`/`left`. Transforms are
- *      compositor-only; box offsets are layout, and layout at 120Hz is how
- *      you lose the budget.
+ * Virtualised cover grid, sized to hold frame rate with 2,000 games on
+ * integrated graphics (docs/PLAN.md §2). Only the visible rows plus overscan
+ * exist; card nodes are pooled and reassigned, never created on scroll; and
+ * position is a `transform`, which stays on the compositor, never `top`/`left`.
  */
 
 export interface GridItem {
@@ -36,31 +25,26 @@ interface Slot {
   art: HTMLElement
   fallback: HTMLElement
   img: HTMLImageElement
-  /** Bumped on every reassignment, so a slow decode for an assignment that
-   *  has since been superseded cannot reveal the wrong game's art -- the
-   *  cause of "duplicate covers" while fast-scrolling. */
+  /** Bumped on every reassignment so a superseded decode cannot reveal the
+   *  wrong game's cover while fast-scrolling. */
   generation: number
   /** The src that last failed to decode in this node, if it is still set. */
   failed: string | undefined
   /** Which item this pooled node currently shows, or -1 when parked. */
   index: number
-  /** Last values written to the DOM. Every write is compared against these
-   *  first: an unconditional `style.transform` on 49 nodes is 49 style
-   *  invalidations per frame, and an unconditional `data-focus` is 49 more
-   *  when exactly two of them ever change. That was most of the navigation
-   *  p99. */
+  /** Last values written to the DOM, compared before every write: unconditional
+   *  writes on every slot were most of the navigation p99. */
   transform: string
   focus: boolean
-  /** Whether the node is currently showing anything. Not derivable from
-   *  `index`: layout() resets index to -1 for every slot, which made the park
-   *  branch a no-op -- filtering to two results still showed forty-eight. */
+  /** Not derivable from `index`, which layout() resets to -1 for every slot;
+   *  relying on it left stale cards visible after filtering. */
   visible: boolean
 }
 
 const OVERSCAN_ROWS = 2
 
-/** Artwork failures are summarised rather than logged one per card: a blocked
- *  host would otherwise write one line per visible cover, every scroll. */
+/** Summarised rather than logged per card, or a blocked host writes a line per
+ *  cover on every scroll. */
 let artFailures = 0
 let artReportTimer: number | undefined
 let firstArtFailure = ''
@@ -78,12 +62,9 @@ function reportArtFailure(url: string): void {
 export interface Grid {
   setItems(items: GridItem[]): void
   focus(index: number): void
-  /** Update one item's title in place. Metadata arrives progressively and
-   *  rebuilding the whole list for each name would reset scroll and focus. */
+  /** Update one title in place; rebuilding the list would reset scroll and focus. */
   setTitle(index: number, title: string): void
-  /** The layout the grid is actually using. Development only — the arithmetic
-   *  is testable in isolation, but "what did it compute *here*" is a different
-   *  question and was previously only answerable by inference. */
+  /** The layout the grid is actually using, for development. */
   debug(): { metrics: Metrics; scrollY: number; scrollTarget: number; gliding: boolean; viewH: number; gap: number; gapX: number; focused: number; items: number }
   move(dx: number, dy: number): void
   get focused(): number
@@ -94,11 +75,10 @@ export interface Grid {
 export function createGrid(
   viewport: HTMLElement,
   onFocusChange?: (index: number, item: GridItem | undefined) => void,
-  /** Double-click, or a second click on the already-selected card. Kept
-   *  separate from selection so a mouse cannot launch a game by accident. */
+  /** Double-click, or a second click on the selected card, so a mouse cannot
+   *  launch a game by accident. */
   onActivate?: (index: number) => void,
-  /** Right-click. The mouse idiom for "tell me more about this", and the only
-   *  route to the details screen that does not require knowing a key. */
+  /** Right-click, opening the details screen. */
   onInspect?: (index: number) => void,
 ): Grid {
   const canvas = document.createElement('div')
@@ -107,19 +87,17 @@ export function createGrid(
 
   let items: GridItem[] = []
   let slots: Slot[] = []
-  /** All the arithmetic lives in grid-math.ts, where it can be tested without
-   *  a browser. This module is the DOM half only. */
+  /** The arithmetic lives in grid-math.ts; this module is the DOM half. */
   let m: Metrics = metrics({
     inner: 0, viewportHeight: 0, ideal: 188, gapX: 30, gapY: 20, ratio: 0.6667, count: 0,
   })
   let gap = 20
-  /** Horizontal gutter. Wider than the vertical one -- see design/tokens.json. */
+  /** Horizontal gutter, wider than the vertical one (design/tokens.json). */
   let gapX = 30
-  /** Space the focused row needs above it: it scales and draws a ring outside
-   *  its own box, both of which clip against a hard top edge. */
+  /** Room the focused row needs above it for its scale and outset ring. */
   let clearance = 12
-  /** How far a card's shadow reaches below it. Subtracted from the gap so the
-   *  row above is pushed fully out of view rather than leaving its shadow. */
+  /** How far a card's shadow reaches below it, so the row above scrolls fully
+   *  out of view. */
   let shadowReach = 19
   let focused = 0
   let scheduled = false
@@ -131,9 +109,8 @@ export function createGrid(
      which is where we read it. */
   let scrollY = 0
   let viewH = 0
-  /** Where the scroll is heading, which is not where it is during a glide.
-   *  Successive moves must accumulate from the destination, or holding a
-   *  direction under-scrolls by however far the last glide had left to go. */
+  /** Where the scroll is heading. Moves accumulate from here, or a held
+   *  direction under-scrolls during a glide. */
   let scrollTarget = 0
   let glideFrom = 0
   let glideStart = 0
@@ -146,10 +123,8 @@ export function createGrid(
       const v = parseFloat(cs.getPropertyValue(name))
       return Number.isFinite(v) ? v : fallback
     }
-    // Chrome scales with viewport height (see src/shell.ts). Both operands
-    // are read as plain numbers and multiplied here, because a token defined
-    // as `calc(... * var(--s))` comes back from getComputedStyle as the
-    // unresolved calc() string, not a number.
+    // Multiplied here because a `calc(... * var(--s))` token comes back from
+    // getComputedStyle as an unresolved string.
     const scale = px('--s', 1) || 1
     gap = px('--gap', 20) * scale
     gapX = px('--gap-x', 30) * scale
@@ -165,15 +140,11 @@ export function createGrid(
       ratio: px('--cover-ratio', 0.6667) || 0.6667,
       count: items.length,
     })
-    // After metrics(): the focused card grows with its height, and reading
-    // the previous layout's height here left the clearance short for one
-    // layout after every resize.
+    // After metrics(), or the clearance lags one layout behind a resize.
     clearance = topClearance(m.cardH, px('--focus-scale', 1) || 1, px('--ring-offset', 4) * scale)
 
-    // The gap has to pay for the ring's clearance *and* keep the previous
-    // row's shadow out of view. Those pull in opposite directions, so a
-    // change to any of the numbers is worth hearing about rather than
-    // discovering as a sliver at the top edge.
+    // The gap must cover both the ring's clearance and the previous row's
+    // shadow; a token change that breaks this shows as a sliver at the top.
     if (!gapCoversEdges(gap, shadowReach, clearance)) {
       logWarn(
         'grid',
@@ -190,28 +161,16 @@ export function createGrid(
     const art = document.createElement('div')
     art.className = 'card-art'
     const img = document.createElement('img')
-    // NOT lazy. The grid is already virtualised -- only about fifty card
-    // elements exist and every one of them is on or beside the screen -- so
-    // lazy loading adds nothing and actively breaks it: the browser decides
-    // whether a lazy image is "near the viewport" from layout, and these are
-    // positioned by transforms inside a scroller, which it does not
-    // re-evaluate until something forces it to. The symptom was covers that
-    // stayed blank until the window was unfocused and focused again, while the
-    // hero logo -- the one image that was never lazy -- appeared at once.
+    // Not lazy: the browser judges "near the viewport" from layout and does not
+    // re-evaluate transformed slots, so covers stayed blank until a refocus.
     img.decoding = 'async'
     img.draggable = false
-    // Not every appid has every asset on the CDN. A missing cover reveals the
-    // tinted fallback underneath rather than a broken image frame -- but it is
-    // reported, because a *silently* missing cover is indistinguishable from a
-    // CSP rule quietly blocking every image in the library.
+    // A missing cover shows the tinted fallback, but is still reported so a CSP
+    // block on every image cannot pass silently.
     img.addEventListener('error', () => {
       img.style.display = 'none'
       reportArtFailure(img.getAttribute('src') ?? '(no src)')
     })
-    // No shape handling here any more: the artwork pipeline rejects anything
-    // that is not portrait and composes a real cover when none exists, so what
-    // arrives is always box art. Deciding shape at paint time was papering
-    // over a banner being accepted in the first place.
     const fallback = document.createElement('div')
     fallback.className = 'card-fallback'
     const ring = document.createElement('div')
@@ -223,23 +182,18 @@ export function createGrid(
       el, art, fallback, img,
       index: -1, transform: '', focus: false, visible: false, generation: 0, failed: undefined,
     }
-    // Parked until it is given an item. A fresh slot has index -1 and no
-    // transform, so without this the whole unused pool sits stacked at 0,0 on
-    // top of the first card -- which looks exactly like the first card failing
-    // to load its artwork. Found by the self-check, after being misread as an
-    // image bug three times.
+    // Parked until given an item, or the unused pool stacks at 0,0 over the
+    // first card and looks like its artwork failing.
     el.style.visibility = 'hidden'
 
-    // Click selects; double-click plays. A single click launching a game is how
-    // a mouse user starts something they only meant to look at.
+    // Click selects and double-click plays, so a click cannot launch a game.
     el.addEventListener('click', () => {
       if (s.index >= 0) setFocus(s.index)
     })
     el.addEventListener('dblclick', () => {
       if (s.index >= 0) onActivate?.(s.index)
     })
-    // Select first, then open: right-clicking a card the user has not selected
-    // should still show that card, not whatever was selected before.
+    // Select first, so right-click shows this card rather than the previous one.
     el.addEventListener('contextmenu', (e) => {
       if (s.index < 0) return
       e.preventDefault()
@@ -264,7 +218,6 @@ export function createGrid(
   function paintSlot(s: Slot, index: number): void {
     const item = items[index]
     if (!item) {
-      // Parked: kept in the pool, hidden rather than removed.
       if (s.visible) {
         s.el.style.visibility = 'hidden'
         s.visible = false
@@ -290,9 +243,8 @@ export function createGrid(
       const generation = ++s.generation
       const action = imageAction(s.img.getAttribute('src'), s.failed, item.art)
       if (action === 'load') {
-        // Hidden until the new artwork has actually decoded. Without this the
-        // previous game's cover stays on screen underneath the new game's
-        // title, which reads as the grid showing duplicates.
+        // Hidden until decoded, or the previous game's cover shows under the
+        // new title.
         s.img.style.display = 'none'
         s.img.src = item.art!
         s.failed = undefined
@@ -300,14 +252,8 @@ export function createGrid(
           if (s.generation !== generation) return
           s.img.style.display = ''
         }
-        // decode() resolves once the image is ready to paint, so revealing it
-        // cannot land on a half-decoded frame. It rejects on a 404 or when
-        // superseded, and both mean "leave the fallback showing".
         s.img.decode().then(reveal).catch(() => {
-          // Superseded is routine — the slot was recycled mid-flight. A
-          // cover we already resolved and verified failing to decode is not,
-          // and a title card with no art is exactly the bug that gets
-          // reported as "artwork is broken" with nothing in the log.
+          // Being superseded is routine; a real decode failure is reported.
           if (s.generation !== generation) return
           s.failed = item.art
           reportArtFailure(String(item.art))
@@ -343,31 +289,22 @@ export function createGrid(
     readMetrics()
     ensurePool()
     canvas.style.height = `${m.canvasHeight}px`
-    // A resize can change the column count under the cursor; keep the focused
-    // card on screen rather than leaving the user somewhere else entirely.
-    // The DOM attribute must be cleared too, not just the tracked flag.
-    // paintSlot only writes when the flag disagrees with reality, so resetting
-    // the flag alone leaves a stale data-focus="1" on a slot that has since
-    // been reassigned -- two focus rings, and the one the checks find is the
-    // wrong one. Same hole as the visibility flag, left open in the same place.
+    // Clear the DOM attribute as well as the flag: paintSlot only writes on a
+    // mismatch, so a stale data-focus="1" left two focus rings.
     for (const s of slots) {
       s.index = -1
       s.transform = ''
       s.focus = false
       s.el.dataset['focus'] = '0'
     }
-    // The grid publishes its item count so the self-check can assert that no
-    // more cards are visible than there are items -- the exact bug above.
+    // Published for the self-check's item-count and fill-width assertions.
     canvas.dataset['items'] = String(items.length)
-    // Published so the self-check can assert the grid actually fills its width
-    // -- dead space at the right edge is invisible to every other assertion.
     canvas.dataset['fit'] = JSON.stringify({
       inner: Math.round(viewport.clientWidth - parseFloat(getComputedStyle(viewport).paddingLeft) * 2),
       used: Math.round(m.cols * m.cardW + gapX * (m.cols - 1) + m.sideInset * 2),
       cols: m.cols,
     })
-    // Card size is computed, not a token, so it is published as a variable the
-    // stylesheet reads rather than written onto every card.
+    // Set once on the canvas rather than written onto every card.
     canvas.style.setProperty('--card-w-fit', `${m.cardW}px`)
     canvas.style.setProperty('--card-h-fit', `${m.cardH}px`)
     scrollIntoView()
@@ -375,13 +312,8 @@ export function createGrid(
   }
 
   /**
-   * Bring the focused card into view, gliding rather than jumping.
-   *
-   * Computed from where the scroll is *heading*, not where it currently is:
-   * during a glide those differ, and using the current position would leave a
-   * held direction permanently a fraction of a row behind.
-   *
-   * Writes only, never reads back, so it cannot force a layout.
+   * Glide the focused card into view, computed from the scroll target rather
+   * than the current position. Writes only, so it cannot force a layout.
    */
   function scrollIntoView(): void {
     const next = scrollToShow(focused, scrollTarget, m, viewH, gap, clearance, shadowReach)
@@ -395,8 +327,7 @@ export function createGrid(
       return
     }
 
-    // Retarget from wherever the current glide has reached rather than
-    // restarting from a standstill.
+    // Retarget from wherever the current glide has reached.
     glideFrom = scrollY
     glideStart = performance.now()
     glideMs = duration
@@ -407,9 +338,7 @@ export function createGrid(
     }
   }
 
-  /** Zero when the platform or the design asks for no motion, in which case the
-   *  scroll is instant -- which is the correct reduced-motion behaviour, not a
-   *  degraded one. */
+  /** Zero under reduced motion, making the scroll instant. */
   function scrollDuration(): number {
     const cs = getComputedStyle(document.documentElement)
     const motion = parseFloat(cs.getPropertyValue('--motion'))
@@ -418,9 +347,8 @@ export function createGrid(
   }
 
   function stepGlide(now: number): void {
-    // Duration is read when the glide starts, not per frame: getComputedStyle
-    // forces a style resolution, and doing that every frame of an animation is
-    // the exact cost this whole component is arranged to avoid.
+    // Duration is read once per glide, since getComputedStyle per frame forces
+    // style resolution.
     const value = glide(glideFrom, scrollTarget, now - glideStart, glideMs)
     scrollY = value
     viewport.scrollTop = value
@@ -435,8 +363,7 @@ export function createGrid(
   ro.observe(viewport)
   const onScroll = () => {
     scrollY = viewport.scrollTop
-    // A wheel or trackpad scroll overrides a glide: the user's hand beats an
-    // animation that was already in flight.
+    // A wheel or trackpad scroll overrides a glide in flight.
     if (!gliding) scrollTarget = scrollY
     schedule()
   }
@@ -447,20 +374,13 @@ export function createGrid(
     if (clamped === focused) return
     focused = clamped
     scrollIntoView()
-    // Always through rAF. Rendering synchronously here AND again from the
-    // scroll event that scrollIntoView just triggered meant two full renders
-    // per keypress, one of them outside the frame.
+    // Through rAF only; rendering here too meant two renders per keypress.
     schedule()
     onFocusChange?.(focused, items[focused])
   }
 
-  /** Announce the current selection unconditionally.
-   *
-   *  setFocus() returns early when the index has not changed, which is right
-   *  for navigation and wrong for the initial selection -- and catastrophically
-   *  wrong for a one-game library, where every move clamps back to 0 and the
-   *  hero was therefore never populated at all. The initial announcement is a
-   *  separate concern from a focus *change*, so it gets its own path. */
+  /** Announce the selection unconditionally. setFocus() skips an unchanged
+   *  index, which left the hero empty in a one-game library. */
   function announce(): void {
     onFocusChange?.(focused, items[focused])
   }

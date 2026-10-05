@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Generate src/css/tokens.css from design/tokens.json.
 
-One source of truth, same convention as the sibling theme projects. The
-generated file is committed so a fresh clone renders without running Python,
-but it is never hand-edited -- the header says so and the linter checks it.
+The output is committed so a fresh clone renders without Python, but is never
+edited by hand; CI checks it is in step.
 """
 from __future__ import annotations
 import json, pathlib, sys
@@ -14,8 +13,7 @@ OUT = ROOT / "src" / "css" / "tokens.css"
 
 
 def argb_to_css(v: str) -> str:
-    """#AARRGGBB -> rgb()/rgba(). The sibling projects store colours in WPF
-    order so the three palettes stay diffable by eye; CSS wants alpha last."""
+    """#AARRGGBB -> rgb()/rgba(). The source keeps WPF order, alpha first."""
     s = v.lstrip("#")
     if len(s) != 8:
         sys.exit(f"palette value {v!r} must be #AARRGGBB")

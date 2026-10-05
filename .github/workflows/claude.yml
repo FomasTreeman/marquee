@@ -1,72 +1,17 @@
-# Hand an issue to Claude Code, get a pull request back.
-#
-# The `claude` label, an `@claude` comment on an issue or a pull request
-# review, or a reply on an issue waiting in Needs Decision starts a run of
-# Claude Code with that thread as its brief. It reads CLAUDE.md first, so it
-# works to this project's conventions -- the silence rule, British English,
-# prose commits, proving a test bites -- rather than generic ones. It opens a
-# branch and a pull request. It does not merge, and it cannot: the review is
-# the point. docs/AUTOMATION.md describes the whole loop and its setup.
-#
-# A run ends in one of three states, and the steps after the agent check
-# which: a pull request that closes the issue (In Review), a question and the
-# `needs-decision` label (Needs Decision), or the issue closed (Done).
-# Anything else stopped early. Three runs had ended with "Running the full
-# test suite now", an unticked "Open PR" and a green job, two of them with the
-# whole change sitting uncommitted in a working tree the action's clean-up
-# then discarded. So whatever was pushed, committed or merely edited becomes
-# the pull request it was one step short of, labelled as salvaged, and only a
-# run with nothing to salvage fails -- at which point pick-up-todo.yml offers
-# the issue again.
-#
-# Two tokens, and which one a write goes through is not a detail. GitHub will
-# not run a workflow off an event GITHUB_TOKEN caused, so a handover -- the
-# `claude` label from triage.yml, the `@claude` comment from pick-up-todo.yml,
-# the pushes and the salvaged pull request from here -- must go through
-# CLAUDE_WORKFLOW_TOKEN or it wakes nothing. Everything else -- the
-# `claude-working` label on and off, the "did it deliver" comment, every label
-# board.yml reconciles -- must go through GITHUB_TOKEN or it wakes a run whose
-# only job is to be filtered out by the `if:` below. Measured over forty runs:
-# nine did work, thirty-one existed to be skipped, and because the concurrency
-# group holds one pending run per issue, a spurious one can cancel a real one
-# queued behind it.
-#
-# CLAUDE_WORKFLOW_TOKEN is also what lets a run touch `.github/workflows/`:
-# there is no permission that lets GITHUB_TOKEN write a workflow file, and the
-# push fails naming "workflows permission", which reads like a bug in the
-# action. Issue #1 ended with a correct set of CI fixes posted as a comment for
-# somebody to retype. What each token must be able to do is asserted weekly by
-# token-check.yml rather than remembered here.
+# Runs Claude Code on an issue labelled `claude`, an `@claude` comment or review, or a
+# reply to a Needs Decision question, and ends in a PR, a question, or a closed issue.
+# Handovers (labels, comments, pushes, the salvaged PR) use CLAUDE_WORKFLOW_TOKEN,
+# because GITHUB_TOKEN events wake no workflow and cannot write `.github/workflows/`.
+# Bookkeeping uses GITHUB_TOKEN so it does not wake spurious runs. See docs/AUTOMATION.md.
 
 name: Claude
 
 on:
   issues:
-    # Only `labeled`. Not `assigned`: nothing in the `if:` below answers to an
-    # assignment, so every one of them started a run that could only ever be
-    # skipped. Not `opened` either: an issue filed with `@claude` in its body
-    # *and* the `claude` label -- which is exactly what automation-broken.yml
-    # files -- raised both events, and each started a full run on the same
-    # issue. The concurrency group held the second one pending, to run the
-    # moment the first finished; #83 escaped being worked twice only because
-    # the tracking comment's own pending run happened to replace it in the
-    # queue. triage.yml turns `@claude` in a body into the label instead, and
-    # the label is the one way in.
-    #
-    # `reopened` is the amendment trigger. A fix that merges, releases and
-    # does not do what was intended breaks nothing CI can see, so nothing
-    # here would notice. The person notices. Reopening the issue, with a
-    # comment saying what is still wrong, was already what the board expected
-    # -- it put the card back in Todo -- but the only thing that would then
-    # start a run was the hourly sweep, with a brief that never mentioned the
-    # fix that had already landed. So it starts one now, and the step below
-    # names the merged pull request as the starting point.
-    #
-    # Not by running the action on the reopen event: it refuses that one --
-    # "Unsupported issue action: reopened", on #76, four seconds in -- and
-    # supports `labeled` and comments. So the reopen is turned into the
-    # comment pick-up-todo.yml would have written, through the token that
-    # wakes this workflow, and the run that follows is an ordinary one.
+    # Only `labeled`: `assigned` and `opened` started duplicate or always-skipped runs,
+    # and triage.yml turns `@claude` in a body into the label.
+    # `reopened` means a merged fix did not work. The action rejects that event, so the
+    # `reopened` job turns it into a handover comment and the agent amends the fix.
     types: [labeled, reopened]
   issue_comment:
     types: [created]
@@ -75,18 +20,14 @@ on:
   pull_request_review:
     types: [submitted]
 
-# Two issues worked at once would race on the same branch namespace, and more
-# to the point would burn subscription usage in parallel for no benefit.
+# One run per issue at a time, to avoid branch races and parallel usage.
 concurrency:
   group: claude-${{ github.event.issue.number || github.event.pull_request.number }}
   cancel-in-progress: false
 
 jobs:
-  # A reopen becomes a handover comment, because the action cannot take the
-  # reopen itself. The comment carries pick-up-todo.yml's marker so its
-  # cooldown counts from here, and goes through CLAUDE_WORKFLOW_TOKEN because
-  # a comment GITHUB_TOKEN writes wakes nothing -- which would be this whole
-  # trigger reduced to a note on the issue.
+  # Posts a handover comment with pick-up-todo.yml's marker, via the PAT so it wakes
+  # this workflow (a GITHUB_TOKEN comment would not).
   reopened:
     if: |
       github.event_name == 'issues' && github.event.action == 'reopened' &&
@@ -115,53 +56,14 @@ jobs:
           echo "::notice::#$NUMBER reopened; handed to the agent."
 
   claude:
-    # An issue is picked up when it carries the `claude` label. triage.yml
-    # applies that from the template's dropdown, so a new issue still starts on
-    # its own -- but through one workflow rather than two.
-    #
-    # This used to wake on `issues: opened` as well, which raced triage.yml on
-    # the same event and beat it. The `no-ai` test below reads the labels in
-    # the event payload, and at open time those are only what the template
-    # applied, so the label triage was about to write was never visible and
-    # "Me -- do not touch it" bought nothing. Waiting for the label event means
-    # the labels are settled by the time they are read.
-    #
-    # `author_association` is the cheap half of the guard: OWNER for you, NONE
-    # for a stranger, so a spam issue on a public repository does not even
-    # start a runner. The action then does the real check -- it refuses anyone
-    # without write access, on every event type -- but that refusal costs a
-    # minute of Actions time and this costs nothing.
-    #
-    # The comment's association is read before the issue's, which matters: a
-    # comment event carries both, and reading the issue's first meant a
-    # stranger's comment on your issue passed as OWNER. The action would then
-    # refuse it -- after this job had already taken `needs-decision` off the
-    # issue to mark it in progress. So anyone could knock an issue out of
-    # Needs Decision by commenting on it.
-    #
-    # `review.author_association` is there because a `pull_request_review`
-    # payload carries neither `issue` nor `comment`. Without it every side
-    # resolved to the empty string, the membership test failed, and the
-    # `@claude` in a review body could never start anything -- invisibly,
-    # because a job filtered out by `if:` leaves nothing in the Actions tab.
-    #
-    # The last clause is the reply to a question. When the agent stops with
-    # `needs-decision`, the answer is a comment, and it should not need a magic
-    # word to count. `claude-working` absent is what makes that safe: the
-    # agent's own comments, and the tracking comment the action opens, are
-    # written with your token and so read as OWNER, but they all land while
-    # the label is on. `pull_request` absent because a comment on a pull
-    # request is also an `issue_comment`, and pull requests do not carry the
-    # label.
-    #
-    # `no-ai` keeps an issue off. Some issues are notes to self.
-    #
-    # The label event reads the *issue's* author, because the payload does
-    # not say who applied the label. That was fine while every issue was the
-    # owner's; on a public repository it meant the owner adding `claude` to a
-    # stranger's bug report started nothing, and the issue waited for the
-    # sweep. `sender` is the account that raised the event, so the owner's
-    # click counts on anyone's issue.
+    # Waits for the `claude` label rather than `opened`, so the `no-ai` check sees
+    # the labels triage.yml settles.
+    # `author_association` is a cheap pre-filter; the action's write-access check is
+    # the real gate. The comment's association is read first, or a stranger's comment
+    # on the owner's issue passes as OWNER. `review.*` covers review payloads.
+    # A Needs Decision reply needs no `@claude`; requiring `claude-working` absent
+    # excludes the agent's own comments, which read as OWNER.
+    # `sender` is used for labels because the payload does not say who applied one.
     if: |
       !contains(github.event.issue.labels.*.name, 'no-ai') &&
       (
@@ -184,29 +86,13 @@ jobs:
         )
       )
     runs-on: ubuntu-latest
-    # The five runs so far took ten to nineteen minutes, and the long ones were
-    # the ones that finished. A run that stopped making progress is not what
-    # this bounds -- the SDK either works or returns -- so it errs long: killed
-    # at the limit, a run that was about to open its pull request delivers
-    # nothing, and the salvage below can only save what was in the tree.
+    # Errs long: a run killed at the limit delivers only what the salvage can save.
     timeout-minutes: 45
 
-    # Who can set this off, now that the repository is public.
-    #
-    # The action itself requires the triggering user to have **write access**,
-    # checked on issues, comments and reviews, so a stranger writing @claude on
-    # an issue gets nothing. That check is the protection -- the `if:` above
-    # only decides whether a run starts, not who is allowed to start one.
-    #
-    # Two inputs switch it off and neither is set here: `allowed_bots`, which
-    # skips the permission check entirely for anything matching (a `*` there
-    # lets any GitHub App on the internet trigger this), and
-    # `allowed_non_write_users`. Do not add either without reading
+    # The action requires the triggering user to have write access; that is the
+    # protection. Do not set `allowed_bots` or `allowed_non_write_users` without reading
     # https://github.com/anthropics/claude-code-action/blob/main/docs/security.md
-    #
-    # Issue text from anyone is still untrusted input being read by an agent
-    # with a checkout. That is the residual risk of this arrangement, and the
-    # reason it opens pull requests rather than pushing to main.
+    # Issue text is still untrusted input, hence PRs rather than pushes to main.
     permissions:
       contents: write
       pull-requests: write
@@ -214,11 +100,8 @@ jobs:
       actions: read
 
     steps:
-      # A pull request from a fork is somebody else's code, and `@claude` on
-      # it from the owner would check that code out and run it -- `pnpm test`
-      # executes whatever the branch says -- with this repository's tokens in
-      # the environment. Neither payload that reaches here says which side of
-      # the fence the branch is on, so it is asked. First, before the checkout.
+      # `pnpm test` would run a fork's code with this repository's tokens, so a fork
+      # PR is refused before the checkout.
       - name: Refuse a pull request from a fork
         if: github.event.issue.pull_request || github.event_name == 'pull_request_review'
         env:
@@ -234,13 +117,10 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The full history, so it can read why a line is the way it is.
-          # Most of the reasoning in this repository lives in commit messages.
+          # Full history: most of the reasoning here lives in commit messages.
           fetch-depth: 0
 
-      # Claude needs to be able to run the suite before claiming a fix works,
-      # and the suite needs the toolchain. Without these it can only reason
-      # about the code, which for the bugs this project gets is not enough.
+      # The agent needs the toolchain to run the suite before claiming a fix.
       - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           components: clippy, rustfmt
@@ -249,8 +129,7 @@ jobs:
         with:
           version: 9
 
-      # After pnpm: `cache: pnpm` asks pnpm where its store is, so the other
-      # order caches nothing and says nothing about it.
+      # After pnpm: `cache: pnpm` asks pnpm where its store is.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
@@ -269,43 +148,21 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # The run owns exactly one label: "I am working on this".
-      #
-      # It is the only piece of state nothing else can know -- whether this
-      # process is still going -- so it is set here and cleared here. Every
-      # other label and the card itself belong to board.yml, which reads what
-      # is true rather than being told.
-      #
-      # Not PROJECT_TOKEN. That is a classic token scoped to `project` and
-      # nothing else -- board.yml's header says so and token-check.yml actively
-      # asserts it cannot reach the repository -- so the better it was scoped,
-      # the more reliably this label write was refused. `|| true` then ate the
-      # refusal, the card never showed In Progress, and the GITHUB_TOKEN
-      # fallback that would have worked was never reached because the first
-      # entry in the chain was set.
+      # The run owns only `claude-working`; board.yml owns every other label.
+      # Not PROJECT_TOKEN: it is scoped to projects and cannot write repository labels.
       - name: Mark it in progress
         if: github.event.issue.number && !github.event.issue.pull_request
         env:
-          # GITHUB_TOKEN on purpose, and this is the optimisation rather than a
-          # downgrade. A token that can wake a workflow wakes one for every
-          # label it writes, and `claude-working` is meant to wake nothing --
-          # so each run was starting a second run that existed only to be
-          # skipped. Nine useful runs in the last forty; the rest were this.
+          # GITHUB_TOKEN so this label write does not wake another run.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NUMBER: ${{ github.event.issue.number }}
         run: |
-          # Not fatal -- a label is not worth losing the run over -- but not
-          # silent either. The board reads labels, so a failure here is a card
-          # that quietly stops matching what is happening.
+          # Not fatal, but logged: the board reads this label.
           gh issue edit "$NUMBER" --add-label claude-working --remove-label needs-decision \
             || echo "::warning::could not set claude-working on #$NUMBER; the board will show it as untouched"
 
-      # What already landed for this issue. An open issue with a merged pull
-      # request that closes it is one that was reopened -- the fix shipped and
-      # did not do what was intended -- and the agent should start from that
-      # diff rather than from the issue text, or it rediscovers the same fix.
-      # Numbers only go into the prompt; the reopening comment is read from
-      # the thread, where the action already puts it.
+      # A merged PR that closes an open issue means it was reopened, so the agent
+      # starts from that diff. Only PR numbers go into the prompt.
       - name: What has already merged for it
         id: history
         if: github.event.issue.number && !github.event.issue.pull_request
@@ -331,62 +188,20 @@ jobs:
             echo "brief=" >> "$GITHUB_OUTPUT"
           fi
 
-      # Appended, not replaced. `--system-prompt-file` would discard Claude
-      # Code's own defaults along with the GitHub context this action installs,
-      # and the symptom would be an agent that works but cannot see the issue
-      # it was called about.
-      #
-      # `gh run` and `gh workflow` are read-only subcommands, deliberately
-      # named one at a time rather than as `gh run:*`. Fixing a workflow is
-      # mostly reading the run that failed -- which step, how long it sat
-      # there, what it printed -- and without these the agent can only reason
-      # about the YAML, which is how #1 got a diagnosis of Windows being slow
-      # with no measurement behind it.
-      #
-      # Not here, on purpose: `gh run rerun`, `gh run cancel` and
-      # `gh workflow run`, which spend runner time on the agent's own
-      # judgement -- and `gh workflow run release.yml` cuts a release. The
-      # `permissions:` block above grants `actions: read` and not write, so
-      # they would fail anyway; naming them would only make the failure
-      # confusing. A CI fix is tested by opening the pull request and letting
-      # CI run on it, which is the loop this repository already has.
-      #
-      # `gh pr create` is here because without it the whole loop stops one step
-      # short. `.github/claude-instructions.md` says the pull request is the
-      # deliverable and a comment describing one is not -- and then the tool
-      # list did not let the agent open one. Issue #17 is what that looks like:
-      # fifteen minutes of work, a pushed branch, and a "Create PR" link for
-      # somebody to click. The instructions were not being ignored; they were
-      # impossible to follow.
-      #
-      # `gh api` is absent. It is the one entry that could POST or DELETE
-      # anything the token is allowed to, and everything else here is a read or
-      # a narrowly named write. Run logs carry per-line timestamps, so step
-      # timings can be had without it.
+      # `--append-system-prompt-file`, not `--system-prompt-file`, which would drop the
+      # action's GitHub context.
+      # `gh run`/`gh workflow` are allowed read-only subcommands only. No rerun, cancel or
+      # `workflow run` (that cuts a release), no `gh api` (arbitrary writes).
+      # `gh pr create` is allowed because the PR is the deliverable.
       - uses: anthropics/claude-code-action@56cf60fde42f7b19c3abfd5c9c48b69a1288461f # v1.0.222
         id: claude
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # CLAUDE_WORKFLOW_TOKEN if it is set, GITHUB_TOKEN otherwise, which
-          # is the whole of the previous behaviour. See the header for what the
-          # PAT buys and why the board's token is not an alternative.
+          # PAT if set (see header), else GITHUB_TOKEN.
           github_token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
-          # Ticked-off progress in the issue thread, so a long run is legible
-          # rather than a spinner.
           track_progress: true
-          # This lands in the *user* prompt, after the action's own brief,
-          # which is where it has to be. The action's brief tells the agent
-          # twice to finish by posting a "Create a PR" link -- it assumes a
-          # token that cannot open one -- and `--append-system-prompt-file`
-          # below was losing that argument: three runs pushed nothing, ticked
-          # everything but "Open PR", and posted a link. The system prompt
-          # still carries the long form in .github/claude-instructions.md;
-          # this is the short form, said where it is read last.
-          #
-          # Setting `prompt` also switches off the action's own `@claude`
-          # check, so a reply on a `needs-decision` issue starts a run without
-          # the phrase. The `if:` above is the only gate now, plus the action's
-          # write-permission check on whoever caused the event.
+          # In the user prompt so it overrides the action's "post a Create PR link" brief.
+          # Setting `prompt` also disables the action's `@claude` check; the `if:` gates.
           prompt: |
             Where these differ from the instructions above, these win.
 
@@ -401,20 +216,9 @@ jobs:
             --allowed-tools "Bash(cd:*),Bash(pnpm:*),Bash(cargo:*),Bash(node:*),Bash(git:*),Bash(tools/:*),Bash(python3:*),Bash(gh issue comment:*),Bash(gh issue edit:*),Bash(gh issue view:*),Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr comment:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh workflow list:*),Bash(gh workflow view:*)"
             --append-system-prompt-file .github/claude-instructions.md
 
-      # `always()`: the interesting case is the run that failed, timed out or
-      # stopped early, and the question is the same for all of them -- did
-      # anything reviewable come out?
-      #
-      # "A pull request for this issue" means one that *closes* it, read from
-      # `closedByPullRequestsReferences`, and not one that mentions it. The
-      # timeline scan this replaced took any CrossReferencedEvent as the
-      # issue's pull request, so three unrelated pull requests that cited #76
-      # in their commit messages put #76 In Review with no pull request of its
-      # own, and nothing would ever have picked it up while one of them stayed
-      # open. board.mjs reads the same field, so the two cannot disagree.
-      #
-      # This step only decides. The one after acts, because acting needs the
-      # other token.
+      # Decides whether the run delivered, even if it failed. A PR counts only if it
+      # closes the issue (`closedByPullRequestsReferences`, as board.mjs reads it), not
+      # one that merely mentions it. The next step acts.
       - name: Did it deliver?
         id: deliver
         if: always() && github.event.issue.number && !github.event.issue.pull_request
@@ -423,8 +227,7 @@ jobs:
           EXECUTION_FILE: ${{ steps.claude.outputs.execution_file }}
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
-          # GITHUB_TOKEN: reading, and a diagnosis for a person. Nothing here
-          # is a handover.
+          # GITHUB_TOKEN: read-only, nothing here is a handover.
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs')
@@ -449,22 +252,13 @@ jobs:
             const pr = issue.closedByPullRequestsReferences.nodes.find((p) => p.state === 'OPEN')
             core.setOutput('title', issue.title)
 
-            // What the agent was refused, from the action's own record, since
-            // the full transcript is hidden. Logged for every run and not only
-            // a stalled one: #76 delivered its pull request after nine
-            // refusals and #78's repair stalled twice after six and then
-            // eighteen, and the only run that said which commands were
-            // refused was the one that had already failed. The allowlist can
-            // only be tuned from what the successful runs were denied too.
-            // The denied commands are printed; the transcript is not, because
-            // these logs are public.
+            // Log refused tool calls for every run, so the allowlist can be tuned
+            // from successful runs too. Logs are public, so not the transcript.
             let why = 'The action left no execution record, so it probably failed before the agent started.'
             const file = process.env.EXECUTION_FILE
             if (file && fs.existsSync(file)) {
-              // A record that will not parse -- a run killed at the timeout
-              // can leave it half-written -- is a diagnosis, not a reason to
-              // throw here, because throwing here means the salvage step
-              // below never runs and the branch is lost with the answer.
+              // A half-written record (timeout) must not throw, or the salvage
+              // step never runs and the branch is lost.
               let result
               try {
                 result = JSON.parse(fs.readFileSync(file, 'utf8')).find((m) => m.type === 'result')
@@ -491,19 +285,9 @@ jobs:
             core.setOutput('stopped_early', 'true')
             core.warning(`#${number}: no pull request, no needs-decision, still open. ${why}`)
 
-      # The run stopped early. Whatever it left behind -- a pushed branch, a
-      # local commit, or edits in the working tree -- becomes the pull request
-      # it was one step short of. Half a change that says it is half is
-      # reviewable; a run that discarded it is not, and the action's own
-      # clean-up does discard it when the branch was never pushed.
-      #
-      # Salvaged rather than finished, and the body says so: the reviewer
-      # needs to know the agent did not run the suite on this. CI will, which
-      # is why the pull request is opened with the token that wakes it.
-      #
-      # Only when there is nothing to salvage does the run fail. The board
-      # counts the failed attempt; three of them is a question for a person,
-      # which is board.mjs's rule and not this step's to apply.
+      # Turns whatever the run left (branch, commit, or edits) into a PR labelled as
+      # salvaged, since the action's clean-up discards an unpushed branch. Opened with
+      # the PAT so CI runs. Fails only when there is nothing to salvage.
       - name: Salvage what it left, or fail
         if: always() && steps.deliver.outputs.stopped_early == 'true'
         env:
@@ -518,9 +302,7 @@ jobs:
         run: |
           set -euo pipefail
           fail() {
-            # The comment is bookkeeping and goes through the token that wakes
-            # nothing; a run whose complaint is that it delivered nothing
-            # should not start another that will be skipped.
+            # GITHUB_TOKEN so the comment does not wake another run.
             GH_TOKEN="$QUIET_TOKEN" gh issue comment "$NUMBER" --body "$(printf '%s\n\n%s\n\n%s' \
               "This run ended without a pull request and without asking anything, and left nothing to salvage — no branch, no commit, no edited file. The issue stays queued and will be offered again; the run itself is marked failed so it is not mistaken for work that landed." \
               "$WHY" \
@@ -531,9 +313,7 @@ jobs:
           }
 
           [ -n "$BRANCH" ] || fail "the action made no branch, so there is nothing to salvage. $WHY"
-          # git's own "did not match any file(s)" is discarded because the
-          # failure is reported on the issue instead, where somebody will read
-          # it; the log line would say the same thing to nobody.
+          # git's error is discarded because fail() reports it on the issue.
           git checkout -q "$BRANCH" 2>/dev/null || fail "branch $BRANCH is not in this checkout"
 
           if [ -n "$(git status --porcelain)" ]; then
@@ -551,16 +331,13 @@ jobs:
           ahead=$(git rev-list --count origin/main..HEAD)
           [ "$ahead" -gt 0 ] || fail "branch $BRANCH has no commits beyond main. $WHY"
 
-          # The action rewrote origin's URL to carry its token, so this push
-          # goes out as whichever token the action had.
+          # origin's URL carries the action's token.
           git push -q -u origin HEAD
           echo "pushed $ahead commit(s) on $BRANCH"
 
           existing=$(gh pr list --head "$BRANCH" --state open --json number,body --jq '.[0] // empty')
           if [ -n "$existing" ]; then
-            # The agent opened one and forgot the line that links it. Without
-            # it the issue never closes on merge and the board never sees the
-            # pull request at all.
+            # Without `Closes #N` the issue never closes and the board never sees the PR.
             num=$(jq -r .number <<<"$existing")
             if ! jq -r .body <<<"$existing" | grep -qiE "^(closes|fixes|resolves) #$NUMBER\b"; then
               gh pr edit "$num" --body "$(printf 'Closes #%s\n\n%s' "$NUMBER" "$(jq -r .body <<<"$existing")")"
@@ -584,12 +361,10 @@ jobs:
       - name: Stop marking it in progress
         if: always() && github.event.issue.number && !github.event.issue.pull_request
         env:
-          # GITHUB_TOKEN, for the reason given on the step above.
+          # GITHUB_TOKEN, as above.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NUMBER: ${{ github.event.issue.number }}
         run: |
-          # Louder than the one above: a label left on says a run is still
-          # going when it is not, which is the stale state that stops a board
-          # being believed at all.
+          # Warned: a label left on shows a run that is no longer going.
           gh issue edit "$NUMBER" --remove-label claude-working \
             || echo "::warning::could not clear claude-working on #$NUMBER; the board will show it as still running"

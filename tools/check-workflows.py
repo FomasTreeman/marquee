@@ -1,22 +1,9 @@
 #!/usr/bin/env python3
 """
-Catch a workflow GitHub will refuse before pushing it.
-
-Valid YAML is not a valid workflow, and the difference is expensive here: a
-schema-invalid file does not fail loudly, it fails as a run named after the
-file path instead of the workflow, in zero seconds, which reads like the
-workflow was renamed rather than broken. Releases stopped for three merges
-before anyone noticed.
-
-The specific bug this exists for: a step inserted between `- uses:` and its own
-`with:` block, so the inputs silently reattached to the new step. `run` steps
-cannot take `with`, and GitHub rejects the whole file for it.
-
-It also enforces two things GitHub accepts happily and should not: a job with
-no `timeout-minutes`, which inherits a six-hour default, and a job with no
-`permissions`, which inherits whatever a repository setting says today. Both
-were missed by all fifteen jobs in this directory at once, which is the sign of
-something that needs checking rather than remembering.
+Catch a workflow GitHub would refuse, or one that leaves something to a default,
+before it is pushed. An invalid workflow fails silently as a zero-second run.
+Also requires `timeout-minutes` and `permissions` on every job, actions pinned
+to full SHAs, and no event data interpolated into `run:`.
 """
 import pathlib
 import re
@@ -27,45 +14,26 @@ import os
 try:
     import yaml
 except ImportError:
-    # Skipping is fine on a laptop and is exactly the silent pass this check
-    # exists to prevent on the runner: a green "check" job that checked
-    # nothing looks the same as one that did.
+    # On the runner, skipping would be a silent pass.
     if os.environ.get("CI"):
         print("check-workflows: pyyaml is not installed on this runner, so nothing was checked")
         sys.exit(1)
     print("check-workflows: pyyaml not installed, skipping")
     sys.exit(0)
 
-# `on:` is parsed by YAML as the boolean True, not the string "on". This
-# check tripped over that on its first run, which is the sort of thing it is
-# here to catch.
+# YAML parses `on:` as the boolean True.
 TOP = {"name", "on", True, "permissions", "env", "defaults", "concurrency", "jobs", "run-name"}
 STEP = {
     "id", "if", "name", "uses", "run", "with", "env", "continue-on-error",
     "timeout-minutes", "working-directory", "shell",
 }
 
-# An action referenced by a tag is whatever that tag points at today, and every
-# tag here is one somebody else can move -- `v0`, `v2`, and `stable`, which is
-# not even a tag but a branch. One of them, tauri-action, runs in the only job
-# that can see the update signing key, and a key in the wrong hands signs
-# updates that every installed copy accepts without question.
-#
-# Nothing about that would appear in a diff, a log or a test. The action would
-# be the same line it has always been.
-#
-# So a full commit SHA, which cannot be repointed, with the human-readable
-# version in a trailing comment. Dependabot reads and updates both -- see
-# .github/dependabot.yml, which is what stops the pins going stale.
+# A tag can be moved by its owner; a full SHA cannot. tauri-action runs beside
+# the update signing key. Dependabot updates the SHA and its version comment.
 PINNED = re.compile(r"^[^@]+@[0-9a-f]{40}$")
 
-# An expression inside `run:` is pasted into the shell before it runs. For
-# anything a person outside the repository can write -- an issue title, a
-# branch name, a comment, a dispatch input -- that is a shell injection with
-# the job's token attached. The safe form is an `env:` entry, which reaches
-# the script as a variable and cannot escape its quotes. Nothing here does
-# this today, and the check is what keeps it that way, because a review does
-# not reliably notice which of two `${{ }}` is the dangerous one.
+# `${{ }}` in `run:` is pasted into the shell, so attacker-controlled event data
+# becomes shell injection with the job's token. Pass it through `env:` instead.
 INJECTABLE = re.compile(
     r"\$\{\{[^}]*\b(github\.event\.|inputs\.|github\.head_ref)"
 )
@@ -88,13 +56,10 @@ def check(path: pathlib.Path) -> None:
         if key not in TOP:
             problems.append(f"{path}: unknown top-level key {key!r}")
 
-    # `on:` is parsed by yaml as the boolean True, which is a fact worth
-    # knowing before it wastes an afternoon.
     if "on" not in doc and True not in doc:
         problems.append(f"{path}: no triggers")
 
-    # A workflow-level block covers every job in the file; a job may also
-    # narrow it for itself.
+    # A workflow-level block covers every job.
     top_permissions = "permissions" in doc
 
     for job_name, job in (doc.get("jobs") or {}).items():
@@ -105,20 +70,14 @@ def check(path: pathlib.Path) -> None:
         if "uses" in job:
             continue  # a reusable workflow call has no steps
 
-        # Two things nothing was checking, missed by all fifteen jobs here.
-        #
-        # A job with no ceiling gets GitHub's default of six hours. The release
-        # matrix holds `concurrency: release` without cancelling in progress,
-        # so one wedged bundle blocks every release behind it for the whole of
-        # that -- and an agent job spends subscription usage for as long as it
-        # is allowed to run.
+        # The six-hour default would let a wedged job block releases and spend
+        # agent usage.
         if "timeout-minutes" not in job:
             problems.append(
                 f"{where}: no `timeout-minutes`, so it inherits GitHub's six-hour default"
             )
-        # And an undeclared job takes the repository-wide default, which is a
-        # setting somebody can change from a web page without touching this
-        # repository. Declaring it means the default is only ever a ceiling.
+        # Otherwise the job inherits a repository setting that can change
+        # outside this repository.
         if not top_permissions and "permissions" not in job:
             problems.append(
                 f"{where}: no `permissions`, so it inherits the repository-wide default"
@@ -148,8 +107,7 @@ def check(path: pathlib.Path) -> None:
                 )
             if has_run and "shell" not in step and "windows" in str(job.get("runs-on", "")).lower():
                 problems.append(f"{at}: a Windows `run` step should name its shell")
-            # A local action (./path) or a container (docker://) has no tag to
-            # move, so there is nothing to pin.
+            # Local actions and containers have no tag to pin.
             if has_uses and not isinstance(step["uses"], str):
                 problems.append(f"{at}: `uses` is empty — a failed substitution, most likely")
             elif has_uses and not step["uses"].startswith(("./", "docker://")):

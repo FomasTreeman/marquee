@@ -1,37 +1,8 @@
-# CI goes red on one of Claude's own pull requests. Claude fixes it.
+# When CI fails on a pull request, Claude tries to fix the branch, up to three times.
 #
-# This was the last step in the loop that needed a person for no reason. A run
-# opened a pull request, CI failed on Windows two minutes later, and the branch
-# sat there until somebody noticed and typed `@claude`. Everything either side
-# of it was already automatic.
-#
-# ---------------------------------------------------------------------------
-# `workflow_run` is the privileged trigger and the one to be careful with. It
-# runs from the default branch, with secrets and write access, whatever the run
-# that triggered it was -- so a pull request from a fork, whose own CI run
-# deliberately has no secrets at all, could otherwise reach them through here.
-# Two conditions in the `if:` below close that:
-#
-#     head_repository.full_name == github.repository    not a fork
-#
-# That one is not decoration. Take it out and this file becomes the standard
-# workflow_run escalation, and it will not look any different while it is one.
-# A branch in this repository can only have been pushed by somebody with write
-# access, which is the property being relied on.
-#
-# It used to also require the branch to be named `claude/` or `replay/`, and
-# that was scope rather than security -- the fork check above already carries
-# the whole of the guarantee. What the prefix bought was a promise that the
-# agent only ever pushed to branches it had made itself, and what it cost was
-# the case this exists for: a pull request goes red, and because the branch is
-# named after a person nothing picks it up. The guard below still requires an
-# open, non-draft pull request and still stops after three attempts, so the
-# blast radius is a branch somebody is actively asking for review on.
-#
-# The other thing to know: **a workflow_run workflow only fires once it is on
-# the default branch.** This file does nothing on the pull request that adds
-# it. The first real proof it works is the first red Claude PR after it merges.
-# ---------------------------------------------------------------------------
+# `workflow_run` runs from main with secrets and write access, whatever triggered it.
+# The `head_repository == github.repository` check is what keeps a fork's PR from
+# reaching those secrets; do not remove it. Only fires once this file is on main.
 
 name: CI repair
 
@@ -40,8 +11,7 @@ on:
     workflows: [CI]
     types: [completed]
 
-# Per branch, and not cancelling: a second failure arriving while a repair is
-# still pushing should queue behind it, not race it to the same ref.
+# Per branch and queued, so two repairs never push to the same ref at once.
 concurrency:
   group: ci-repair-${{ github.event.workflow_run.head_branch }}
   cancel-in-progress: false
@@ -57,23 +27,18 @@ jobs:
     outputs:
       stalled: ${{ steps.deliver.outputs.stalled }}
       attempt: ${{ steps.guard.outputs.attempt }}
-    # An agent run plus a full toolchain install. Generous, but bounded:
-    # the failure mode of an unattended loop is not one long run, it is a
-    # run nobody is watching that never ends.
+# Bounded so an unattended run cannot hang indefinitely.
     timeout-minutes: 30
 
     permissions:
       contents: write
       pull-requests: write
       issues: write
-      # Read, not write. Reading the failed run is the whole job; starting one
-      # is not, and `gh workflow run release.yml` cuts a release.
+      # Read only: `gh workflow run release.yml` would cut a release.
       actions: read
 
     steps:
-      # Three ways this should not run, all of them cheap to check and all of
-      # them expensive to get wrong -- the failure mode of an unattended loop
-      # is not one bad run, it is forty.
+      # Skip drafts, closed PRs, stale runs, and anything already tried three times.
       - name: Is this still worth doing?
         id: guard
         env:
@@ -81,10 +46,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           RUN_ID: ${{ github.event.workflow_run.id }}
-          # Through the environment rather than interpolated into the script.
-          # A branch name is attacker-controlled in the general case, and
-          # `${{ }}` is substituted into the shell before bash ever sees it --
-          # the injection this whole file is written to avoid.
+          # Via env, never `${{ }}` in the script: run metadata is attacker-controlled
+          # and `${{ }}` is substituted before bash parses it.
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
           set -euo pipefail
@@ -98,17 +61,13 @@ jobs:
           [ "$(echo "$pr" | jq -r .isDraft)" = "false" ] \
             || say "#$number is a draft, which means it is not finished yet."
 
-          # A push that landed while CI was still running leaves this failure
-          # describing code that no longer exists. Fixing it would mean fixing
-          # something nobody has, and the newer run will call us back anyway.
+          # A newer push makes this failure stale, and its own CI run will call back.
           newest=$(gh run list --workflow CI --branch "$BRANCH" --limit 1 \
                      --json databaseId --jq '.[0].databaseId // empty')
           [ "$newest" = "$RUN_ID" ] \
             || say "Run $RUN_ID is not the newest for $BRANCH ($newest); stale."
 
-          # Three goes, then it is a person's problem. An agent that cannot fix
-          # a failure in three attempts is not going to find it on the ninth,
-          # and each one costs a full run of subscription usage.
+          # Three attempts, then it is for a person.
           attempts=$(gh pr view "$number" --json comments \
                        --jq '[.comments[] | select(.body | contains("<!-- ci-repair -->"))] | length')
           if [ "$attempts" -ge 3 ]; then
@@ -122,17 +81,14 @@ jobs:
                 '`@claude` on this pull request restarts it if you disagree.' \
                 > gave-up.md
               gh pr comment "$number" --body-file gave-up.md
-              # The comment above is the message; the label is what the board
-              # reads. Losing the label is survivable, losing it quietly is not
-              # -- the card would sit in In Progress with nothing progressing.
+              # The board reads the label, so a failed label write must be visible.
               gh pr edit "$number" --add-label needs-decision \
                 || echo "::warning::commented on #$number but could not label it needs-decision"
             fi
             say "#$number has had $attempts repair attempts; stopping."
           fi
 
-          # Posted before Claude runs, not after, so a run that dies partway
-          # still counts against the three. Otherwise a crash loops forever.
+          # Posted before the agent runs, so a crashed run still counts as an attempt.
           printf '%s\n\n%s\n' \
             '<!-- ci-repair -->' \
             "CI failed -- repair attempt $((attempts + 1)) of 3. [Failed run]($RUN_URL)" \
@@ -143,8 +99,7 @@ jobs:
             echo "go=true"
             echo "pr=$number"
             echo "attempt=$((attempts + 1))"
-            # Counted after the attempt comment, so a comment the agent leaves
-            # is the only thing that can raise it.
+            # Counted after the attempt comment, so only the agent can raise it.
             echo "comments=$(gh pr view "$number" --json comments --jq '.comments | length')"
           } >> "$GITHUB_OUTPUT"
           echo "Repairing #$number, attempt $((attempts + 1))."
@@ -152,8 +107,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.guard.outputs.go == 'true'
         with:
-          # The branch, not the failing commit: the fix has to be pushable, and
-          # a detached HEAD is not.
+          # The branch, not the failing SHA: a detached HEAD cannot be pushed.
           ref: ${{ github.event.workflow_run.head_branch }}
           fetch-depth: 0
           token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
@@ -197,9 +151,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || secrets.GITHUB_TOKEN }}
-          # Everything the run needs is spelled out here. `workflow_run` is not
-          # an event the action can read a pull request out of by itself, so
-          # nothing below should assume it knows which one this is.
+          # `workflow_run` carries no PR the action can read, so the prompt names it.
           prompt: |
             CI failed on pull request #${{ steps.guard.outputs.pr }}, branch
             `${{ github.event.workflow_run.head_branch }}`. You are on that
@@ -247,17 +199,9 @@ jobs:
             --allowed-tools "Bash(cd:*),Bash(pnpm:*),Bash(cargo:*),Bash(node:*),Bash(git:*),Bash(tools/:*),Bash(python3:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh pr edit:*),Bash(gh pr comment:*),Bash(gh run list:*),Bash(gh run view:*),Bash(gh workflow view:*)"
             --append-system-prompt-file .github/claude-instructions.md
 
-      # The run above went green on #78 having pushed nothing and said
-      # nothing: twenty-eight turns, six tool calls refused, and a branch left
-      # exactly as red as it found it. Nothing fires again until that branch
-      # changes, so one silent attempt was a permanent stall with two of the
-      # three tries unspent.
-      #
-      # So: whatever it changed is pushed, even uncommitted -- CI on the push
-      # is the next attempt, and a wrong fix that says it is one is cheaper
-      # than a discarded one. A comment without a push is a question, and gets
-      # the label a person reads. Nothing at all is reported on the pull
-      # request with why, and the job fails so the retry below runs.
+      # A run that pushed nothing and said nothing would stall the branch for good,
+      # since nothing fires until it changes. So: push any change (even uncommitted),
+      # label a question needs-decision, or fail so the retry job runs.
       - name: Did it push?
         id: deliver
         if: always() && steps.guard.outputs.go == 'true'
@@ -272,16 +216,8 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          # What it was refused, from the action's record, logged whether or
-          # not it delivered. Two of #78's attempts were refused six and then
-          # eighteen calls and only the stalled report would have said which;
-          # an allowlist tuned only from failures never learns what the
-          # successful runs kept bumping into.
-          #
-          # A record that will not parse -- a run killed at the timeout can
-          # leave it half-written -- must not abort this step: what follows
-          # is the push that keeps the branch, and the diagnosis is worth
-          # less than the branch.
+          # Log what the agent was refused, so the allowlist can be tuned from successful
+          # runs too. A half-written record (timeout) must not abort the push below.
           why='The action left no execution record, so it probably failed before the agent started.'
           if [ -n "$EXECUTION_FILE" ] && [ -f "$EXECUTION_FILE" ]; then
             found=$(jq -r '
@@ -304,9 +240,7 @@ jobs:
               commit -q -m "Salvage what repair attempt $ATTEMPT on #$NUMBER had changed when it stopped"
           fi
           if [ "$(git rev-parse HEAD)" != "$START_SHA" ]; then
-            # Through the checkout's credentials, which are the PAT when there
-            # is one, so CI runs on it. A push through GITHUB_TOKEN would
-            # sit there unchecked.
+            # Uses the checkout's PAT so CI runs on the push; a GITHUB_TOKEN push would not.
             git push -q origin HEAD
             echo "Attempt $ATTEMPT pushed $(git rev-parse --short HEAD); CI decides the rest."
             exit 0
@@ -334,15 +268,9 @@ jobs:
           echo "::error::Attempt $ATTEMPT on #$NUMBER pushed nothing and said nothing. $why"
           exit 1
 
-  # A stalled attempt leaves the branch untouched, and an untouched branch
-  # fires nothing. Re-running the CI run that started this makes it complete
-  # again, which starts the next attempt -- bounded by the three the guard
-  # counts, since the attempt comment was posted before the agent ran.
-  #
-  # A separate job so `actions: write` is a permission the agent's job never
-  # has: `gh workflow run release.yml` cuts a release, and the token that can
-  # do that should not be in the same environment as a prompt read from a
-  # pull request.
+  # A stalled attempt leaves the branch untouched, so nothing fires again. Re-running
+  # the failed CI run starts the next attempt, still capped at three by the guard.
+  # A separate job so the agent's job never holds `actions: write`.
   retry:
     needs: repair
     if: always() && needs.repair.outputs.stalled == 'true' && needs.repair.outputs.attempt < 3

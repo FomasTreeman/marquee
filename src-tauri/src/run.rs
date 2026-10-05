@@ -1,36 +1,10 @@
 //! Launching games.
 //!
-//! Two paths, matching the two providers in docs/PLAN.md §5.
-//!
-//! **Steam** launches by URI: `steam://rungameid/<appid>`. One line, no DRM to
-//! fight, it survives Steam updating, and it keeps the overlay and cloud saves
-//! working. It also avoids anti-cheat systems that object to a game started
-//! from an unexpected parent process.
-//!
-//! The cost is that we do not own the child: the URI handler returns
-//! immediately and the game belongs to Steam. Playtime is unaffected by that
-//! -- Steam writes it into `localconfig.vdf` itself, which is where the
-//! library already reads it from, so a rescan after playing picks up the
-//! real figure with no process watching at all.
-//!
-//! Restoring the window Marquee minimised for the game is a different
-//! problem, and playtime's own answer does not solve it: nothing reads
-//! `localconfig.vdf` until the *next* scan, which can be minutes away. On
-//! Windows, Steam also keeps the running appid live in the registry --
-//! updated the instant a game starts or stops -- so `start` polls that to
-//! know when a hand-off session ends. macOS and Linux have no equivalent
-//! live signal, so a Steam launch there still leaves Marquee minimised until
-//! the user switches back by hand. Before this, *no* Steam launch on any
-//! platform brought the window back -- only a manually-added game did,
-//! because the first attempt at this (#63) only ever watched a child process
-//! we owned (#90). The first attempt at fixing *that* (#94) read the appid
-//! from the wrong registry key -- nested under `ActiveProcess`, by analogy
-//! with the pid `Steam::is_running` reads there -- so it still never fired
-//! against a real session; see `Steam::running_app_id` for where it actually
-//! lives.
-//!
-//! **Manual** games spawn directly, so we own the child and can time the
-//! session exactly.
+//! Steam games launch by `steam://rungameid/<appid>`, which keeps the overlay,
+//! cloud saves and anti-cheat happy but leaves the process with Steam. On
+//! Windows we poll Steam's running appid in the registry to know when the
+//! session ends; macOS and Linux have no such signal. Manual games are spawned
+//! directly, so we own the child.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -52,10 +26,7 @@ pub enum Launch {
     },
 }
 
-/// Work out how a game should start, without starting it.
-///
-/// Separated from the doing so it can be tested without launching anything on
-/// the machine running the tests.
+/// Work out how a game should start, without starting it, so it can be tested.
 pub fn plan(game: &Game) -> Result<Launch, String> {
     match game.provider.as_str() {
         "steam" => {
@@ -63,9 +34,8 @@ pub fn plan(game: &Game) -> Result<Launch, String> {
             {
                 return Err(format!("not a valid Steam appid: {:?}", game.provider_id));
             }
-            // rungameid, not launch/<id>: it is the form Steam itself uses from
-            // the library, and it handles a game that is owned but not yet
-            // installed by offering to install it rather than failing.
+            // rungameid rather than launch/<id>: it offers to install an owned
+            // game that is not installed, rather than failing.
             Ok(Launch::Uri(format!(
                 "steam://rungameid/{}",
                 game.provider_id
@@ -92,32 +62,15 @@ pub fn plan(game: &Game) -> Result<Launch, String> {
 
 /// Hand a URI to the platform.
 pub fn open_uri(uri: &str) -> Result<(), String> {
-    // Guard the shape as well as the content. Everything we generate is a
-    // steam:// URI built from digits we validated; refusing anything else
-    // means a future provider cannot accidentally pass through a string that
-    // came from a file on disk.
+    // Only steam:// is ever built here, so a future provider cannot pass
+    // through a string read from disk.
     if !uri.starts_with("steam://") {
         return Err(format!("refusing to open an unexpected URI scheme: {uri}"));
     }
 
-    // And guard the characters, because of how Windows used to open a URI.
-    //
-    // This went through `cmd /C start` for a long time, and cmd.exe re-parses
-    // its own command line after Rust has quoted it. Rust's quoting is built
-    // for CreateProcess, not for cmd, so a `&`, `|`, `^`, `<`, `>` or `"`
-    // inside an argument could escape it and be run as a command -- the
-    // BatBadBut class of bug (CVE-2024-24576). Windows now goes through
-    // ShellExecuteW, which takes the URI as a single string and parses no
-    // command line, so the shell is out of the picture. The guard stays: it
-    // costs nothing, and the next platform-specific opener may not be as
-    // careful.
-    //
-    // Nothing reaches here with such a character today: the appid is checked
-    // for digits in `plan`. This is the second lock, for the caller who adds a
-    // provider later and builds a URI out of a name read off the disk. An
-    // allowlist rather than a list of dangerous characters: every steam://
-    // URI this app builds is letters, digits, slashes and dots, so anything
-    // else is a bug worth refusing rather than a case worth supporting.
+    // Allowlist the characters as a second lock behind `plan`. Opening via
+    // `cmd /C start` let shell metacharacters escape Rust's quoting (BatBadBut,
+    // CVE-2024-24576); ShellExecuteW avoids that, but the next opener may not.
     if let Some(bad) = uri
         .chars()
         .find(|c| !(c.is_ascii_alphanumeric() || "/:._-".contains(*c)))
@@ -152,23 +105,17 @@ pub fn open_uri(uri: &str) -> Result<(), String> {
     }
 }
 
-/// Ask the shell to open a URI with whatever is registered for it.
+/// Open a URI with its registered handler.
 ///
-/// This used to be `cmd /C start "" uri`, which works, and also opens a
-/// console window for the instant cmd.exe takes to run -- a black rectangle
-/// flashing over a fullscreen launcher on every Play. `ShellExecuteW` is what
-/// `start` calls underneath, minus the console and minus cmd.exe's parsing of
-/// the command line, which is what the character guard in `open_uri` was
-/// defending against.
+/// Not `cmd /C start`: that flashes a console window and re-parses the command
+/// line, which is the injection risk `open_uri` guards against.
 #[cfg(target_os = "windows")]
 fn shell_execute(uri: &str) -> Result<(), String> {
     use windows_sys::Win32::UI::Shell::ShellExecuteW;
 
-    /// `SW_SHOWNORMAL`. Steam decides what its own window does with this; the
-    /// value only matters for handlers that open a window of their own.
+    /// `SW_SHOWNORMAL`.
     const SHOW_NORMAL: i32 = 1;
-    /// The documented threshold: anything at or below is an `SE_ERR_*` code,
-    /// not an instance handle.
+    /// Return values at or below this are `SE_ERR_*` codes, not handles.
     const LARGEST_ERROR: isize = 32;
 
     fn wide(s: &str) -> Vec<u16> {
@@ -199,58 +146,31 @@ fn shell_execute(uri: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// How long to watch a spawned game before deciding it started successfully.
-///
-/// A missing DLL, a bad working directory or an unsupported binary exits within
-/// a few hundred milliseconds. A game that is still alive after this is one the
-/// user is about to see.
+/// A spawned game that fails to start (missing DLL, bad working directory)
+/// exits well within this.
 const STARTUP_GRACE: std::time::Duration = std::time::Duration::from_millis(900);
 
-/// How long to wait for a cold Steam to become ready before handing it the URI.
-///
-/// Steam takes several seconds from launch to accepting `steam://`. Giving up
-/// early and firing anyway is not a failure -- Steam queues the request -- so
-/// this is a best effort, not a gate.
+/// Best-effort wait for a cold Steam; firing the URI early is not fatal.
 const STEAM_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 const STEAM_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// Steam accepts `steam://` some seconds after its process appears. A URI
-/// fired before then is silently swallowed: press Play, Steam starts,
-/// nothing; press Play again, the game runs. That was the report.
+/// Steam silently drops a `steam://` URI that arrives in the first seconds
+/// after its process appears, so the first Play did nothing.
 const STEAM_SETTLE: std::time::Duration = std::time::Duration::from_secs(4);
 /// A second attempt, for when the first still landed too early.
 const STEAM_RETRY: std::time::Duration = std::time::Duration::from_secs(8);
 
-/// How often to poll Steam's reported running appid while tracking a
-/// hand-off session. Only used on Windows -- see `watch_steam_session`.
 #[cfg(target_os = "windows")]
 const STEAM_SESSION_POLL: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// How long to wait for Steam to report the launched appid as running before
-/// giving up on tracking that session. Covers an appid that was handed off
-/// but never actually starts -- Steam offering to install it instead, say --
-/// so this thread does not sit polling forever for a session that was never
-/// going to happen.
-///
-/// Generous, because giving up is the one outcome that leaves Marquee
-/// minimised for good. Steam does not report a game as running while it
-/// downloads the update it insists on first, or while a first launch runs
-/// the redistributable installers, and either takes longer than the two
-/// minutes this used to be. The cost of waiting is a thread reading two
-/// registry values twice a second.
+/// How long a handed-off appid may take to show as running before we stop
+/// tracking it. Generous because giving up leaves Marquee minimised, and
+/// pre-launch updates or redistributable installs can take many minutes.
 #[cfg(target_os = "windows")]
 const STEAM_SESSION_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15 * 60);
 
-/// Make sure Steam is up, without showing its window.
-///
-/// Handing `steam://` to the system with Steam closed makes Steam start *and*
-/// open its library window in front of everything -- on a television, the
-/// launcher vanishing behind a storefront. Started silently first, the window
-/// never appears and the game comes up over Marquee.
-///
-/// Returns true when Steam had to be started, because that is the case where
-/// the launch needs to be more careful about timing. Blocking, so it runs on
-/// the launch thread rather than the interface's.
+/// Start Steam silently if needed, so a URI does not also open its library
+/// window over the launcher. Returns true if Steam had to be started. Blocks.
 fn ensure_steam_ready() -> bool {
     use crate::library::steam::Steam;
 
@@ -259,8 +179,7 @@ fn ensure_steam_ready() -> bool {
     }
     log_info!("run", "Steam is not running; starting it silently");
     if let Err(e) = Steam::start_silently() {
-        // Not fatal. The URI still works, it just brings Steam's window with
-        // it, which is the behaviour this exists to improve rather than require.
+        // Not fatal: the URI still works, just with Steam's window.
         log_warn!("run", "{e}; letting the URI start Steam instead");
         return true;
     }
@@ -268,8 +187,7 @@ fn ensure_steam_ready() -> bool {
     let deadline = std::time::Instant::now() + STEAM_WAIT;
     while std::time::Instant::now() < deadline {
         if Steam::is_running() {
-            // The process is up; the client is not ready yet. Waiting here is
-            // the difference between one press working and needing two.
+            // The process is up but the client is not ready for URIs yet.
             log_info!("run", "Steam is up; giving it a moment to accept requests");
             std::thread::sleep(STEAM_SETTLE);
             return true;
@@ -283,17 +201,8 @@ fn ensure_steam_ready() -> bool {
     true
 }
 
-/// Wait for `appid` to become Steam's reported running game, then wait for it
-/// to stop being that, and call `on_exit` when it does.
-///
-/// `running_app_id` is injected -- and the poll interval and start timeout
-/// passed in rather than read from the module consts -- so the waiting and
-/// give-up logic can be tested without a real Steam client or registry to
-/// poll and without a real test taking minutes. See the tests below.
-///
-/// Only called from the Windows arm below -- gated the same way here so a
-/// non-Windows build does not warn this dead rather than merely unused there,
-/// while `cfg(test)` keeps it compiled everywhere the tests below need it.
+/// Wait for `appid` to start and then stop being Steam's running game, then
+/// call `on_exit`. The poller and timings are parameters so tests need no Steam.
 #[cfg(any(target_os = "windows", test))]
 fn watch_steam_session(
     appid: u32,
@@ -307,11 +216,8 @@ fn watch_steam_session(
     let mut last_seen = running_app_id();
     while last_seen != Some(appid) {
         if std::time::Instant::now() >= start_deadline {
-            // Logged with what was actually last read, not just that it gave
-            // up: #94 gave up on every session because the registry read was
-            // wrong and always came back empty, and "never showed up" alone
-            // looked identical to a game that was merely slow to start. A
-            // warning, because from here on the window stays minimised.
+            // Log the last value read: a wrong registry key (#94) looked
+            // identical to a slow game when only the give-up was logged.
             log_warn!(
                 "run",
                 "{title} never showed up as Steam's running game (last read {last_seen:?}, wanted {appid}); not tracking its session"
@@ -342,11 +248,9 @@ pub fn start(
         Launch::Uri(uri) => {
             let uri = uri.clone();
             let title = game.title.clone();
-            // `plan` only ever builds a Uri launch for the "steam" provider,
-            // so provider_id is a Steam appid here.
+            // Only Steam games plan as a Uri, so this is a Steam appid.
             let appid: u32 = game.provider_id.parse().unwrap_or(0);
-            // Off the interface's thread: waiting for a cold Steam takes
-            // seconds, and the grid must stay responsive while it happens.
+            // Off the interface's thread: a cold Steam takes seconds.
             std::thread::spawn(move || {
                 let was_cold = ensure_steam_ready();
                 log_info!("run", "launching {title} via {uri}");
@@ -355,29 +259,20 @@ pub fn start(
                     return;
                 }
 
-                // Ask once more after a cold start. Steam swallows a request
-                // that arrives before it is ready, and there is no signal for
-                // "ready" short of asking -- so ask twice. A duplicate is
-                // harmless: Steam brings an already-running game to the front
-                // rather than starting a second copy.
+                // After a cold start, ask again in case Steam dropped the first
+                // request. A duplicate only brings the running game forward.
                 if was_cold {
                     std::thread::sleep(STEAM_RETRY);
                     log_info!(
                         "run",
                         "asking Steam for {title} again, in case the first was early"
                     );
-                    // Not a failure to report: the first request already
-                    // went through the same path and was accepted.
+                    // The first request was already accepted.
                     log_if_err!("run", open_uri(&uri), "second request for {title}");
                 }
 
-                // Steam owns the game from here, so there is no child to
-                // `wait()` on the way the manual arm below does. On Windows it
-                // keeps the running appid live in the registry instead, which
-                // is enough to know when the session it was handed off to
-                // ends -- see the module doc and #90, where the first attempt
-                // at this (#63) watched only owned processes and so never
-                // brought Marquee back for a Steam launch at all.
+                // Steam owns the process, so watch its running appid instead
+                // of waiting on a child (#90).
                 #[cfg(target_os = "windows")]
                 watch_steam_session(
                     appid,
@@ -389,8 +284,7 @@ pub fn start(
                 );
                 #[cfg(not(target_os = "windows"))]
                 {
-                    // No equivalent live signal on macOS or Linux -- see the
-                    // module doc.
+                    // No live session signal on macOS or Linux.
                     let _ = (appid, on_exit);
                 }
             });
@@ -406,10 +300,8 @@ pub fn start(
                 .spawn()
                 .map_err(|e| format!("could not start {}: {e}", program.display()))?;
 
-            // A process that spawns and then dies immediately is the common
-            // failure -- a missing runtime, a wrong working directory -- and
-            // spawn() reports none of it, so the launch looks successful and
-            // nothing happens. Watched off-thread so the interface never waits.
+            // spawn() succeeds for a game that dies at once (missing runtime,
+            // wrong working directory), so check again after a grace period.
             let title = game.title.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(STARTUP_GRACE);
@@ -423,11 +315,8 @@ pub fn start(
                         on_failure(detail);
                     }
                     Ok(Some(_)) => {
-                        // Exited cleanly and at once. A launcher stub handing
-                        // off to a store client looks exactly like this, so it
-                        // is not treated as a failure -- and there is no real
-                        // session here to report the end of, since whatever
-                        // this handed off to is not a process we own.
+                        // Likely a launcher stub handing off to a store
+                        // client: not a failure, and no session we own.
                         log_info!(
                             "run",
                             "{title} exited immediately, cleanly -- probably a launcher stub"
@@ -437,13 +326,8 @@ pub fn start(
                     _ => log_info!("run", "{title} is running"),
                 }
 
-                // Still alive past the grace period: this is a real, owned
-                // session, and Marquee minimised the window for it. Waiting
-                // here for the real exit -- not just the startup check above
-                // -- is what makes "quit to desktop" bring Marquee back
-                // instead of leaving it minimised until the next Alt-Tab (#63).
-                // The exit status is the game's business; a crash at the end
-                // of a session is still the end of a session.
+                // Wait for the real exit so the window comes back (#63). The
+                // exit status is ignored: a crash still ends the session.
                 let _ = child.wait();
                 log_info!("run", "{title} session ended");
                 on_exit();
@@ -457,13 +341,7 @@ pub fn start(
 mod tests {
     use super::*;
 
-    /// Opening a URI on Windows went through `cmd /C start` until it went
-    /// through ShellExecuteW, and cmd.exe re-parses the command line after
-    /// Rust has quoted it for CreateProcess. A shell metacharacter that
-    /// survives that is a command, not an argument (CVE-2024-24576). Nothing
-    /// builds such a URI today and nothing hands one to a shell any more;
-    /// this is the lock for the caller who adds a provider later and builds
-    /// one from a name read off the disk.
+    /// Guards against shell injection through a URI (CVE-2024-24576).
     #[test]
     fn a_uri_carrying_a_shell_metacharacter_is_refused() {
         for evil in [
@@ -483,7 +361,6 @@ mod tests {
         }
     }
 
-    /// The guard has to let the real thing through, or it is just a bug.
     /// Checked against `plan` rather than a literal so the two cannot drift.
     #[test]
     fn the_uris_we_actually_build_pass_the_guard() {
@@ -524,8 +401,7 @@ mod tests {
         );
     }
 
-    /// An appid comes from a file on disk. Anything that is not digits must not
-    /// reach a URI we hand to the shell.
+    /// The appid comes from a file on disk.
     #[test]
     fn a_malformed_appid_is_refused() {
         for bad in ["", "12; rm -rf /", "../../etc", "abc", "12 34"] {
@@ -533,9 +409,6 @@ mod tests {
         }
     }
 
-    /// A game that spawns and dies at once is the common manual-launch
-    /// failure, and spawn() reports none of it. `false` exits non-zero
-    /// immediately, which is exactly that shape.
     #[test]
     fn a_process_that_dies_immediately_is_reported() {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -549,8 +422,7 @@ mod tests {
         if !g.install_dir.as_ref().unwrap().exists() {
             return; // no such binary on this machine; nothing to assert
         }
-        // cmd.exe without arguments does not exit, so only the unix shape is
-        // asserted -- the mechanism is identical either way.
+        // cmd.exe without arguments does not exit, so assert on Unix only.
         if cfg!(windows) {
             return;
         }
@@ -567,9 +439,8 @@ mod tests {
         assert!(reported.unwrap().contains("code 1"));
     }
 
-    /// A launcher stub that hands off to a store client exits cleanly and at
-    /// once, and must not be reported as a failure. Nor is it a session
-    /// ending, since whatever it handed off to is not a process we own.
+    /// A launcher stub exits cleanly at once; it is neither a failure nor a
+    /// session ending.
     #[test]
     fn a_clean_immediate_exit_is_not_a_failure() {
         if cfg!(windows) || !std::path::Path::new("/usr/bin/true").exists() {
@@ -602,19 +473,9 @@ mod tests {
         );
     }
 
-    /// A process that survives the startup grace period and then exits on its
-    /// own is a real session ending -- "quit to desktop" -- and the caller
-    /// must be told, because the window that was minimised for the game needs
-    /// to come back. Before this, `start` stopped watching once the grace
-    /// period's single `try_wait` came back empty, so nothing ever fired and
-    /// Marquee stayed minimised after the game closed (#63).
-    ///
-    /// `#[cfg(unix)]` on the test rather than a `cfg!(windows)` early return
-    /// inside it. The early return is a runtime check and the body still has
-    /// to compile: `PermissionsExt` and `Permissions::from_mode` do not exist
-    /// on Windows at all, so the test did not skip there, it failed the build
-    /// with "cannot find `unix` in `os`". This is the shape CLAUDE.md warns
-    /// about -- clean on the development machine, red only in CI.
+    /// Regression for #63, where Marquee stayed minimised after the game quit.
+    /// `#[cfg(unix)]` rather than a runtime check: `PermissionsExt` does not
+    /// compile on Windows.
     #[cfg(unix)]
     #[test]
     fn a_process_that_outlives_the_grace_period_reports_its_end() {
@@ -646,11 +507,8 @@ mod tests {
         )
         .unwrap();
 
-        // Generous, because this is a test of whether the end is reported,
-        // not of how quickly. With four seconds it failed on a macOS runner
-        // that took longer than that to run a one-second script: the first
-        // execution of a freshly written file there waits on the system's
-        // malware scan, and a busy runner makes that wait unbounded.
+        // Generous: macOS malware-scans a new script on first run, and four
+        // seconds was not enough on a busy CI runner.
         let ended = exit_rx.recv_timeout(std::time::Duration::from_secs(30));
         let _ = std::fs::remove_file(&script);
         assert!(
@@ -684,13 +542,7 @@ mod tests {
         assert!(err.contains("no executable"), "{err}");
     }
 
-    /// An appid that never shows up as Steam's running game -- a hand-off
-    /// that Steam turned into an install prompt rather than a launch, say --
-    /// must give up rather than call `on_exit`. Before `watch_steam_session`
-    /// existed, a Steam launch never called `on_exit` at all (#90): this
-    /// covers the half of its logic that deliberately still does not, so
-    /// that half cannot regress into firing on every launch regardless of
-    /// whether Steam ever reported one running.
+    /// For example, Steam showed an install prompt instead of launching.
     #[test]
     fn a_steam_session_that_never_starts_does_not_call_on_exit() {
         let (tx, rx) = std::sync::mpsc::channel();
@@ -710,10 +562,7 @@ mod tests {
         );
     }
 
-    /// The other half: once Steam reports the appid running and then stops
-    /// reporting it, that is a real session ending, and `on_exit` must fire
-    /// -- this is what brings Marquee's window back for a Steam launch, which
-    /// nothing did before this (#90).
+    /// Regression for #90: nothing restored the window after a Steam game.
     #[test]
     fn a_steam_session_that_starts_and_ends_calls_on_exit() {
         use std::sync::atomic::{AtomicU32, Ordering};

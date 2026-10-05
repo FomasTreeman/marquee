@@ -1,25 +1,13 @@
 import type { Device } from './input'
 import { el } from './dom'
 /**
- * The application shell.
- *
- * Structure ported from the browser prototype, which docs/PLAN.md §9 treats as
- * the specification rather than a mockup: a full-bleed backdrop, a top bar, a
- * hero for the focused game, the grid, and a hint legend.
- *
- * The one thing deliberately left behind is Playnite's fixed 1080px canvas
- * scaled by a Viewbox. We have real CSS and lay out against the real viewport.
- * What survives is `--s`, a scale factor derived from viewport height, so the
- * design keeps its proportions on a laptop and on a television without either
- * being a special case.
+ * The application shell: backdrop, top bar, hero, grid and hint legend.
+ * Layout uses the real viewport; `--s` scales the design by viewport height.
  */
 
 /**
- * The search icon, kept as data so `searchIconBBox` can assert its ink is
- * centred. The '⌕' glyph it replaced read low because a character's ink can
- * sit anywhere in its line box; a magnifying glass is asymmetric in its
- * viewBox for the same reason, hence the circle nudged -0.5,-0.5 from the
- * textbook coordinates.
+ * The search icon, kept as data so a test can assert its ink is centred.
+ * The circle is nudged -0.5,-0.5 because a magnifying glass is asymmetric.
  */
 export const SEARCH_ICON = {
   viewBox: 24,
@@ -40,11 +28,8 @@ function searchIconMarkup(): string {
 }
 
 /**
- * The stroked bounding box of {@link SEARCH_ICON}, conservative about the
- * round line cap (it extends a capped endpoint by the full half-stroke-width
- * in both axes, which is where a cap's own bounding box actually reaches,
- * not just along the line's direction). Centring the icon means this box's
- * centre lands on the viewBox's own centre.
+ * The stroked bounding box of {@link SEARCH_ICON}, extending each round cap by
+ * half the stroke width in both axes.
  */
 export function searchIconBBox(): { minX: number; maxX: number; minY: number; maxY: number } {
   const { strokeWidth, circle, handle } = SEARCH_ICON
@@ -74,11 +59,8 @@ export interface Shell {
 const DESIGN_HEIGHT = 1080
 
 /**
- * Keep `--s` in step with the window.
- *
- * Clamped at both ends: below about 0.6 the type stops being legible, and
- * above 2 a 4K display would render everything at cinema size rather than
- * showing more of the library.
+ * Keep `--s` in step with the window. Clamped because type is illegible below
+ * 0.6, and above 2 a 4K display would show bigger cards rather than more.
  */
 function installScale(): void {
   const apply = () => {
@@ -92,10 +74,8 @@ function installScale(): void {
 export function createShell(root: HTMLElement): Shell {
   installScale()
 
-  // --- backdrop -------------------------------------------------------
-  // Two images, cross-faded. One would flash black between games; swapping
-  // opacity between a pair is the cheapest way to avoid it, and opacity is
-  // compositor-only so the fade costs no layout.
+  // Two images cross-faded by opacity, which is compositor-only. One image
+  // would flash black between games.
   const backdrop = el('div', 'backdrop', root)
   const backdropA = el('img', 'backdrop-img', backdrop)
   const backdropB = el('img', 'backdrop-img', backdrop)
@@ -107,7 +87,6 @@ export function createShell(root: HTMLElement): Shell {
 
   const stage = el('div', 'stage', root)
 
-  // --- top bar --------------------------------------------------------
   const topbar = el('header', 'topbar', stage)
   const brand = el('div', 'brand', topbar)
   brand.textContent = 'Library'
@@ -115,23 +94,15 @@ export function createShell(root: HTMLElement): Shell {
 
   el('div', 'spacer', topbar)
 
-  // One control, not two. It used to be a labelled button beside the presets
-  // with the input living on the far side of the spacer -- so the icon a
-  // keyboard user clicked and the box that then appeared were on opposite
-  // sides of the bar, which read as two different search bars rather than
-  // one opening into the other. Grouped together, in the top-right corner
-  // where a console puts search, so there is one thing to look at rather
-  // than a button, a box, and a summary all naming the same query.
+  // Button and input share one group so the box opens where the icon is;
+  // apart, they read as two different search bars.
   const search = el('div', 'search', topbar)
   const searchButton = el('button', 'search-button', search)
   searchButton.type = 'button'
   searchButton.setAttribute('aria-label', 'Search')
-  // Drawn, not the Unicode '⌕' this replaced -- see SEARCH_ICON above for why
-  // even a drawn icon needed its coordinates nudged to actually centre.
   searchButton.innerHTML = searchIconMarkup()
 
-  // Hidden until there is a query. A search box occupying the top bar
-  // permanently would be a desktop habit imposed on a television.
+  // Hidden until there is a query.
   const query = el('input', 'query', search)
   query.type = 'text'
   query.placeholder = 'Search'
@@ -142,7 +113,6 @@ export function createShell(root: HTMLElement): Shell {
   const count = el('span', 'count', status)
   const clock = el('span', 'clock', status)
 
-  // --- hero -----------------------------------------------------------
   const hero = el('section', 'hero', stage)
   const heroInner = el('div', 'hero-inner', hero)
   const heroLogo = el('img', 'hero-logo', heroInner)
@@ -151,11 +121,9 @@ export function createShell(root: HTMLElement): Shell {
   const heroTitle = el('h1', 'hero-title', heroInner)
   const heroMeta = el('div', 'hero-meta', heroInner)
 
-  // --- grid -----------------------------------------------------------
   const library = el('main', 'library', stage)
   const gridViewport = el('div', 'grid-viewport', library)
 
-  // --- legend ---------------------------------------------------------
   const hints = el('footer', 'hints', stage)
 
   const tick = () => {
@@ -168,12 +136,10 @@ export function createShell(root: HTMLElement): Shell {
 }
 
 export interface Hint {
-  /** The key or button cap. Absent for a mouse, which has no keystroke to
-   *  name -- those render as a pill you press instead. */
+  /** The key or button cap. Absent for mouse hints, which render as buttons. */
   key?: string
   label: string
-  /** Clicking the hint does the thing. A legend nobody can press is decoration
-   *  for anyone holding a mouse. */
+  /** Clicking the hint performs the action. */
   onClick?: () => void
 }
 
@@ -189,16 +155,9 @@ export interface LegendActions {
 }
 
 /**
- * The legend, in the vocabulary of whatever is being held.
- *
- * Telling someone to press A while they are holding a mouse is worse than
- * telling them nothing, and a keyboard user has no way to guess that O sorts.
- *
- * Data rather than DOM so the property that matters can be asserted: every
- * action is offered on every device. It was not -- the mouse row had no
- * Details and no Favourite, and because moving the mouse switches the legend,
- * a mouse user never saw the keyboard's "Y Details" either. Two missing rows
- * made a whole screen unreachable.
+ * The legend for the current input device. Returned as data so a test can
+ * assert every action is offered on every device; a missing mouse row once
+ * made the details screen unreachable.
  */
 export function legendFor(device: Device, on: LegendActions): Hint[] {
   switch (device) {
@@ -208,10 +167,6 @@ export function legendFor(device: Device, on: LegendActions): Hint[] {
         { key: 'Y', label: 'Details', onClick: on.details },
         { key: 'X', label: 'Favourite', onClick: on.favourite },
         { key: 'L3', label: 'Sort', onClick: on.sort },
-        // Presets are already always on screen as the nav tabs along the top,
-        // so a menu that only re-listed them was a second press to reach
-        // something already one press away. Right stick now opens the one
-        // thing the nav cannot do: type a query.
         { key: 'R3', label: 'Search', onClick: on.search },
         { key: '☰', label: 'Menu', onClick: on.menu },
         { key: '⧉', label: 'Add', onClick: on.add },
@@ -229,8 +184,7 @@ export function legendFor(device: Device, on: LegendActions): Hint[] {
         { key: 'Esc', label: 'Back' },
       ]
     case 'mouse':
-      // No keystrokes to name, so these are pills you press. The two that
-      // describe the grid keep their caption; the rest are buttons.
+      // The two grid gestures keep a caption; the rest are buttons.
       return [
         { key: 'Click', label: 'Select' },
         { key: 'Double-click', label: 'Play' },
@@ -252,10 +206,8 @@ export function setHints(hints: HTMLElement, entries: Hint[]): void {
       item.classList.add('is-clickable')
       ;(item as HTMLButtonElement).onclick = entry.onClick
     }
-    // No key means there is no keystroke to show -- the chip itself is the
-    // control. It used to render an em dash in the key slot, which read as
-    // "this action has no binding" rather than "click this", and left mouse
-    // users with five actions they could not tell were reachable at all.
+    // Without a key the chip itself is the button. An empty key slot read as
+    // "no binding" rather than "click this".
     if (entry.key) {
       const key = el('b', 'hint-key', item)
       key.textContent = entry.key

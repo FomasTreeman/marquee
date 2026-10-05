@@ -1,6 +1,4 @@
-//! Host reporting: which webview is drawing this. A frame rate or a
-//! rendering bug means nothing without knowing the engine behind it, so
-//! every measurement and report is stamped with it.
+//! Host reporting, so measurements and bug reports name the webview engine.
 
 use serde::Serialize;
 
@@ -8,8 +6,7 @@ use serde::Serialize;
 pub struct HostInfo {
     /// "windows" | "macos" | "linux"
     pub os: &'static str,
-    /// The webview actually rendering the interface. This is the axis every
-    /// rendering bug in this project will turn out to lie along.
+    /// The webview rendering the interface.
     pub webview: &'static str,
     pub arch: &'static str,
     pub version: &'static str,

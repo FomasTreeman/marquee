@@ -1,14 +1,6 @@
 /**
- * A list menu.
- *
- * One component behind the main menu and the sort menu, because on a console
- * they are the same thing: a short vertical list, up and down to move, A to
- * choose, B to leave. Building these separately is how they end up behaving
- * differently for no reason.
- *
- * Anchored rather than centred. A sort menu that appears in the middle of the
- * screen has lost its connection to the thing it sorts; PS5 and Xbox both drop
- * these from the control that opened them.
+ * A list menu, shared by the main menu and the sort menu so they behave alike.
+ * Anchored to the control that opened it rather than centred, as on consoles.
  */
 import { logInfo } from './log'
 import { el } from './dom'
@@ -16,13 +8,13 @@ import { el } from './dom'
 export interface MenuItem {
   id: string
   label: string
-  /** Shown dimmed to the right — a current value, a count, a shortcut. */
+  /** Shown dimmed to the right, such as a current value or a count. */
   detail?: string
   /** Marks the current choice. */
   selected?: boolean
   /** Present but unusable, with the reason shown. */
   disabled?: string
-  /** Ask before doing it. For anything that ends the session or the machine. */
+  /** Asks for a second press, for anything that ends the session. */
   confirm?: string
 }
 
@@ -63,8 +55,8 @@ export function createMenu(): Menu {
       if (item.selected) row.dataset['selected'] = '1'
 
       const label = el('span', 'menu-label', row)
-      // A confirmation replaces the label rather than opening a second dialog:
-      // one press to arm, one to commit, and B or moving away disarms it.
+      // Confirmation replaces the label: one press arms, a second commits, and
+      // B or moving away disarms.
       label.textContent =
         pendingConfirm === item.id ? (item.confirm ?? 'Press again to confirm') : item.label
 
@@ -78,8 +70,7 @@ export function createMenu(): Menu {
   function move(delta: number): void {
     const items = request?.items ?? []
     if (!items.length) return
-    // Skip disabled rows rather than letting the cursor rest somewhere that
-    // does nothing.
+    // Skip disabled rows.
     let next = index
     for (let step = 0; step < items.length; step++) {
       next = (next + delta + items.length) % items.length
@@ -121,8 +112,7 @@ export function createMenu(): Menu {
       pendingConfirm = undefined
       heading.textContent = next.title
       root.dataset['anchor'] = next.anchor ?? 'left'
-      // Start on the current choice, so a menu of five sort orders opens with
-      // the cursor on the one in use rather than at the top.
+      // Start on the current choice.
       index = Math.max(0, next.items.findIndex((i) => i.selected))
       if (next.items[index]?.disabled) move(1)
       root.hidden = false
@@ -138,8 +128,7 @@ export function createMenu(): Menu {
         case 'down': move(1); break
         case 'a': void choose(); break
         case 'b': close(); break
-        // Everything else is swallowed: a menu is modal, and letting left or
-        // right through would move the grid behind it.
+        // Swallow everything else; the menu is modal.
       }
       return true
     },
@@ -147,21 +136,14 @@ export function createMenu(): Menu {
 }
 
 /**
- * Ids that end the user's whole session rather than just this app.
- *
- * The mirror of `Action::affects_the_machine` in src-tauri/src/system.rs. Kept
- * here as data so the "two presses" rule can be asserted rather than trusted to
- * whoever next edits the menu. Exiting Marquee is deliberately not on it: you
- * land back where you started, which is not a loss.
+ * Ids that end the user's session, mirroring `Action::affects_the_machine` in
+ * src-tauri/src/system.rs. Kept as data so a test can assert they need two presses.
  */
 export const ENDS_THE_SESSION = ['restart', 'shutdown'] as const
 
 /**
- * The Start-button menu, as data.
- *
- * Separate from the dispatch that acts on it so the shape can be tested. The
- * ids have to match `Action::parse` on the Rust side; `settings` and `rescan`
- * are handled in the frontend and never reach it.
+ * The Start-button menu. Ids must match `Action::parse` in Rust, except
+ * `settings` and `rescan`, which the frontend handles.
  */
 export function mainMenuItems(gameCount: number): MenuItem[] {
   return [
@@ -169,8 +151,7 @@ export function mainMenuItems(gameCount: number): MenuItem[] {
     { id: 'rescan', label: 'Update game library', detail: `${gameCount} games` },
     { id: 'minimise', label: 'Minimise' },
     { id: 'quit', label: 'Exit Marquee' },
-    // Two presses each. Ending someone's session from a misread menu row is
-    // not a mistake they can undo.
+    // Two presses each, as ending the session cannot be undone.
     { id: 'restart', label: 'Restart system', confirm: 'Restart? Press again' },
     { id: 'shutdown', label: 'Turn off system', confirm: 'Turn off? Press again' },
   ]

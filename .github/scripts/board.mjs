@@ -1,26 +1,8 @@
 /**
- * The board, decided in one place from facts.
- *
- * ## Why this is one file
- *
- * The state of an issue used to be spread across three workflows. `claude.yml`
- * set `claude-working`, `pr-labels.yml` set `in-review`, and
- * `project-automation.yml` watched for label events and moved the card. Each
- * was reasonable alone and together they were unreliable, for one specific
- * reason: **GitHub does not run a workflow off an event that GITHUB_TOKEN
- * caused.** So a label applied by one workflow was invisible to the next, the
- * card never moved, and nothing failed anywhere. Only the one status that
- * happened to be set before an action with its own token ever worked.
- *
- * Chaining workflows through label events was the mistake. This computes the
- * answer from what is *true* -- the issue's state, its linked pull requests,
- * whether their checks pass -- and writes the label and the card itself, in
- * one run, with no second trigger to be suppressed.
- *
- * ## Portable
- *
- * Nothing here is specific to this repository except CONFIG below. Copy the
- * file, change the project number and the labels, and it works.
+ * Decides each issue's board column and labels from facts read through the
+ * API, and writes both in one run. Chaining workflows through label events
+ * failed silently, because events caused by GITHUB_TOKEN trigger nothing.
+ * Only CONFIG is specific to this repository.
  */
 
 /** Everything project-specific. */
@@ -52,13 +34,8 @@ export const CONFIG = {
 }
 
 /**
- * The column an issue belongs in.
- *
- * Pure, and the only place the rule lives. Order is priority: the first thing
- * that is true wins, so a question waiting on a person outranks a pull request
- * sitting there, because one of those needs somebody and the other does not.
- *
- * `facts` is deliberately plain data so this can be tested without a network.
+ * The column an issue belongs in. Pure; the first matching rule wins, so a
+ * question for a person outranks an open pull request.
  */
 export function statusFor(facts) {
   const { status, labels } = CONFIG
@@ -66,37 +43,18 @@ export function statusFor(facts) {
 
   if (facts.state === 'CLOSED') return status.done
 
-  // Waiting on a person, whichever kind of waiting it is.
   if (has(labels.blocked)) return status.needsDecision
 
-  // A pull request exists. Its health decides whether it is yours to read or
-  // still the machine's to finish -- a red pull request is not review-ready,
-  // and putting it in the same column as a green one is how a person ends up
-  // reviewing something that does not build.
+  // A failing pull request is not ready to review.
   if (facts.openPr) {
     return facts.prFailing ? status.inProgress : status.inReview
   }
 
   if (has(labels.working)) return status.inProgress
 
-  // An agent has been at this and there is still nothing to review.
-  //
-  // This is the transition that was wrong. `claude-working` comes off when the
-  // run ends, and with no pull request the answer fell straight through to
-  // Todo -- so a card went *backwards*, from In Progress to the queue it
-  // started in, and a run that had failed looked exactly like an issue nobody
-  // had ever touched. Three of those in a row is not a queue position, it is a
-  // question for a person, and three is the same count ci-repair.yml stops at
-  // for the same reason: an agent that has not managed it in three goes is not
-  // going to manage it on the ninth.
-  //
-  // Below three it stays in Todo on purpose, because Todo is drained by
-  // pick-up-todo.yml now. It is a queue with a consumer rather than a place
-  // things go to rest.
-  // Whose queue this is, asked before how the agent got on, because they are
-  // different questions. Needs Decision means the agent is stuck and wants an
-  // answer; an issue marked for a person was never the agent's to be stuck on,
-  // so stray attempts on one do not turn it into a question.
+  // `no-ai` issues are never the agent's to be stuck on. Otherwise three
+  // failed attempts become a question for a person, matching ci-repair.yml;
+  // without this a failed run sent the card back to Todo.
   if (has(labels.human)) return status.todoHuman
 
   if (facts.attempts >= 3) return status.needsDecision
@@ -105,54 +63,21 @@ export function statusFor(facts) {
 }
 
 /**
- * Is this issue waiting for an agent that is not coming?
- *
- * `Todo` was a dead end, and it read as a queue. An issue reaches it only when
- * it is open, unblocked, has no pull request and carries no `claude-working`
- * -- and the sole thing that sets `claude-working` is a claude.yml run, which
- * starts on a label *event* or an `@claude` comment and nothing else. So an
- * issue sitting in Todo has by definition already spent its only trigger.
- * Nothing was ever going to fire again, and the card said "queued" while the
- * comment above promised an agent that was "about to take" it.
- *
- * Four issues sat like that for hours. The board was not lying about the facts
- * -- there really was no pull request and nothing really was running -- it was
- * describing a queue with no consumer at the far end.
- *
- * The cooldown is what keeps this from becoming one. An issue whose run fails,
- * or whose pull request is closed unmerged, returns to Todo and would
- * otherwise be picked up again on the next sweep, at a full run of
- * subscription usage each time.
- *
- * An hour, down from six. Six was set when the sweep was the only bound and
- * a failing issue could be offered forever; now three attempts send it to
- * Needs Decision, so the most a broken issue can cost is three runs, and the
- * cooldown only decides whether those happen this afternoon or over two days.
- * #76 failed in four seconds on a workflow bug and then sat for six hours
- * waiting to be allowed another go, which read as the loop having died.
+ * Whether pick-up-todo.yml should hand this issue to the agent. The cooldown
+ * paces retries of an issue whose run failed; three attempts cap the total.
  */
 export function shouldPickUp(facts, hoursSinceHandover, cooldownHours = 1, graceMinutes = 10) {
   if (statusFor(facts) !== CONFIG.status.todo) return false
-  // The label went on moments ago, so a run is already starting -- it just
-  // has not set `claude-working` yet. Those seconds between the trigger and
-  // the run's first label write are the only time an issue is in Todo *and*
-  // spoken for, and this sweep fires on every run finishing, which is exactly
-  // when triage tends to be labelling the next one. Handing over here started
-  // a second run that then cancelled the first, or the other way round: a
-  // quarter of all agent runs ended "cancelled" that way.
+  // A run triggered moments ago has not yet set `claude-working`. Handing over
+  // in that gap started duplicate runs that cancelled each other.
   if (facts.minutesSinceTrigger !== undefined && facts.minutesSinceTrigger < graceMinutes) return false
-  // Never handed over, so this is the first offer.
   if (hoursSinceHandover === undefined || hoursSinceHandover === null) return true
   return hoursSinceHandover >= cooldownHours
 }
 
 /**
- * The labels an issue should carry, given the same facts.
- *
- * Returned as a complete intent -- what to add and what to remove -- rather
- * than as a patch, so there is no way for a label to survive a transition that
- * should have cleared it. Stale labels are the whole reason a board stops
- * being believed.
+ * The labels to add and remove, as a complete intent rather than a patch, so
+ * no stale label survives a transition.
  */
 export function labelsFor(facts) {
   const { labels } = CONFIG
@@ -164,16 +89,11 @@ export function labelsFor(facts) {
   const closed = facts.state === 'CLOSED'
   want(labels.review, !closed && !!facts.openPr && !facts.prFailing)
   want(labels.failing, !closed && !!facts.openPr && !!facts.prFailing)
-  // `claude-working` is owned by the run itself, which knows something this
-  // cannot: whether it is still going. Only cleared here, never set.
+  // `claude-working` belongs to the run; this only clears it.
   if (closed || facts.openPr) remove.push(labels.working)
   if (closed) remove.push(labels.blocked)
-  // Three runs with nothing to show is a question for a person, and the
-  // column said so while the label did not. The label is what claude.yml
-  // reads to let a reply restart the issue without `@claude`, so a card in
-  // Needs Decision with no label was one a reply could not resume. Added
-  // only, never removed short of closing: the agent sets it too, at fewer
-  // than three, and that one is not the board's to clear.
+  // claude.yml reads `needs-decision` to let a reply resume the issue. Only
+  // added here: the agent also sets it, and that one is not ours to clear.
   if (!closed && !facts.openPr && !has(labels.working) && !has(labels.human)
       && facts.attempts >= 3) add.push(labels.blocked)
 
@@ -184,22 +104,13 @@ export function labelsFor(facts) {
 }
 
 // ---------------------------------------------------------------------------
-// Everything below talks to GitHub. The rules above do not, on purpose.
+// Everything below talks to GitHub; the rules above are pure.
 // ---------------------------------------------------------------------------
 
 /**
- * A GraphQL caller for the project, authenticated separately.
- *
- * A user-owned Projects board has no fine-grained token permission -- that
- * exists for organisation projects only -- so reaching one needs a classic
- * token with `project` scope. Classic tokens are coarse, so this keeps it as
- * far from everything else as possible: it is used for the board and nothing
- * else, while labels and issue reads go through the workflow's own
- * GITHUB_TOKEN, which cannot reach the board but does not need to.
- *
- * The alternative was one classic token carrying `repo` as well, which would
- * have granted write access to every repository on the account in order to add
- * a label to this one.
+ * GraphQL caller for the board. User-owned Projects need a classic token with
+ * `project` scope, so it is kept to the board alone; everything else uses
+ * GITHUB_TOKEN rather than a classic token with `repo`.
  */
 export function projectCaller(token) {
   return async (query, variables) => {
@@ -247,29 +158,13 @@ export async function loadProject(project, owner, number) {
 }
 
 /**
- * What is true about an issue right now.
- *
- * Read rather than inferred from whatever event woke us up. An event says what
- * changed; this says what *is*, which is the only thing the rules should
- * depend on -- and it means a missed event costs nothing, because the next run
- * for any reason puts the card right.
+ * What is true about an issue now, read rather than inferred from the event,
+ * so a missed event costs nothing.
  */
 export async function factsFor(github, owner, repo, number, now = Date.now()) {
-  // The pull request *for* an issue is one that closes it -- `Closes #N` in
-  // the body, or a link made in the Development sidebar -- and that is what
-  // `closedByPullRequestsReferences` holds. This used to scan the timeline
-  // for any CrossReferencedEvent, which is any pull request that so much as
-  // mentions the number: three unrelated pull requests cited #76 in their
-  // commit messages, so #76 sat In Review with no pull request of its own,
-  // and nothing was going to pick it up while any of them stayed open.
-  //
-  // `includeClosedPrs` so a merged one is visible too. It is not used for the
-  // column yet, but a merged pull request whose `Closes` never fired -- it
-  // happens when the base was another branch -- is the case to add next.
-  //
-  // `last`, not `first`, on the timeline. It is oldest first, so `first: 50`
-  // on an issue with any history returned the opening chatter and dropped
-  // the newest labels off the end -- which are the ones the count depends on.
+  // `closedByPullRequestsReferences` holds only pull requests that close the
+  // issue; scanning timeline cross-references counted any PR mentioning it.
+  // `last: 50` because the timeline is oldest first and the newest labels count.
   const q = await github.graphql(
     `query($owner: String!, $repo: String!, $number: Int!) {
        repository(owner: $owner, name: $repo) {
@@ -297,8 +192,7 @@ export async function factsFor(github, owner, repo, number, now = Date.now()) {
   const issue = q.repository?.issue
   if (!issue) return undefined
 
-  // The newest, not the oldest. Where an issue has had a pull request
-  // abandoned and reopened, the later one is the live one.
+  // The newest open pull request is the live one.
   const prs = issue.closedByPullRequestsReferences.nodes
     .filter((p) => p.state === 'OPEN')
     .sort((a, b) => a.number - b.number)
@@ -312,31 +206,15 @@ export async function factsFor(github, owner, repo, number, now = Date.now()) {
     labels: issue.labels.nodes.map((l) => l.name),
 
     openPr: openPr ? openPr.number : undefined,
-    // Only a definite failure counts. Checks still running are not a failure,
-    // and treating them as one would flap the card on every push.
+    // Only a definite failure, so running checks do not flap the card.
     prFailing: rollup === 'FAILURE' || rollup === 'ERROR',
 
-    // How many times an agent has actually started on this, counted from the
-    // `claude-working` label going on rather than from anything self-reported.
-    // Without it a run that ended with nothing to show is indistinguishable
-    // from an issue nobody has ever touched, which is how a card went
-    // backwards from In Progress to Todo.
-    //
-    // Counted since the brief last changed: a reopen, or a person answering
-    // a `needs-decision` question. An issue reopened because its merged fix
-    // did not do what was intended starts a new job, and the run that
-    // delivered the first fix was a success, not a failed attempt at this
-    // one. Likewise a run that stopped to ask did what it was told, and the
-    // answer is a new brief -- #91 had one proper stop and one failed run
-    // after the answer, and counting both left it one failure from Needs
-    // Decision when the rule everywhere else is three.
+    // Agent runs started, counted from `claude-working` going on, since the
+    // last reopen or answered `needs-decision`: those start a new brief.
     attempts: sinceLastRestart(issue.timelineItems.nodes)
       .filter((n) => n?.__typename === 'LabeledEvent' && n?.label?.name === CONFIG.labels.working).length,
 
-    // How long ago the agent label last went on, or undefined if it never
-    // has. A label event is a run starting, and a run takes a minute or two
-    // to set `claude-working`; `shouldPickUp` needs to know it is inside that
-    // window rather than looking at an issue nobody has started.
+    // Lets `shouldPickUp` see a run that is starting but not yet labelled.
     minutesSinceTrigger: minutesSince(newestTrigger(issue.timelineItems.nodes), now),
   }
 }
@@ -373,18 +251,13 @@ export async function reconcile({ github, project, projectApi, core, owner, repo
   }
   for (const name of remove) {
     await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name })
-      // A label that is already gone is a 404, and it means the state is what
-      // we wanted anyway.
+      // Already gone (404) is the state we wanted.
       .catch(() => {})
   }
 
-  // Only issues go on the board. A pull request is reachable from the issue it
-  // closes, and adding both put thirty-four cards beside thirteen -- a board
-  // showing the same work twice is one nobody reads.
-  // Which card, if any, this issue already has. Asked through the project
-  // token: `projectItems` on an issue is invisible to a token that cannot see
-  // the project, and reading it with the repository token returned nothing --
-  // silently, so every run would have added a duplicate card.
+  // Issues only; a pull request is reached through the issue it closes.
+  // Read with the project token: the repository token silently sees no
+  // `projectItems`, which made every run add a duplicate card.
   const existing = await projectApi(
     `query($id: ID!) {
        node(id: $id) {
@@ -411,11 +284,8 @@ export async function reconcile({ github, project, projectApi, core, owner, repo
   const item = existing.node.projectItems.nodes
     .find((i) => i.project.id === project.id)
   let itemId = item?.id
-  // Where the card already is. The hourly sweep visits every open issue
-  // whether or not anything about it changed, and wrote the Status field on
-  // every one of them regardless -- so an idle board still spent a mutation
-  // per issue per hour, and every run's log read identically whether the
-  // sweep had found something or nothing at all.
+  // Skip the mutation when the column is already right; the hourly sweep
+  // otherwise wrote every issue.
   const current = item?.fieldValueByName?.nodes
     ?.find((v) => v?.field?.id === project.field.id)?.name
   if (!itemId) {
@@ -430,8 +300,7 @@ export async function reconcile({ github, project, projectApi, core, owner, repo
 
   const option = project.field.options.find((o) => o.name === status)
   if (!option) {
-    // Loud. A missing column is a typo, and doing nothing about it looks
-    // exactly like the automation working.
+    // Loud: a missing column is a typo that otherwise looks like success.
     core.setFailed(
       `No "${CONFIG.statusField}" option named "${status}". ` +
       `The board has: ${project.field.options.map((o) => o.name).join(', ')}`)
@@ -450,9 +319,7 @@ export async function reconcile({ github, project, projectApi, core, owner, repo
     )
   }
 
-  // Only say something when something happened. A log line per issue per hour
-  // that reads the same whether the sweep corrected anything or not is a log
-  // nobody reads, and the sweep exists precisely to catch the rare case.
+  // Log only changes, so the sweep's rare corrections stand out.
   if (moved || add.length || remove.length) {
     core.info(
       `#${number} ${current ? `${current} -> ` : '-> '}${status}` +

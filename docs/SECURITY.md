@@ -1,86 +1,56 @@
 # Security
 
-Written before making the repository public, and kept as the answer to "what
-can this thing actually do".
+A launcher starts other programs, reads files another application wrote, and
+talks to the internet. This document covers the limits on each.
 
-## What Marquee is, in security terms
+Marquee is not:
 
-A launcher is a program whose entire job is **starting other programs**, on a
-machine where it can **read files another application wrote**, while **talking
-to the internet**. That is three of the more interesting capabilities a desktop
-app can hold, and it holds all of them by design. So the question is never
-"does it have dangerous powers" — it does — but "what bounds them".
+- **A store.** It never downloads, installs or runs an installer. Nothing it
+  fetches is executed (`docs/PLAN.md §5`).
+- **An account.** No sign-in, server, telemetry or crash uploads. It contacts
+  only Steam's public endpoints, SteamGridDB if you supply a key, and this
+  repository's releases page for updates ([UPDATES.md](UPDATES.md)).
+- **A privileged process.** No elevation, service, driver or scheduled task.
+  On Windows it can register itself under `HKEY_CURRENT_USER\...\Run` to start
+  with Windows. That is off by default, switched in Settings, and read back
+  live so the toggle matches what Windows will do (`autostart.rs`).
 
-Three things it deliberately is not:
+## What it executes
 
-- **Not a store.** It never downloads a game, installs one, or runs an
-  installer. Nothing it fetches is executed. See `docs/PLAN.md §5`.
-- **Not an account.** No sign-in, no server, no telemetry, no crash uploads.
-  Nothing leaves the machine except requests to Steam's public endpoints, to
-  SteamGridDB if you supply a key, and to this repository's releases page for
-  the update check ([UPDATES.md](UPDATES.md)).
-- **Not a privileged process.** No elevation, no service, no driver, no
-  scheduled task. Closing it stops it entirely. The one thing it will
-  register with the system is itself, on Windows, under
-  `HKEY_CURRENT_USER\...\Run` — a per-user start-with-Windows entry that is
-  off by default, switched in Settings, and read back live so the toggle
-  cannot disagree with what Windows will do (`autostart.rs`).
+Two paths, both in `src-tauri/src/run.rs`.
 
-## What it executes, and how
-
-Exactly two paths, both in `src-tauri/src/run.rs`:
-
-**Steam games** launch by URI — `steam://rungameid/<appid>` — handed to the
-platform. The appid is checked to be ASCII digits before the URI is built, and
-`open_uri` then refuses any URI that is not `steam://` *and* contains any
-character outside `[A-Za-z0-9/:._-]`.
-
-That second check exists because of how Windows used to open a URI. For a long
-time it went through `cmd /C start` — and **cmd.exe re-parses its command line
-after Rust has quoted it**. Rust's quoting targets `CreateProcess`, not `cmd`,
-so a `&`, `|`, `^`, `<`, `>` or `"` surviving into an argument stops being an
-argument and becomes a command. That is the BatBadBut class of bug,
-CVE-2024-24576. Windows now calls `ShellExecuteW` directly, which takes the
-URI as one string and parses no command line, so no shell sees it; the change
-was made for the console window `cmd` flashed up on every Play, and closed
-this off as a side effect.
-
-Nothing builds such a URI today and nothing hands one to a shell any more.
-The allowlist stays as the second lock, for whoever adds a provider later and
-constructs a URI from a name read off the disk. It is tested against the
-metacharacters that matter.
+**Steam games** launch by `steam://rungameid/<appid>`. The appid must be ASCII
+digits. `open_uri` then refuses any URI that is not `steam://` and contains a
+character outside `[A-Za-z0-9/:._-]`. Windows opens the URI with
+`ShellExecuteW`, which parses no command line. It used to use `cmd /C start`,
+where `&`, `|`, `^`, `<`, `>` or `"` could become a command (BatBadBut,
+CVE-2024-24576). The allowlist stays as a second lock for any future provider
+that builds a URI from a name on disk, and is tested against those characters.
 
 **Everything else** is a path the user chose in a native file dialog, spawned
-with `Command::new(path)` and no arguments. No shell is involved, so nothing in
-the path is interpreted. Marquee never guesses at an executable and runs it:
-"Look for it" only ever *suggests*, and the user confirms.
+with `Command::new(path)`, no arguments and no shell. "Look for it" only
+suggests a path; the user confirms.
 
-The machine actions in the main menu (`shutdown`, `restart`) are a closed enum
-parsed from a string, mapped to fixed argument vectors in `system.rs`. The
-interface cannot express a command that is not already in that match.
+`shutdown` and `restart` in the menu are a closed enum mapped to fixed argument
+vectors in `system.rs`.
 
 ## What it reads
 
-Steam's own files, where Steam put them: `libraryfolders.vdf`,
-`appmanifest_*.acf`, `localconfig.vdf`. Read-only, always — Marquee never
-writes into another application's directory. The parser is fuzz-shaped rather
-than trusting: a truncated or malformed file is an error, never a panic, and a
-failed scan degrades to a visible warning with the manual path still open.
+Steam's `libraryfolders.vdf`, `appmanifest_*.acf` and `localconfig.vdf`, where
+Steam put them, read-only. A malformed file is an error, never a panic, and a
+failed scan shows a warning with the manual path still open.
 
-## The custom `art://` protocol
+## The `art://` protocol
 
-The webview asks for `art://localhost/<source>-<id>/<kind>` and Rust answers
-with bytes from the on-disk cache or the CDN.
-
-**No part of the request reaches the filesystem as text.** `SourceKey::parse`
-requires the source to be exactly `steam` or `sgdb` and the id to be at most
-twelve ASCII digits; `Kind::parse` is a closed set of three. The cache filename
-is then *rebuilt* from those validated values. There is no path to traverse
-with, because there is no path in the request.
+The webview requests `art://localhost/<source>-<id>/<kind>`. `SourceKey::parse`
+requires the source to be `steam` or `sgdb` and the id to be at most twelve
+ASCII digits. `Kind::parse` accepts a closed set of three. The cache filename
+is rebuilt from those values, so no part of the request reaches the filesystem
+as text.
 
 ## Content Security Policy
 
-Set in `tauri.conf.json`, and tighter than the default:
+Set in `tauri.conf.json`:
 
 ```
 default-src 'self'; script-src 'self'; base-uri 'self'; form-action 'none';
@@ -91,67 +61,48 @@ connect-src 'self' ipc: http://ipc.localhost https://store.steampowered.com
             https://steamcommunity.com https://*.steamstatic.com
 ```
 
-Two notes:
-
-- **`base-uri` and `form-action` do not fall back to `default-src`.** They were
-  missing, and `default-src 'self'` looks like it covers them. Without
-  `base-uri`, one injected `<base>` tag retargets every relative URL on the
-  page.
-- **`style-src` allows inline.** The interface sets element styles directly —
-  the grid positions cards by `transform`, which is the whole performance
-  story. Inline *scripts* are not allowed, which is the half that matters.
-
-Third-party network access is deliberately **not** in `connect-src`.
-SteamGridDB is only ever called from Rust; the webview cannot reach it.
+- `base-uri` and `form-action` do not fall back to `default-src`, so they are
+  set explicitly. An injected `<base>` tag would otherwise retarget every
+  relative URL.
+- `style-src` allows inline because the grid positions cards with inline
+  `transform`. Inline scripts are not allowed.
+- SteamGridDB is not in `connect-src`. Only Rust calls it.
 
 ## Tauri permissions
 
 `src-tauri/capabilities/default.json` grants `core:default`,
-`dialog:allow-open`, `updater:default` and `process:allow-restart`. That is
-the entire surface: no filesystem plugin, no shell plugin, no HTTP plugin.
-The frontend can open a file dialog, ask whether there is an update and
-restart after one; every other privileged operation goes through a named
+`dialog:allow-open`, `updater:default` and `process:allow-restart`. There is no
+filesystem, shell or HTTP plugin. Every other privileged operation is a named
 `#[tauri::command]` that validates its own arguments.
 
 ## Credentials
 
-**Marquee has no credentials of its own and never asks for a password.** It
-does not sign in to Steam; it reads files Steam already wrote.
+Marquee has no credentials of its own and does not sign in to Steam.
 
-The one secret it can hold is an optional **SteamGridDB API key**, which the
-user creates on their own account and pastes into Settings. It is stored in
-plain text in the SQLite database under the app's data directory, protected by
-nothing beyond the file permissions of that directory.
-
-That is a deliberate, stated trade-off rather than an oversight. The key is
-free, read-only, per-user, revocable in one click, and grants access to nothing
-but a public artwork catalogue. Encrypting it locally would need a key of its
-own, and a key stored beside the thing it encrypts is theatre. **It is included
-in an exported profile**, which is what makes a profile work on a new machine —
-so treat an exported profile as mildly sensitive and do not put one in a public
-place.
+The optional **SteamGridDB API key** is stored in plain text in the SQLite
+database under the app's data directory, protected by that directory's file
+permissions. The key is free, read-only, per-user, revocable in one click and
+reaches only a public artwork catalogue; encrypting it would need a second key
+stored beside it. **It is included in an exported profile**, so do not publish
+a profile.
 
 ## The repository
 
-Checked before it went public, and true of every commit since:
-
 - No secrets in the history. The update signing key lives in a password
-  manager and the `release` environment, never in a file here; `*.key` is
-  ignored and a ruleset refuses it.
-- No personal paths or identifiers in tracked files. The Steam fixtures under
+  manager and the `release` environment. `*.key` is ignored and a ruleset
+  refuses it.
+- No personal paths in tracked files. The Steam fixtures in
   `src-tauri/tests/fixtures/` are anonymised to `/Users/example`.
-- Nothing user-specific is tracked: the database, logs and artwork cache all
-  live in the platform's app directories, and `.gitignore` covers the rest.
+- The database, logs and artwork cache live in the platform's app directories,
+  never in the repository.
 - Every GitHub Action is pinned to a commit SHA, and a check refuses a tag.
-  One of them runs in the only job that can see the signing key.
 
-Some of the code is written by an agent from issue text, which is untrusted
-input. What bounds that is described in [AUTOMATION.md](AUTOMATION.md): it
-cannot merge, cannot push to `main`, and only a maintainer can start it.
+Some code is written by an agent from issue text, which is untrusted input.
+[AUTOMATION.md](AUTOMATION.md) describes the limits: it cannot merge, cannot
+push to `main`, and only a maintainer can start it.
 
-## Reporting something
+## Reporting
 
 Open an issue if it is not sensitive. If it is, use **Report a vulnerability**
-under the repository's Security tab when it is offered; failing that, open an
-issue saying only that you have something sensitive, and we will find
-somewhere better than a public thread.
+under the Security tab, or open an issue saying only that you have something
+sensitive to report.

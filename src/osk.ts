@@ -1,16 +1,7 @@
 /**
- * On-screen keyboard.
- *
- * The whole premise is a launcher you use from a sofa, and until now the two
- * places you type -- searching the library and adding a game by name -- needed
- * a real keyboard. That made the headline feature unreachable from the only
- * seat it was designed for.
- *
- * It drives a real `<input>` rather than keeping its own buffer, so the field
- * remains the single source of truth and everything already listening to its
- * `input` event keeps working untouched. A physical keyboard therefore goes on
- * working at the same time, which matters because the machine this is
- * developed on has one.
+ * On-screen keyboard for typing with a pad. It writes into a real `<input>`
+ * rather than its own buffer, so existing listeners and a physical keyboard
+ * keep working.
  */
 
 const ROWS: string[][] = [
@@ -67,13 +58,7 @@ export function createOsk(): Osk {
     )
   }
 
-  /**
-   * Write through the real field.
-   *
-   * `input` is dispatched by hand because setting `.value` from script does
-   * not fire it, and everything downstream -- the debounced search, the filter
-   * -- listens for exactly that.
-   */
+  /** Setting `.value` from script fires no `input` event, so dispatch one. */
   function emit(mutate: (value: string) => string): void {
     if (!field) return
     field.value = mutate(field.value)
@@ -89,8 +74,7 @@ export function createOsk(): Osk {
       col = 0
       paint()
       root.hidden = false
-      // Anything vertically centred has to move out of the way, or a panel
-      // that grows as results arrive will grow straight into the keyboard.
+      // Lets centred panels move clear of the keyboard as they grow.
       document.body.classList.add('osk-open')
     },
 

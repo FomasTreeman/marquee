@@ -1,22 +1,10 @@
-//! Finding a game's executable, so you do not have to.
-//!
-//! Adding a game is one field by design (docs/PLAN.md §5), but a game with no
-//! executable cannot be launched, and pointing at one by hand means knowing
-//! which of forty files in a `bin/x64` directory is the real entry point. That
-//! is the tedious half of the flow, and it is largely automatable: the folder
-//! is usually named after the game, and the executable is usually the biggest
-//! one that is not an installer or a crash reporter.
-//!
-//! This is a **suggestion**, never a silent decision. It proposes a path and
-//! the user confirms it, because guessing wrong and launching the wrong
-//! program is worse than asking.
+//! Suggests a game's executable from its title: a folder named after the game,
+//! then the best-scoring executable inside it. The user confirms the result,
+//! because launching the wrong program is worse than asking.
 
 use std::path::{Path, PathBuf};
 
-/// Case, punctuation and spacing all vary between a store's title and the
-/// folder it installs into: "Baldur's Gate 3" against "Baldurs Gate 3",
-/// "S.T.A.L.K.E.R." against "STALKER". Strip everything that is not a letter
-/// or a digit and compare what is left.
+/// Lower-case letters and digits only, so "S.T.A.L.K.E.R." matches "STALKER".
 pub fn normalise(s: &str) -> String {
     s.chars()
         .filter(|c| c.is_ascii_alphanumeric())
@@ -24,27 +12,22 @@ pub fn normalise(s: &str) -> String {
         .collect()
 }
 
-/// Does this directory plausibly hold that game?
-///
-/// Containment in either direction, because a folder is as often shorter than
-/// the title ("Witcher3" for "The Witcher 3: Wild Hunt") as longer.
+/// Containment either way, as a folder can be shorter than the title
+/// ("Witcher3" for "The Witcher 3: Wild Hunt") or longer.
 pub fn folder_matches(title: &str, folder: &str) -> bool {
     let (t, f) = (normalise(title), normalise(folder));
     if t.is_empty() || f.is_empty() {
         return false;
     }
-    // Three characters is short enough to match almost anything by accident.
+    // Short names would match almost anything by containment.
     if t.len() < 4 || f.len() < 4 {
         return t == f;
     }
     t.contains(&f) || f.contains(&t)
 }
 
-/// Names that are never the game, however large the file.
-///
-/// Kept grouped and compact on purpose: rustfmt would put each string on its
-/// own line, and thirty unlabelled lines is a worse reference than four
-/// labelled groups when you are deciding whether something belongs here.
+/// Names that are never the game, however large the file. Skips rustfmt to
+/// keep the labelled groups.
 #[rustfmt::skip]
 const NEVER: &[&str] = &[
     // Installers and runtimes
@@ -52,27 +35,21 @@ const NEVER: &[&str] = &[
     "dxsetup", "dotnet", "oalinst", "prereq",
     // Crash and telemetry companions
     "crashreport", "crashhandler", "crashpad", "reporter", "diagnostic",
-    // Engine and platform subprocesses. These sit right beside the real binary
-    // and are frequently larger than it -- UnrealCEFSubProcess ships with every
-    // Unreal game and would otherwise win on size.
+    // Engine subprocesses, often bigger than the game (UnrealCEFSubProcess)
     "subprocess", "cefprocess", "helper", "eossdk", "easyanticheat", "battleye",
     // Tools
     "activation", "touchup", "cleanup", "updater", "patcher", "config",
     "settings", "benchmark",
 ];
 
-/// Is this a plausible entry point?
 pub fn plausible_executable(file_name: &str) -> bool {
     let lower = file_name.to_lowercase();
     let stem = lower.rsplit_once('.').map(|(s, _)| s).unwrap_or(&lower);
     !NEVER.iter().any(|bad| stem.contains(bad))
 }
 
-/// Score a candidate. Higher is better.
-///
-/// Name similarity beats size, because a 2 GB shipping binary sitting beside a
-/// 40 MB `Game.exe` is common and the small one is usually the launcher you
-/// actually want.
+/// Higher is better. A name match beats size, since a small `Game.exe` beside
+/// a huge shipping binary is usually the one to run.
 pub fn score(title: &str, file_name: &str, size: u64) -> i64 {
     let stem = file_name
         .rsplit_once('.')
@@ -87,8 +64,7 @@ pub fn score(title: &str, file_name: &str, size: u64) -> i64 {
             score += 5_000;
         }
     }
-    // Size as a tiebreak only: megabytes, capped, so it can never outweigh a
-    // name match.
+    // Capped so size only breaks ties and never outweighs a name match.
     score + ((size / 1_048_576) as i64).min(2_000)
 }
 
@@ -122,7 +98,7 @@ fn is_executable(path: &Path) -> bool {
     }
 }
 
-/// Where games usually live. Ordered by likelihood.
+/// Where games usually live, most likely first.
 fn roots() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
@@ -140,8 +116,7 @@ fn roots() -> Vec<PathBuf> {
                 out.push(base);
             }
         }
-        // Whole-drive scans are far too slow, but a `Games` folder at a drive
-        // root is a near-universal convention.
+        // Scanning whole drives is too slow; `X:\Games` is the common convention.
         for letter in 'C'..='H' {
             out.push(PathBuf::from(format!("{letter}:\\Games")));
             out.push(PathBuf::from(format!("{letter}:\\GOG Games")));
@@ -170,15 +145,10 @@ fn roots() -> Vec<PathBuf> {
     out
 }
 
-/// Look for `title`'s executable in the usual places.
-///
-/// Bounded deliberately: one level of directories under each root, then at most
-/// three levels inside a matching folder. An unbounded walk of Program Files
-/// takes minutes and would find worse answers.
+/// Look for `title`'s executable in the usual places. Bounded to one level
+/// under each root and three inside a match; walking Program Files takes minutes.
 pub fn find(title: &str, learned: &[String]) -> Option<PathBuf> {
-    // Learned roots first, and they matter far more than the built-in guesses:
-    // anyone with a large collection keeps it on whichever drive had room, and
-    // Program Files is the last place to look.
+    // Learned roots first: big collections live wherever there was room.
     let mut search: Vec<PathBuf> = learned.iter().map(PathBuf::from).collect();
     search.extend(roots());
     search.retain(|p| p.is_dir());
@@ -295,8 +265,7 @@ mod tests {
         assert!(!folder_matches("Hollow Knight", "Cyberpunk 2077"));
         assert!(!folder_matches("Hades", "Common Redistributables"));
         assert!(!folder_matches("Portal", ""));
-        // Short names must match exactly, or "Ori" finds "Origin" and every
-        // three-letter title matches half the disk.
+        // Short names must match exactly, or "Ori" finds "Origin".
         assert!(!folder_matches("Ori", "Origin"));
         assert!(folder_matches("Ori", "ori"));
     }
@@ -324,8 +293,6 @@ mod tests {
         }
     }
 
-    /// A 2 GB shipping binary beside a 40 MB launcher named after the game is
-    /// the common shape, and the small one is the one to run.
     #[test]
     fn a_name_match_beats_a_bigger_file() {
         let named = score("Hades", "Hades.exe", 40 * 1_048_576);
@@ -340,16 +307,13 @@ mod tests {
         assert!(big > small);
     }
 
-    /// Whatever it finds is a suggestion the user confirms, so a miss must be
-    /// a quiet None rather than anything louder.
     #[test]
     fn a_title_that_matches_nothing_returns_none() {
         assert!(find("Zzzz No Such Game 91847", &[]).is_none());
         assert!(find("", &[]).is_none());
     }
 
-    /// A learned root that no longer exists -- an unplugged drive, a folder
-    /// moved -- must be skipped rather than breaking the search.
+    /// Such as an unplugged drive.
     #[test]
     fn a_missing_learned_root_is_skipped() {
         let learned = vec!["/no/such/place/at/all".to_string()];

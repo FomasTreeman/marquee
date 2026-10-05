@@ -1,10 +1,4 @@
-/* ==================================================================
-   Marquee — application styles.
-
-   Pitch black, one accent, cover art doing the work. Everything here
-   reads from tokens.css; no literal colour or radius belongs in this
-   file.
-   ================================================================== */
+/* Marquee application styles. Colours and radii come from tokens.css. */
 
 *, *::before, *::after { box-sizing: border-box; }
 
@@ -18,8 +12,7 @@ html, body {
   font-synthesis-weight: none;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
-  /* The interface is driven by a pad. Nothing here is text to select, and a
-     stray highlight on a TV looks like a bug. */
+  /* Pad-driven: nothing here is text to select. */
   user-select: none;
   -webkit-user-select: none;
 }
@@ -27,9 +20,8 @@ html, body {
 #app { height: 100%; display: flex; flex-direction: column; }
 
 /* --- film grain ---------------------------------------------------
-   One static layer that never repaints. It must never be an animated
-   canvas or a live SVG filter — that is a per-frame CPU burn for an
-   effect nobody consciously notices. See docs/PLAN.md §4. */
+   One static layer that never repaints. An animated canvas or live SVG
+   filter would cost CPU every frame. See docs/PLAN.md §4. */
 body::after {
   content: "";
   position: fixed;
@@ -42,29 +34,21 @@ body::after {
 }
 
 /* --- background style ----------------------------------------------
-   Grain (above) and a blurred hero backdrop are alternatives, chosen in
-   Settings -> Background and applied by src/perf.ts as a data attribute --
-   never both, so a game with little contrast doesn't end up with grain
-   sitting on top of a blur nobody asked to combine. */
+   Grain or a blurred hero backdrop, never both, set by src/perf.ts as a
+   data attribute. */
 html[data-background="blur"] body::after { opacity: 0; }
 
 html[data-background="blur"] .backdrop-img {
-  /* `filter`, not `backdrop-filter`: it blurs the image itself once per
-     cross-fade rather than recomposing everything behind a surface every
-     frame, so it doesn't count against the "one backdrop-filter surface"
-     budget in docs/PLAN.md §4. The radius is fixed, never animated -- only
-     the opacity cross-fade moves. */
+  /* `filter`, not `backdrop-filter`: the image is blurred once per cross-fade
+     rather than recomposited every frame. Only the opacity animates. */
   filter: blur(var(--backdrop-ambient-blur));
-  /* Blur samples past the image's own edge, which would otherwise pull in a
-     faint pale margin from outside the frame. Scaling past the blur radius
-     keeps that margin off-screen. */
+  /* Scale past the blur radius so the blur's pale edge stays off-screen. */
   transform: scale(1.08);
 }
 
 /* --- grid ---------------------------------------------------------
-   Virtualised. The canvas is sized to the full row count and only the
-   visible window plus an overscan margin exists in the DOM; cards are
-   pooled and moved with transforms, never reflowed. */
+   Virtualised: only visible cards plus an overscan exist, pooled and moved
+   with transforms, never reflowed. */
 
 .grid-viewport {
   flex: 1;
@@ -82,19 +66,14 @@ html[data-background="blur"] .backdrop-img {
   position: absolute;
   top: 0;
   left: 0;
-  /* Computed by the grid to fill the row exactly; the token is the fallback
-     and the starting point it is derived from. */
+  /* The grid computes this to fill the row; the token is the fallback. */
   width: var(--card-w-fit, calc(var(--card-w) * var(--s)));
   height: var(--card-h-fit, calc(var(--card-h) * var(--s)));
   border-radius: calc(var(--r-card) * var(--s));
   /* Position is a transform so scrolling never touches layout. */
   will-change: transform;
-  /* NOT `contain: paint`. The focus ring below is deliberately drawn OUTSET
-     of this box, and paint containment clips to the border box -- it makes
-     the ring silently invisible with no error anywhere. This is the same
-     class of bug as the clipped focus outlines in the Playnite theme, and it
-     cost a screenshot to find here too. Clipping belongs on .card-art, which
-     actually wants it. */
+  /* Not `contain: paint`: it clips to the border box and silently hides the
+     outset focus ring. Clipping belongs on .card-art. */
   contain: layout style;
 }
 
@@ -105,25 +84,18 @@ html[data-background="blur"] .backdrop-img {
   overflow: hidden;
   contain: paint;
   background: var(--card-tint, #14161c);
-  /* Scaled like everything else. An unscaled shadow is proportionally huge on
-     a small window and invisible on a large one -- and its reach has to stay in
-     step with --card-shadow-reach, which the grid uses to decide how far to
-     scroll so the row above is fully clipped. */
+  /* Scaled, and kept in step with --card-shadow-reach, which the grid uses
+     when scrolling so the row above is fully clipped. */
   box-shadow: 0 calc(5px * var(--s)) calc(14px * var(--s)) rgb(0 0 0 / 0.5);
-  /* Transform only. The card's *position* is a transform set by the grid, and
-     this is a separate element, so the two never fight. Scaling here reflows
-     nothing: the grid's arithmetic works on the unscaled box. */
+  /* Transform only, on a separate element from the grid's positioning
+     transform, so the grid's arithmetic works on the unscaled box. */
   transition: transform calc(var(--motion) * 170ms) cubic-bezier(0.2, 0.7, 0.3, 1);
   will-change: transform;
 }
 
 .card-art img {
-  /* MUST be positioned. `.card-fallback` below is absolute, and a positioned
-     element paints above a static one regardless of DOM order -- so a static
-     img sat *underneath* the fallback and every cover in the library was
-     invisible while being fully loaded. Nothing errored; the network was
-     clean; naturalWidth was correct. Another silently-correct-looking CSS
-     failure, like the paint containment that ate the focus ring. */
+  /* Must be positioned: the absolute `.card-fallback` otherwise paints above
+     a static img, which hid every loaded cover. */
   position: absolute;
   inset: 0;
   width: 100%;
@@ -132,9 +104,7 @@ html[data-background="blur"] .backdrop-img {
   display: block;
 }
 
-/* Shown until the cover arrives, and for good when there is none: a
-   deterministic tint plus the title, so a grid is readable while scrolling
-   before any artwork has loaded. */
+/* Tint and title until the cover arrives, or for good if there is none. */
 .card-fallback {
   position: absolute;
   inset: 0;
@@ -148,18 +118,15 @@ html[data-background="blur"] .backdrop-img {
 }
 
 /* --- focus ring ---------------------------------------------------
-   Drawn OUTSET by --ring-offset with thickness --ring-w. Those two must
-   be equal or a hairline of background shows between ring and card —
-   the exact bug that cost an afternoon in the Playnite build, recorded
-   in design/tokens.json. */
+   Drawn outset. --ring-offset and --ring-w must be equal or a hairline of
+   background shows between ring and card (see design/tokens.json). */
 .card-ring {
   position: absolute;
   inset: calc(var(--ring-offset) * var(--s) * -1);
   border: calc(var(--ring-w) * var(--s)) solid var(--accentLight);
   border-radius: calc((var(--r-card) + var(--ring-offset)) * var(--s));
   opacity: 0;
-  /* Same curve and duration as the art, so the ring and the card it surrounds
-     arrive together. A ring that lands before the card looks detached. */
+  /* Same curve and duration as the art, so ring and card arrive together. */
   transition:
     opacity calc(var(--motion) * 120ms) ease-out,
     transform calc(var(--motion) * 170ms) cubic-bezier(0.2, 0.7, 0.3, 1);
@@ -167,18 +134,15 @@ html[data-background="blur"] .backdrop-img {
 }
 .card[data-focus="1"] .card-ring { opacity: 1; }
 
-/* The focused card lifts.
-   Both elements take the *same* transform about the same origin, so the ring
-   stays concentric with the art at every point in the animation rather than
-   only at the ends. --focus-scale is a token: set it to 1 to turn this off. */
+/* Ring and art share one transform and origin so they stay concentric
+   throughout. Set --focus-scale to 1 to turn the lift off. */
 .card[data-focus="1"] .card-art,
 .card[data-focus="1"] .card-ring {
   transform: scale(var(--focus-scale));
 }
 
 /* --- HUD ----------------------------------------------------------
-   The performance readout, stamped with the webview that drew it, because
-   a frame rate without an engine name proves nothing. */
+   Performance readout, labelled with the webview that drew it. */
 .hud {
   position: fixed;
   right: 16px;
@@ -187,9 +151,8 @@ html[data-background="blur"] .backdrop-img {
   padding: 12px 16px;
   border: 1px solid var(--line);
   border-radius: var(--r-inner);
-  /* Deliberately NOT backdrop-filter. This panel updates twice a second, and
-     a 30px backdrop blur re-blurs on every update -- the instrument was
-     costing more frames than the thing it measures. Flat fill only. */
+  /* No backdrop-filter: the panel updates twice a second, and re-blurring
+     each time cost more frames than it measured. */
   background: rgb(6 7 9 / 0.94);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -205,9 +168,8 @@ html[data-background="blur"] .backdrop-img {
 
 
 /* --- fatal error screen -------------------------------------------
-   Shown when startup fails. Deliberately does not depend on tokens or
-   on anything the app sets up, because the failure it reports may be
-   the thing that would have set them up. */
+   Independent of tokens, since the startup failure it reports may be what
+   would have loaded them. */
 .fatal {
   position: fixed;
   inset: 0;
@@ -242,16 +204,8 @@ html[data-background="blur"] .backdrop-img {
 
 
 /* ==================================================================
-   SHELL
-
-   Backdrop, top bar, hero, grid, legend. Ported from the browser
-   prototype, which is the specification.
-
-   Everything chrome-sized multiplies by --s, a scale factor derived
-   from viewport height in src/shell.ts. Playnite got the same effect
-   by laying out on a fixed 1080px canvas and scaling it with a
-   Viewbox; we lay out for real and scale only the type and spacing,
-   which is strictly better at every resolution.
+   SHELL: backdrop, top bar, hero, grid, legend. Chrome scales by --s,
+   derived from viewport height in src/shell.ts.
    ================================================================== */
 
 .stage {
@@ -281,9 +235,8 @@ html[data-background="blur"] .backdrop-img {
 .backdrop-img.is-visible { opacity: var(--ambient); }
 
 /* --- hero -----------------------------------------------------------
-   The hero's contents change on every selection. Swapping them
-   instantly reads as a flicker at navigation speed, so they settle in.
-   Opacity and transform only; the layout is identical either way. */
+   Contents change on every selection, so they fade in rather than
+   flicker. Opacity and transform only. */
 .hero-inner > * {
   transition:
     opacity calc(var(--motion) * 200ms) ease-out,
@@ -294,9 +247,8 @@ html[data-background="blur"] .backdrop-img {
   transform: translateY(calc(6px * var(--s)));
 }
 
-/* Two stops in one direction and one in the other, so the hero text sits on
-   near-solid black while the art stays legible in the opposite corner. Pure
-   black at both ends: two different blacks meeting is a visible seam. */
+/* Near-solid black behind the hero text, art legible opposite. Pure black at
+   both ends, as two different blacks meeting show a seam. */
 .backdrop-scrim {
   position: absolute;
   inset: 0;
@@ -345,8 +297,7 @@ html[data-background="blur"] .backdrop-img {
   align-items: flex-start;
   gap: calc(10px * var(--s));
   max-width: calc(700px * var(--s));
-  /* The logo is a transparent PNG over artwork; without this it disappears
-     against a light backdrop. */
+  /* Keeps a transparent logo visible against a light backdrop. */
   filter: drop-shadow(0 calc(2px * var(--s)) calc(22px * var(--s)) rgb(0 0 0 / 0.9));
 }
 .hero-logo {
@@ -399,14 +350,12 @@ html[data-background="blur"] .backdrop-img {
   color: inherit;
   font: inherit;
 }
-/* Only the ones that do something look like they do. */
+/* Only clickable hints look clickable. */
 .hint.is-clickable { cursor: pointer; }
 .hint.is-clickable:hover { color: var(--fg1); }
 .hint.is-clickable:hover .hint-key { border-color: var(--focusBorder); }
 
-/* A hint with no keystroke to name -- a mouse -- is itself the control, so it
-   takes the pill the key cap would have had. Without this it rendered as bare
-   text and read as a label rather than a button. */
+/* A hint without a key (mouse) is itself the button, so it takes the pill. */
 .hint.is-button {
   padding: 0 calc(11px * var(--s));
   height: calc(26px * var(--s));
@@ -449,8 +398,8 @@ html[data-background="blur"] .backdrop-img {
 
 
 /* --- toasts -------------------------------------------------------
-   Bottom centre, above the legend. Nothing here may require
-   dismissing: on a television there is no pointer and no keyboard. */
+   Bottom centre, above the legend. Never need dismissing, as a TV has
+   no pointer or keyboard. */
 .toasts {
   position: fixed;
   left: 50%;
@@ -464,8 +413,7 @@ html[data-background="blur"] .backdrop-img {
   pointer-events: none;
 }
 .toast {
-  /* Arrives from below rather than appearing. Transform and opacity only, so
-     a toast can never cost a layout while a game is launching. */
+  /* Transform and opacity only, so a toast never costs a layout mid-launch. */
   animation: toast-in calc(var(--motion) * 220ms) cubic-bezier(0.2, 0.7, 0.3, 1);
   padding: calc(12px * var(--s)) calc(22px * var(--s));
   border: 1px solid var(--line);
@@ -481,11 +429,7 @@ html[data-background="blur"] .backdrop-img {
 
 
 /* ==================================================================
-   DETAIL VIEW
-
-   Everything at once on one scroll. Read from across a room, so a
-   few large things rather than many small ones, and nothing hidden
-   behind a tab.
+   DETAIL VIEW: one scroll, a few large things, readable across a room.
    ================================================================== */
 
 .detail {
@@ -497,10 +441,8 @@ html[data-background="blur"] .backdrop-img {
   transition: opacity calc(var(--motion) * 180ms) ease-out;
 }
 .detail[hidden] { display: none; }
-/* Set for one frame on open, then removed, so the view fades in rather than
-   appearing. Cannot be an @keyframes: the element is display:none until the
-   moment it opens, and an animation on a just-shown element does not always
-   run in WebKit. */
+/* Set for one frame on open. Not @keyframes: WebKit does not always run an
+   animation on an element that was display:none until now. */
 .detail.is-entering { opacity: 0; }
 
 .detail-bg { position: absolute; inset: 0; overflow: hidden; }
@@ -575,9 +517,7 @@ html[data-background="blur"] .backdrop-img {
   cursor: pointer;
 }
 .action-primary { background: var(--accent); color: #000; border-color: transparent; font-weight: 500; }
-/* Matches .search-button's own rule below -- a button driven by a pad or a
-   keyboard needs to show where it landed. Settings used to move a controller
-   cursor nowhere at all, so this was never reachable in practice. */
+/* A pad- or keyboard-driven button must show where focus landed. */
 .action:focus-visible { outline: 2px solid var(--focusBorder); outline-offset: 2px; }
 
 .detail-desc {
@@ -601,10 +541,8 @@ html[data-background="blur"] .backdrop-img {
 
 
 /* ==================================================================
-   ADD A GAME
-
-   One field. Results are the same covers the grid will show, so a
-   result looks exactly like the card it is about to become.
+   ADD A GAME: results use the grid's covers, so a result looks like the
+   card it will become.
    ================================================================== */
 
 .add {
@@ -665,11 +603,8 @@ html[data-background="blur"] .backdrop-img {
   display: flex;
   gap: calc(var(--gap) * var(--s));
   overflow-x: auto;
-  /* Room for the selection outline on every side. Without it the scroll
-     container clips the outline of the first and last result, and the top and
-     bottom of all of them -- the selected item ends up with three visible
-     edges. The negative margin keeps the row optically aligned with the field
-     above despite the padding. */
+  /* Room for the selection outline, which the scroll container would clip.
+     The negative margin keeps the row aligned with the field. */
   padding: calc(8px * var(--s));
   margin: calc(-8px * var(--s));
   scrollbar-width: none;
@@ -697,8 +632,7 @@ html[data-background="blur"] .backdrop-img {
   object-fit: cover;
   border-radius: calc(var(--r-inner) * var(--s));
   background: #14161c;
-  /* Outline rather than border: a border would resize the cover and shift
-     every neighbour when selection moves. */
+  /* Outline rather than border, so selection does not resize the cover. */
   outline: calc(3px * var(--s)) solid transparent;
   outline-offset: calc(3px * var(--s));
 }
@@ -707,8 +641,7 @@ html[data-background="blur"] .backdrop-img {
 
 
 /* --- filter presets ------------------------------------------------
-   The primary way into a large library, because it is the only one
-   that works with a thumb on a sofa. Shoulder buttons cycle them. */
+   Cycled by the shoulder buttons. */
 .presets { display: flex; gap: calc(8px * var(--s)); }
 .preset {
   padding: calc(6px * var(--s)) calc(16px * var(--s));
@@ -726,20 +659,13 @@ html[data-background="blur"] .backdrop-img {
 }
 .preset[data-empty="1"] { opacity: 0.35; }
 
-/* The permanent route into search, grouped with the field it opens rather
-   than left on the other side of the spacer from it -- see shell.ts. Top
-   right, where a console puts search, so it reads as one control rather than
-   an icon on one side of the bar and a box that appears on the other. */
+/* Search button and field grouped top right, so they read as one control. */
 .search {
   display: flex;
   align-items: center;
   gap: calc(8px * var(--s));
 }
-/* A fixed square rather than a label that grew and shrank with the query
-   text -- that made the border resize on every keystroke, which is most of
-   what read as "an outline that feels out of place". Sizing the icon off the
-   button's own box, rather than the glyph's line-height, keeps it centred
-   regardless of how a given webview sets that glyph's metrics. */
+/* A fixed square, so the border does not resize on every keystroke. */
 .search-button {
   display: flex;
   align-items: center;
@@ -755,10 +681,8 @@ html[data-background="blur"] .backdrop-img {
   font: inherit;
   flex: none;
 }
-/* Drawn rather than the glyph '⌕' it replaced, which sat visibly low on
-   Windows: centring a glyph's line box does not centre its ink. An SVG has
-   no font descent, so this fixed square is centred by geometry; the ink
-   itself is centred by the coordinates in shell.ts (SEARCH_ICON). */
+/* An SVG has no font descent, so the square centres it; the ink is centred
+   by SEARCH_ICON's coordinates in shell.ts. */
 .search-icon {
   display: block;
   width: calc(17px * var(--s));
@@ -766,8 +690,7 @@ html[data-background="blur"] .backdrop-img {
 }
 .search-button:hover { color: var(--fg1); border-color: var(--focusBorder); }
 .search-button:focus-visible { outline: 2px solid var(--focusBorder); outline-offset: 2px; }
-/* A query in flight is state, not decoration -- the same treatment the active
-   preset pill gets, so the bar reads as one system rather than two. */
+/* An active query is styled like the active preset pill. */
 .search-button[data-active="1"] { border-color: var(--focusBorder); color: var(--fg1); }
 
 .query {
@@ -786,9 +709,7 @@ html[data-background="blur"] .backdrop-img {
 
 
 /* --- on-screen keyboard --------------------------------------------
-   Sits below whatever field it is driving. Deliberately not a modal:
-   the results it filters must stay visible while you type, or you are
-   typing blind. */
+   Below the field it drives, not modal, so the results stay visible. */
 .osk {
   position: fixed;
   left: 50%;
@@ -844,11 +765,7 @@ html[data-background="blur"] .backdrop-img {
 }
 
 /* ==================================================================
-   LIST MENU
-
-   Main menu, sort, filter. Anchored under the top bar rather than
-   centred: a sort menu in the middle of the screen has lost its
-   connection to the thing it sorts.
+   LIST MENU: main menu, sort, filter. Anchored under the top bar.
    ================================================================== */
 
 .menu {
@@ -909,9 +826,8 @@ html[data-background="blur"] .backdrop-img {
 
 
 /* --- detail corner actions -----------------------------------------
-   Hide and uninstall, top right and away from Play. These are the two
-   things nobody should reach for by accident, so they are visually
-   quiet and physically distant from the primary action. */
+   Hide and uninstall: quiet and far from Play, so nobody hits them by
+   accident. */
 .detail-corner {
   position: absolute;
   top: calc(40px * var(--s));
@@ -932,11 +848,7 @@ html[data-background="blur"] .backdrop-img {
 
 
 /* ==================================================================
-   SETTINGS
-
-   Its own panel rather than the picker's. Sections with a heading, an
-   explanation and their controls, because every setting here exists
-   to fix something specific and saying which is most of the help.
+   SETTINGS: each section has a heading, an explanation and its controls.
    ================================================================== */
 
 .settings {
@@ -1006,8 +918,7 @@ html[data-background="blur"] .backdrop-img {
   color: var(--fg3);
 }
 
-/* Wraps rather than scrolls: three buttons on a narrow window should stack,
-   not disappear off the edge. */
+/* Wraps rather than scrolls, so buttons on a narrow window stack. */
 .settings-controls {
   display: flex;
   flex-wrap: wrap;
@@ -1041,9 +952,7 @@ html[data-background="blur"] .backdrop-img {
   overflow-wrap: anywhere;
 }
 
-/* The controller diagnosis: which backend, and what it enumerated. Monospace
-   because it is a device list, not prose, and someone may be reading it back
-   over a message. */
+/* Controller diagnosis: backend and devices. Monospace, as it is a list. */
 .settings-diagnostic {
   margin: calc(8px * var(--s)) 0 0;
   padding: calc(10px * var(--s)) calc(12px * var(--s));
@@ -1058,8 +967,7 @@ html[data-background="blur"] .backdrop-img {
   overflow-x: auto;
 }
 
-/* Renaming a game, in place where its title was. Sized to match the heading
-   it replaces so the screen does not jump when the field appears. */
+/* Inline rename, sized like the heading so the screen does not jump. */
 .detail-rename { margin: 0 0 calc(10px * var(--s)); }
 .detail-rename-field {
   width: min(100%, calc(760px * var(--s)));
@@ -1080,8 +988,7 @@ html[data-background="blur"] .backdrop-img {
   color: var(--fg2);
 }
 
-/* Which catalogue a search result came from. Quiet -- it answers a question
-   you only ask when something looks wrong. */
+/* Which catalogue a search result came from. */
 .picker-source {
   font-size: calc(11px * var(--s));
   color: var(--fg2);

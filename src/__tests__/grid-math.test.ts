@@ -11,8 +11,6 @@ const base: MetricsInput = {
 const at = (over: Partial<MetricsInput> = {}) => metrics({ ...base, ...over })
 
 describe('grid layout', () => {
-  /** The bug that started this: a fixed card width leaves up to a whole card's
-   *  worth of dead space against the right edge at an awkward window size. */
   it('fills the width exactly, at every width', () => {
     for (let inner = 300; inner <= 3000; inner += 7) {
       const m = at({ inner })
@@ -31,19 +29,14 @@ describe('grid layout', () => {
     }
   })
 
-  /** Cards grow to fill, never shrink below the design's intent. */
   it('never makes a card narrower than the ideal', () => {
     for (let inner = 100; inner <= 3000; inner += 13) {
       expect(at({ inner }).cardW).toBeGreaterThanOrEqual(base.ideal - 0.001)
     }
   })
 
-  /** Without the cap, one column makes the leftover *the whole row* and the
-   *  card ends up taller than the window. `ideal` here exceeds `inner`, which
-   *  is the only way to force a single column. */
   it('caps how far a card may grow', () => {
-    // One column whose leftover exceeds the cap: 1000 wide, 700 ideal, so
-    // fitting would give 1000 and the cap allows only 945.
+    // Fitting would give 1000; the cap allows 945.
     const m = at({ inner: 1000, ideal: 700 })
     expect(m.cols).toBe(1)
     expect(m.cardW).toBeCloseTo(700 * MAX_GROWTH, 5)
@@ -93,9 +86,7 @@ describe('card positions', () => {
     expect(below.y).toBeCloseTo(a.y + m.rowH, 5)
   })
 
-  /** The design's most load-bearing rule: the first card shares a left edge
-   *  with the hero and the top bar. sideInset is the only thing that can
-   *  break it, and it is zero unless the growth cap bit. */
+  /** Keeps the first card aligned with the hero and the top bar. */
   it('starts the first card at the left edge when cards fill the row', () => {
     expect(positionOf(0, at(), base.gapX, base.gapY).x).toBe(0)
   })
@@ -111,8 +102,6 @@ describe('navigation', () => {
     expect(move(cols, 0, -1, cols, 200)).toBe(0)
   })
 
-  /** Clamping, not wrapping. On a pad, jumping from the last game to the first
-   *  is disorienting, and a held direction should come to rest at the edge. */
   it('clamps at both ends rather than wrapping', () => {
     expect(move(0, -1, 0, cols, 200)).toBe(0)
     expect(move(0, 0, -1, cols, 200)).toBe(0)
@@ -120,7 +109,6 @@ describe('navigation', () => {
     expect(move(199, 0, 1, cols, 200)).toBe(199)
   })
 
-  /** A one-item library was the case that shipped broken once already. */
   it('is stable on a library of one, and of none', () => {
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       expect(move(0, dx!, dy!, cols, 1)).toBe(0)
@@ -128,8 +116,6 @@ describe('navigation', () => {
     }
   })
 
-  /** Moving down from a partial last row lands on the last item rather than
-   *  past it. */
   it('lands on the last item when the final row is short', () => {
     const count = cols * 3 + 2
     expect(move(cols * 2 + 5, 0, 1, cols, count)).toBe(count - 1)
@@ -148,7 +134,6 @@ describe('scrolling', () => {
     const target = m.cols * (rowsVisible + 1)
     const y = scrollToShow(target, 0, m, base.viewportHeight, base.gapY)
     expect(y).toBeGreaterThan(0)
-    // The target must be fully inside the viewport afterwards.
     const top = base.gapY + Math.floor(target / m.cols) * m.rowH
     expect(top).toBeGreaterThanOrEqual(y)
     expect(top + m.cardH).toBeLessThanOrEqual(y + base.viewportHeight)
@@ -182,8 +167,6 @@ describe('virtualisation', () => {
     expect(firstVisibleIndex(-500, m, base.gapY, 2)).toBe(0)
   })
 
-  /** The pool has to cover the viewport plus the overscan at both ends, or a
-   *  row appears blank as it scrolls in. */
   it('sizes the pool to cover the viewport and both overscans', () => {
     const size = poolSize(m, base.viewportHeight, 2)
     const rowsNeeded = Math.ceil(base.viewportHeight / m.rowH) + 4
@@ -191,7 +174,6 @@ describe('virtualisation', () => {
     expect(size).toBeGreaterThan(Math.ceil(base.viewportHeight / m.rowH) * m.cols)
   })
 
-  /** Everything visible must have a slot, at any scroll position. */
   it('covers every on-screen index from its start point', () => {
     const size = poolSize(m, base.viewportHeight, 2)
     for (let y = 0; y < 6000; y += 137) {
@@ -210,8 +192,6 @@ describe('scroll glide', () => {
     expect(glide(0, 300, 999, 200)).toBe(300)
   })
 
-  /** Ease-out, not ease-in-out: a press is an instruction, and easing into it
-   *  reads as lag. So most of the distance is covered early. */
   it('moves fastest at the start', () => {
     const firstHalf = glide(0, 100, 100, 200) - glide(0, 100, 0, 200)
     const secondHalf = glide(0, 100, 200, 200) - glide(0, 100, 100, 200)
@@ -235,14 +215,12 @@ describe('scroll glide', () => {
     expect(glide(400, 0, 100, 200)).toBeLessThan(200)
   })
 
-  /** An animation that never quite arrives keeps scheduling frames forever. */
   it('snaps the last fraction of a pixel so it can finish', () => {
     expect(glide(0, 300, 199.9, 200)).toBe(300)
     expect(glide(100, 100.4, 0, 200)).toBe(100.4)
   })
 
-  /** Zero duration is the reduced-motion path, and must be instant rather than
-   *  dividing by zero. */
+  /** Zero duration is the reduced-motion path. */
   it('is instant at zero duration', () => {
     expect(glide(0, 300, 0, 0)).toBe(300)
     expect(glide(0, 300, 50, -1)).toBe(300)
@@ -261,18 +239,12 @@ describe('scroll glide', () => {
 })
 
 describe('clearance for the focused row', () => {
-  /**
-   * The focused card is bigger than the box the grid lays out: it scales about
-   * its centre and draws a ring outside that. Leaving only a gap clipped both,
-   * which looked like the card growing into a cut-off border.
-   */
   it('accounts for the scale and the ring', () => {
     expect(topClearance(300, 1.055, 4)).toBeCloseTo((300 * 1.055 - 300) / 2 + 4, 5)
   })
 
   it('is just the ring when nothing scales', () => {
     expect(topClearance(300, 1, 4)).toBeCloseTo(4, 5)
-    // A scale below 1 is not a shrink instruction; it must not reduce clearance.
     expect(topClearance(300, 0.5, 4)).toBeCloseTo(4, 5)
   })
 
@@ -284,26 +256,15 @@ describe('clearance for the focused row', () => {
     expect(base.gapY + 4 * m.rowH - y).toBeGreaterThanOrEqual(c - 0.001)
   })
 
-  /** The first row cannot be scrolled off, so it keeps its plain gap rather
-   *  than being pushed down by clearance it does not need. */
   it('does not apply to the first row', () => {
     const m = at()
     expect(scrollToShow(0, 99999, m, base.viewportHeight, base.gapY, 500)).toBe(0)
   })
 
-  /**
-   * The assertion that was missing, and its absence let a regression through.
-   *
-   * Clipping the previous row's shadow wants a *small* clearance and the focus
-   * ring wants a large one, so the two pull opposite ways. A rewrite took the
-   * larger of the two, which satisfies the ring and leaves the shadow visible —
-   * and every existing test still passed, because they all only checked the
-   * ring. Both sides are asserted now.
-   */
+  /** Asserts both sides: a rewrite that satisfied only the ring left the
+   *  shadow visible while every ring-only test passed. */
   it('pushes the previous row and its shadow fully out of view', () => {
-    // A gap that actually covers both, as the design's does. The fixture's
-    // default 20 does not, and asserting against it would be testing the
-    // failure mode rather than the behaviour.
+    // The design's gap; the fixture's 20 does not cover both.
     const gapY = 36
     const shadow = 19
     const m = at({ gapY })
@@ -316,12 +277,9 @@ describe('clearance for the focused row', () => {
     const previousShadowBottom = gapY + (row - 1) * m.rowH + m.cardH + shadow
     expect(previousShadowBottom).toBeLessThanOrEqual(y + 0.001)
 
-    // And the focused row's ring must still fit above it.
     expect(gapY + row * m.rowH - y).toBeGreaterThanOrEqual(clearance - 0.001)
   })
 
-  /** When the gap cannot pay for both, the ring wins: a clipped ring is uglier
-   *  than a shadow, and the runtime check says the gap needs raising. */
   it('protects the ring when the gap cannot cover both', () => {
     const m = at()
     const clearance = topClearance(m.cardH, 1.055, 4)
@@ -331,15 +289,7 @@ describe('clearance for the focused row', () => {
 })
 
 describe('the gap has to pay for both edges', () => {
-  /**
-   * With a hard top edge, two things compete for the space above a row scrolled
-   * to the top: the focused card's ring needs clearance, and the previous row's
-   * shadow needs *not* to be cleared into view. The gap has to cover both,
-   * with a few pixels to spare at the ideal card size — a coincidence of three
-   * tuned numbers, not something to rely on anyone remembering.
-   */
-  // The design's own values, from design/tokens.json. A card at the ideal
-  // width of 188 is 282 tall at 2:3.
+  // From design/tokens.json; a 188-wide card is 282 tall at 2:3.
   const CARD_H = 282
   const GAP = 36
   const SHADOW = 19
@@ -350,9 +300,6 @@ describe('the gap has to pay for both edges', () => {
     expect(gapCoversEdges(GAP, SHADOW, topClearance(CARD_H, SCALE, RING))).toBe(true)
   })
 
-  /** The gap this replaced. Kept as a test because it is the case that was
-   *  actually shipping: 30 did not cover 19 + 16, and the result was a sliver
-   *  of the previous row's shadow at the top edge. */
   it('did not hold at the previous gap of 30', () => {
     expect(gapCoversEdges(30, SHADOW, topClearance(CARD_H, SCALE, RING))).toBe(false)
   })

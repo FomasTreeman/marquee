@@ -1,18 +1,9 @@
-//! Game metadata, from Steam, with no API key.
+//! Game metadata from Steam's keyless `store.steampowered.com/api/appdetails`
+//! (docs/PLAN.md §6; `api.steampowered.com` needs a key and is not used).
 //!
-//! `store.steampowered.com/api/appdetails` needs no authentication -- see
-//! docs/PLAN.md §6. Note the host: `api.steampowered.com` is the one that
-//! requires a key, and we never touch it.
-//!
-//! Two constraints shape everything here:
-//!
-//!   * **Roughly 200 requests per five minutes.** A library of 213 played
-//!     games cannot be fetched at once. So: one worker, one request at a time,
-//!     spaced, in priority order, backing off on 429.
-//!   * **It is undocumented and Valve owes us nothing.** Every response is
-//!     cached to disk permanently. After the first pass the network is never
-//!     touched again, so an outage or a format change is invisible to anyone
-//!     with an existing library.
+//! The endpoint allows roughly 200 requests per five minutes and is
+//! undocumented, so one worker fetches serially with spacing and backoff, and
+//! every response is cached on disk permanently.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
@@ -25,19 +16,12 @@ use tauri::{AppHandle, Emitter};
 
 use crate::{log_debug, log_if_err, log_info, log_warn, paths};
 
-/// Bump when a field is added that existing cache entries will not have.
-///
-/// Learned the hard way: `header_image` was added to fix artwork for recent
-/// releases, but every already-cached entry deserialised it as empty, so the
-/// fix silently did nothing for exactly the games that had been seen before.
-/// A cache with no version is a cache that can only ever be wrong once.
+/// Bump when adding a field old cache entries lack. Without it, `header_image`
+/// deserialised as empty for every game already cached.
 const CACHE_VERSION: u32 = 2;
 
-/// How many times an appid is retried before it is written off.
-///
-/// A rate limit clears in a minute or two, so a handful of attempts covers
-/// every transient cause. Anything still failing after that is not transient,
-/// and retrying it until the app closes is just noise with a sleep in it.
+/// Retries per appid per session. A rate limit clears within a few attempts;
+/// anything failing beyond that is not transient.
 const MAX_RETRIES: u32 = 4;
 
 /// 200 per 5 minutes is one per 1.5 s. Sit just outside it.
@@ -56,11 +40,8 @@ pub struct Meta {
     pub release_date: String,
     pub genres: Vec<String>,
     pub score: Option<u32>,
-    /// The wide store capsule, at its real hashed path.
-    ///
-    /// Needed because the legacy `steam/apps/<id>/header.jpg` route serves a
-    /// grey placeholder for newer releases while this one serves the actual
-    /// image. It is the only real artwork some games expose publicly.
+    /// The wide store capsule at its hashed path. The legacy
+    /// `steam/apps/<id>/header.jpg` serves a grey placeholder for newer releases.
     #[serde(default)]
     pub header_image: String,
     /// Schema version of this cache entry. Absent means version 1.
@@ -77,8 +58,7 @@ fn cache_path(app_id: &str) -> PathBuf {
 pub fn cached(app_id: &str) -> Option<Meta> {
     let text = std::fs::read_to_string(cache_path(app_id)).ok()?;
     let meta: Meta = serde_json::from_str(&text).ok()?;
-    // An entry written before a field existed is worse than no entry: it
-    // answers the question wrongly and stops anything re-asking.
+    // An older entry lacks fields and would stop anything re-asking.
     if meta.v < CACHE_VERSION {
         return None;
     }
@@ -94,8 +74,7 @@ fn store(meta: &Meta) {
         Ok(t) => t,
         Err(e) => return log_warn!("meta", "encoding {}: {e}", meta.app_id),
     };
-    // Write-then-rename: a half-written cache entry that parses as valid
-    // JSON would be worse than no entry at all.
+    // Write-then-rename so a crash never leaves a half-written entry.
     let tmp = path.with_extension("tmp");
     match std::fs::write(&tmp, text) {
         Ok(()) => log_if_err!(
@@ -108,8 +87,8 @@ fn store(meta: &Meta) {
     }
 }
 
-/// Marks an appid we asked about and Steam does not recognise, so the worker
-/// does not ask again on every launch. Delisted games and tools land here.
+/// Record an appid Steam does not recognise (delisted games, tools) so it is
+/// not re-asked on every launch.
 fn store_miss(app_id: &str) {
     store(&Meta {
         app_id: app_id.to_string(),
@@ -178,19 +157,14 @@ fn parse(app_id: &str, body: &serde_json::Value) -> Option<Meta> {
     })
 }
 
-/// The store endpoint's rate limit is per client, not per caller.
-///
-/// Two things now make requests: the background worker walking the library, and
-/// the artwork pipeline resolving a card that is being drawn right now. Spacing
-/// them independently would still add up to double the intended rate, so they
-/// share one gate.
+/// The rate limit is per client, so the worker and the artwork pipeline share
+/// one spacing gate.
 static LAST_REQUEST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
 fn wait_turn() {
     let mut last = match LAST_REQUEST.lock() {
         Ok(l) => l,
-        // A poisoned lock must not stop metadata working; the worst case is a
-        // slightly bunched pair of requests.
+        // Worst case for a poisoned lock is two bunched requests.
         Err(e) => e.into_inner(),
     };
     if let Some(prev) = *last {
@@ -202,25 +176,18 @@ fn wait_turn() {
     *last = Some(std::time::Instant::now());
 }
 
-/// Fetch one game's metadata, synchronously, and cache it.
-///
-/// The background worker is the normal path, but the artwork pipeline needs a
-/// game's hashed header URL the moment it draws a card and cannot wait several
-/// minutes for the queue to reach it. Both go through here, so there is one
-/// definition of what fetching means and one cache.
-///
-/// Returns None for a game with no store page, and caches that too.
+/// The outcome of `fetch_one`.
 pub enum Fetched {
-    /// Boxed: the other two variants carry nothing, and an enum sized to its
-    /// largest variant would make every return 208 bytes of mostly padding.
+    /// Boxed to keep the enum small; the other variants carry nothing.
     Found(Box<Meta>),
     /// Delisted, region-locked, or a tool. Cached, so it is never re-asked.
     NoStorePage,
-    /// Rate limited or offline. Deliberately not cached: recording a busy
-    /// minute as "no such game" would make it permanent.
+    /// Rate limited or offline. Not cached, or a busy minute becomes permanent.
     Retry,
 }
 
+/// Fetch one game's metadata synchronously and cache it. Shared by the worker
+/// and the artwork pipeline, which needs the header URL immediately.
 pub fn fetch_one(client: &reqwest::blocking::Client, app_id: &str) -> Fetched {
     if let Some(meta) = cached(app_id) {
         return if meta.name.is_empty() {
@@ -254,9 +221,7 @@ pub fn fetch_one(client: &reqwest::blocking::Client, app_id: &str) -> Fetched {
     }
 }
 
-/// A client configured the way every request in this app should be: bounded,
-/// and identifying itself honestly (docs/PLAN.md §11: a public endpoint,
-/// called at a human rate, by something that says who it is).
+/// An HTTP client with a timeout and an honest user agent (docs/PLAN.md §11).
 pub fn http_client() -> Option<reqwest::blocking::Client> {
     http_client_with(Duration::from_secs(20))
 }
@@ -278,29 +243,15 @@ pub struct Enricher {
 }
 
 impl Enricher {
-    /// Queue appids, most important first. Anything already cached is skipped
-    /// without touching the network.
+    /// Queue appids, most important first. Cached ones skip the network.
     pub fn request(&self, app_ids: Vec<String>) {
         let _ = self.tx.send(app_ids);
     }
 }
 
-/// Start the background worker.
-///
-/// Runs at its own pace and emits a `meta` event per game as it lands, so the
-/// interface fills in progressively instead of waiting on a batch. Never
-/// blocks the scan, never blocks the UI.
-/// Back of the queue, not the front: a game that cannot be fetched right now
-/// must not block every game behind it. But not forever -- appid 0, which a
-/// manual game with no Steam entry produced, retried every twelve seconds for
-/// as long as the app was open and filled a debug report so completely that
-/// the controller diagnosis it was meant to carry was three lines at the
-/// bottom of a hundred and twenty.
-///
-/// Giving up is for this session only; nothing is written to the cache.
-/// Recording a miss here made an offline first launch permanent: four failed
-/// sends in the first minute wrote "no store page" for every game, and
-/// nothing ever asked again.
+/// Requeue at the back so one failure does not block the rest, up to
+/// `MAX_RETRIES` (appid 0 once retried forever and flooded the log). Giving up
+/// writes nothing to the cache, or an offline first launch becomes permanent.
 fn requeue(
     app_id: String,
     attempts: &mut HashMap<String, u32>,
@@ -317,6 +268,7 @@ fn requeue(
     true
 }
 
+/// Start the background worker, which emits a `meta` event per game as it lands.
 pub fn spawn(app: AppHandle) -> Enricher {
     let (tx, rx) = mpsc::channel::<Vec<String>>();
 
@@ -327,18 +279,13 @@ pub fn spawn(app: AppHandle) -> Enricher {
         };
 
         let mut queue: VecDeque<String> = VecDeque::new();
-        // Every reload re-requests the whole library. Without this the queue
-        // grows by 215 each time and the worker spends its budget re-checking
-        // things it has already answered.
+        // Every reload re-requests the whole library; skip duplicates.
         let mut queued: HashSet<String> = HashSet::new();
-        // How many times each appid has been retried, so nothing loops for
-        // the life of the process.
         let mut attempts: HashMap<String, u32> = HashMap::new();
         let mut fetched = 0usize;
 
         loop {
-            // Drain anything newly requested. Blocks when there is nothing
-            // left to do, so an idle worker costs nothing.
+            // Block only when idle.
             while let Some(batch) = if queue.is_empty() {
                 rx.recv().ok()
             } else {
@@ -356,8 +303,7 @@ pub fn spawn(app: AppHandle) -> Enricher {
 
             if let Some(meta) = cached(&app_id) {
                 if !meta.name.is_empty() {
-                    // Both emits: the only listener is the webview, and a
-                    // closed webview is not an error.
+                    // Both emits: a closed webview is not an error.
                     let _ = app.emit("meta", &meta);
                 }
                 continue;
@@ -384,8 +330,7 @@ pub fn spawn(app: AppHandle) -> Enricher {
     Enricher { tx }
 }
 
-/// Ask for metadata. Returns immediately from cache when possible; otherwise
-/// queues a fetch and the `meta` event arrives later.
+/// Return cached metadata now and queue the rest; it arrives as `meta` events.
 #[tauri::command]
 pub fn request_meta(app_ids: Vec<String>, enricher: tauri::State<'_, Enricher>) -> Vec<Meta> {
     let ready: Vec<Meta> = app_ids
@@ -435,8 +380,7 @@ mod tests {
         assert!(m.header_image.contains("/620/header.jpg"));
     }
 
-    /// Every parsed entry has to carry the current version, or `cached` will
-    /// reject what we just wrote and the library re-fetches forever.
+    /// Without it, `cached` rejects what was just written and re-fetches forever.
     #[test]
     fn stamps_the_cache_version() {
         assert_eq!(parse("620", &full_response()).unwrap().v, CACHE_VERSION);
@@ -444,23 +388,17 @@ mod tests {
 
     #[test]
     fn an_unsuccessful_entry_is_none_not_a_default() {
-        // Delisted games and tools answer with success:false. Returning an
-        // empty Meta would cache a game called "" and never ask again.
         let body = json!({ "620": { "success": false } });
         assert!(parse("620", &body).is_none());
     }
 
     #[test]
     fn a_response_for_a_different_appid_is_none() {
-        // The endpoint keys the response by appid. Reading the wrong key would
-        // attach one game's name to another's card.
         assert!(parse("440", &full_response()).is_none());
     }
 
     #[test]
     fn missing_pieces_are_empty_rather_than_a_panic() {
-        // Not every game has a Metacritic score, a publisher or a genre. The
-        // sparse shape is the common one, not the edge case.
         let body = json!({ "42": { "success": true, "data": { "name": "Sparse" } } });
         let m = parse("42", &body).expect("a name is all we require");
         assert_eq!(m.name, "Sparse");
@@ -475,7 +413,6 @@ mod tests {
 
     #[test]
     fn an_entry_with_no_name_is_none() {
-        // A nameless entry would render as a blank card that never retries.
         let body = json!({ "42": { "success": true, "data": { "genres": [] } } });
         assert!(parse("42", &body).is_none());
     }
@@ -490,10 +427,6 @@ mod tests {
         assert!(m.genres.is_empty());
     }
 
-    /// A regression test for a bug that shipped: `header_image` was added to
-    /// fix artwork for recent releases, and every already-cached entry
-    /// deserialised it as empty -- so the fix did nothing for exactly the games
-    /// that had been seen before, silently.
     #[test]
     fn a_cache_entry_from_an_older_schema_is_ignored() {
         let path = cache_path("99001");
@@ -511,8 +444,6 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    /// A miss has to survive a round trip, or an appid Steam does not know
-    /// gets re-requested on every single launch.
     #[test]
     fn a_recorded_miss_is_remembered() {
         let path = cache_path("99002");
@@ -522,8 +453,6 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    /// Offline is not "no such game". The give-up path must leave nothing on
-    /// disk, or the next launch inherits an empty library's worth of misses.
     #[test]
     fn giving_up_on_a_transient_failure_leaves_no_cache_entry() {
         // A previous run that failed this test leaves the entry behind.

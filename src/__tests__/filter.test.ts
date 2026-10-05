@@ -13,7 +13,6 @@ function game(over: Partial<Game> = {}): Game {
 }
 
 describe('library filtering', () => {
-  /** Typing an apostrophe on a pad is not something anyone should have to do. */
   it('ignores case and punctuation when matching', () => {
     const g = game({ title: "Baldur's Gate 3" })
     expect(matches(g, 'all', 'baldurs gate')).toBe(true)
@@ -35,7 +34,6 @@ describe('library filtering', () => {
     expect(matches(game(), 'unplayed', '')).toBe(true)
   })
 
-  /** Preset and query compose; neither overrides the other. */
   it('requires both the preset and the query to match', () => {
     const g = game({ title: 'Hades', favourite: true })
     expect(matches(g, 'favourites', 'hades')).toBe(true)
@@ -43,9 +41,7 @@ describe('library filtering', () => {
     expect(matches(game({ title: 'Hades' }), 'favourites', 'hades')).toBe(false)
   })
 
-  /** Indices into the *original* library, so a metadata update or a favourite
-   *  toggle has one place to write whatever the view is showing. Sorted, not in
-   *  library order — favourites lead in every arrangement. */
+  /** Sorted with favourites first, so index order is not library order. */
   it('returns indices into the original library', () => {
     const games = [game({ title: 'A' }), game({ title: 'B', favourite: true }), game({ title: 'C' })]
     const all = apply(games, 'all', '')
@@ -102,23 +98,13 @@ describe('sorting', () => {
     expect(sortKey('Hades')).toBe('hades')
   })
 
-  /**
-   * Names arrive progressively from the metadata worker. A game whose name has
-   * not landed must not sort above everything and then jump when it does.
-   */
   it('sorts unnamed games last rather than first', () => {
     const named = g({ id: 'a', title: 'Zzz Last Alphabetically' })
     const unnamed = g({ id: 'b', title: '' })
     expect(compare(named, unnamed, 'name')).toBeLessThan(0)
   })
 
-  /**
-   * Two games tying on the chosen key must land in the same order regardless
-   * of how they arrived, or the grid reshuffles between renders for no reason.
-   *
-   * Compared by id rather than by index: the indices point into two different
-   * arrays, so comparing those would prove nothing.
-   */
+  /** Compared by id, because the indices point into two different arrays. */
   it('is a total order, so nothing shuffles on re-sort', () => {
     const games = [
       g({ id: 'steam:1', title: 'Same', playtimeMinutes: 5 }),
@@ -146,7 +132,6 @@ describe('sorting', () => {
 })
 
 describe('searching beyond the title', () => {
-  /** Searching "roguelike" or "larian" is a natural thing to try. */
   it('matches genre, developer and publisher when metadata has arrived', () => {
     const g = game({ title: "Baldur's Gate 3" })
     const meta = { genres: ['RPG', 'Turn-Based'], developers: ['Larian Studios'], publishers: [] }
@@ -155,19 +140,12 @@ describe('searching beyond the title', () => {
     expect(matches(g, 'all', 'shooter', meta)).toBe(false)
   })
 
-  /** Metadata arrives progressively, so a title match must never depend on it. */
   it('still matches the title with no metadata at all', () => {
     expect(matches(game({ title: 'Hades' }), 'all', 'hades', undefined)).toBe(true)
     expect(matches(game({ title: 'Hades' }), 'all', 'hades', {})).toBe(true)
   })
 })
 
-/**
- * The accessible name of the permanent search entry in the top bar -- see
- * shell.ts. It has to name the query rather than just say "Search" once one
- * exists, so a screen reader hears what is active even though the button no
- * longer prints it sighted.
- */
 describe('searchLabel', () => {
   it('invites a query when there is none', () => {
     expect(searchLabel('')).toBe('Search')

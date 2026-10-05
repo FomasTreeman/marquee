@@ -1,14 +1,6 @@
-//! Session and machine actions, for the main menu.
-//!
-//! A launcher on a television is often the only thing on screen, so it has to
-//! offer the things a console's home screen does: quit, minimise, restart, shut
-//! down. Without them there is no way off this screen without a keyboard.
-//!
-//! The last two end the user's session with everything else open in it. Nothing
-//! here asks for confirmation -- the interface does that, with a two-press
-//! arm-then-commit on the item itself -- but nothing here happens by accident
-//! either: the action names are a closed set, and anything unrecognised is
-//! refused rather than passed to a shell.
+//! Quit, minimise, restart and shut down for the main menu, so a TV setup can
+//! be left without a keyboard. The interface asks for confirmation; here the
+//! action names are a closed set and anything else is refused.
 
 use std::process::Command;
 
@@ -23,8 +15,6 @@ pub enum Action {
 }
 
 impl Action {
-    /// A closed set, parsed rather than trusted. The interface sends a string
-    /// and a string can be anything.
     pub fn parse(s: &str) -> Option<Self> {
         Some(match s {
             "minimise" | "minimize" => Action::Minimise,
@@ -35,17 +25,13 @@ impl Action {
         })
     }
 
-    /// True for the two that end the user's whole session rather than just
-    /// this app. The interface uses this to decide what needs confirming.
+    /// Restart and shut down end the whole session, so the interface confirms them.
     pub fn affects_the_machine(self) -> bool {
         matches!(self, Action::Restart | Action::ShutDown)
     }
 }
 
-/// The command that performs a machine action on this platform.
-///
-/// Split out so it can be inspected in a test without a machine being restarted
-/// to prove it.
+/// The command for a machine action, separate from `run` so tests can inspect it.
 pub fn command_for(action: Action) -> Option<(&'static str, Vec<&'static str>)> {
     match action {
         Action::Minimise | Action::Quit => None,
@@ -66,8 +52,7 @@ pub fn command_for(action: Action) -> Option<(&'static str, Vec<&'static str>)> 
         #[cfg(target_os = "windows")]
         Action::Restart => Some(("shutdown", vec!["/r", "/t", "0"])),
 
-        // systemctl asks logind, which is the interface that works without
-        // root on a normal desktop session. `poweroff` directly does not.
+        // systemctl goes through logind, which works without root; `poweroff` does not.
         #[cfg(target_os = "linux")]
         Action::ShutDown => Some(("systemctl", vec!["poweroff"])),
         #[cfg(target_os = "linux")]
@@ -93,8 +78,6 @@ pub fn run(action: Action) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    /// The interface sends a string, and a string can be anything. Only the
-    /// four known actions may reach a command.
     #[test]
     fn only_known_actions_parse() {
         assert_eq!(Action::parse("quit"), Some(Action::Quit));
@@ -120,7 +103,6 @@ mod tests {
         assert!(!Action::Minimise.affects_the_machine());
     }
 
-    /// Quit and minimise are the window's business, not a shell's.
     #[test]
     fn window_actions_spawn_nothing() {
         assert!(command_for(Action::Quit).is_none());
@@ -132,7 +114,6 @@ mod tests {
         for action in [Action::ShutDown, Action::Restart] {
             let (program, args) = command_for(action).expect("a command");
             assert!(!program.is_empty());
-            // No shell, no interpolation: a fixed program and fixed arguments.
             assert!(
                 !program.contains(' '),
                 "{program} looks like a shell string"
