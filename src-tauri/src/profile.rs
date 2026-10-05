@@ -1,24 +1,10 @@
-//! Export and import everything the user authored.
+//! Export and import what the user authored and a scan cannot rebuild:
+//! favourites, hidden games, manual entries, artwork choices, game folders and
+//! settings. Artwork and metadata are caches and are left out.
 //!
-//! A profile is the small, irreplaceable half of this app's state: which games
-//! are favourited, which are hidden, what was added by hand and where it lives,
-//! artwork corrections, learned game folders, and settings. Kilobytes. The
-//! large half -- artwork and metadata -- is a cache and rebuilds itself, so it
-//! is deliberately not included.
-//!
-//! The point is surviving a machine. A fresh Windows install wipes `%APPDATA%`
-//! and takes the database with it, and none of what it held can be reconstructed
-//! by scanning: nobody remembers which forty games they had hidden.
-//!
-//! So the file goes wherever the user says. Two things make that more than a
-//! manual chore:
-//!
-//!   * **It re-exports itself** whenever the profile changes, if a folder is
-//!     configured. Point it at a synced folder and it is cloud sync; point it
-//!     at a second drive and it survives the reinstall that took the first one.
-//!   * **It is looked for on first run.** A machine with no profile checks the
-//!     configured folder and the folders it has learned games live in, which on
-//!     a typical setup are on a drive the reinstall did not touch.
+//! When a folder is configured the profile re-exports on every change, and on
+//! first run it is looked for there and beside known game folders, so it
+//! survives a reinstall that wipes `%APPDATA%`.
 
 use std::path::{Path, PathBuf};
 
@@ -38,10 +24,9 @@ const FORMAT: u32 = 1;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
-    /// Format version, so a future change can migrate rather than guess.
     pub format: u32,
     pub exported_at: u64,
-    /// Which machine wrote it. Only useful for telling two files apart.
+    /// The OS that wrote it, for telling two files apart.
     pub source: String,
     pub settings: Vec<(String, String)>,
     pub games: Vec<UserGame>,
@@ -81,12 +66,8 @@ pub fn collect(store: &Store) -> Result<Profile, String> {
         })
         .collect();
 
-    // The SteamGridDB key stays out. A profile is made to be copied about --
-    // into a synced folder, onto a second drive, to a friend -- and it used to
-    // carry the key with it, so anyone handed the file was handed the
-    // credential too. It is a free, per-user key, but a secret in a file whose
-    // whole purpose is to travel is still a secret in the wrong place, and
-    // pasting it again on a new machine costs seconds.
+    // The SteamGridDB key is a credential, and a profile is made to be copied
+    // and shared, so it stays out.
     let settings = store
         .all_settings()?
         .into_iter()
@@ -114,8 +95,7 @@ pub fn write(store: &Store, path: &Path) -> Result<(), String> {
         std::fs::create_dir_all(dir)
             .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     }
-    // Temp-then-rename. A profile half-written when the power went out is worse
-    // than no profile, because it looks like one.
+    // Write then rename, so an interrupted write cannot leave a truncated file.
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, text).map_err(|e| format!("could not write {}: {e}", tmp.display()))?;
     std::fs::rename(&tmp, path).map_err(|e| format!("could not save {}: {e}", path.display()))?;
@@ -137,13 +117,8 @@ pub fn read(path: &Path) -> Result<Profile, String> {
     Ok(profile)
 }
 
-/// Merge a profile into the database.
-///
-/// Merge rather than replace, and the imported value wins on a conflict: import
-/// is something the user asked for explicitly, so it should do what it says.
-/// Nothing is deleted -- a game favourited here but absent from the file stays
-/// favourited, because losing something on import is the one outcome nobody
-/// would want.
+/// Merge a profile into the database. The imported value wins on a conflict,
+/// and nothing already here is deleted.
 pub fn apply(store: &Store, profile: &Profile) -> Result<ImportSummary, String> {
     for (key, value) in &profile.settings {
         store.set_setting(key, value)?;
@@ -158,9 +133,7 @@ pub fn apply(store: &Store, profile: &Profile) -> Result<ImportSummary, String> 
         )?;
     }
 
-    // Hand-added games are matched on what they are, not on their row id: two
-    // machines number their rows independently, so importing by id would either
-    // collide or duplicate.
+    // Match on title and appid, not row id: each machine numbers its own rows.
     let existing = store.manual_games()?;
     let mut added = 0;
     for game in &profile.manual {
@@ -171,10 +144,8 @@ pub fn apply(store: &Store, profile: &Profile) -> Result<ImportSummary, String> 
             continue;
         }
         let id = store.add_manual_game(&game.title, game.steam_app_id.as_deref())?;
-        // The executable path comes from the machine that exported it, and may
-        // not exist here. Kept anyway: a path that is wrong is a better
-        // starting point than an empty field, and the interface reports a
-        // missing executable clearly when it is used.
+        // Kept even if it does not exist here: a wrong path is a better start
+        // than an empty field, and a missing executable is reported on launch.
         if let Some(exe) = &game.executable {
             store.set_executable(id, Some(exe))?;
         }
@@ -202,12 +173,8 @@ pub fn apply(store: &Store, profile: &Profile) -> Result<ImportSummary, String> 
     Ok(summary)
 }
 
-/// Places a profile might be, most likely first.
-///
-/// The configured folder, then every folder the app has learned games live in.
-/// That last one is the interesting case: on a machine where games are kept on
-/// a second drive, a profile saved beside them survives the reinstall that took
-/// the first drive, and is found without anyone remembering where they put it.
+/// Places a profile might be: the configured folder, then every known game
+/// folder, which is often on a drive a reinstall did not touch.
 pub fn search_paths(store: &Store) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Ok(Some(folder)) = store.setting(FOLDER_SETTING) {
@@ -226,11 +193,8 @@ pub fn discover(store: &Store) -> Option<PathBuf> {
     search_paths(store).into_iter().find(|p| p.is_file())
 }
 
-/// Re-export to the configured folder, if there is one.
-///
-/// Called after anything that changes the profile. Silent when no folder is
-/// configured, and never fatal: a profile that cannot be written is worth a log
-/// line, not a failed favourite.
+/// Re-export to the configured folder, if any. A failure is logged, never
+/// returned, so it cannot fail the change that triggered it.
 pub fn auto_export(store: &Store) {
     let Ok(Some(folder)) = store.setting(FOLDER_SETTING) else {
         return;
@@ -249,15 +213,11 @@ pub fn auto_export(store: &Store) {
 mod tests {
     use super::*;
 
-    /// Isolated per test. These assert on counts, and a shared database makes
-    /// the second run of the suite disagree with the first.
+    /// Per test, since the tests assert on counts.
     fn store() -> Store {
         Store::in_memory()
     }
 
-    /// Everything that cannot be reconstructed by scanning has to survive the
-    /// round trip. That is the whole point: nobody remembers which forty games
-    /// they had hidden.
     #[test]
     fn a_profile_round_trips_everything_a_scan_cannot_rebuild() {
         let a = store();
@@ -311,9 +271,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The one setting that is a credential. A profile is written to be
-    /// carried between machines and handed around, and it used to carry the
-    /// SteamGridDB key with it.
     #[test]
     fn a_profile_leaves_the_steamgriddb_key_behind() {
         let a = store();
@@ -330,8 +287,6 @@ mod tests {
             .any(|(k, v)| k == "sort" && v == "name"));
     }
 
-    /// Importing twice must not produce two of every hand-added game. Rows are
-    /// numbered per machine, so matching has to be on what a game *is*.
     #[test]
     fn a_game_root_comes_back_exactly_where_it_was() {
         let a = store();
@@ -387,9 +342,7 @@ mod tests {
         assert_eq!(s.manual_games().unwrap().len(), before + 1);
     }
 
-    /// The actual journey this feature exists for: export here, reinstall,
-    /// import there, everything back. The round-trip test above proves the
-    /// *file* is right; this proves applying it reproduces the state.
+    /// The round-trip test checks the file; this checks applying it.
     #[test]
     fn restores_onto_a_fresh_machine() {
         let old = store();
@@ -412,7 +365,6 @@ mod tests {
         let path = dir.join(FILENAME);
         write(&old, &path).unwrap();
 
-        // A machine that has never seen any of this.
         let fresh = store();
         assert!(fresh.user_flags().unwrap().is_empty());
         apply(&fresh, &read(&path).unwrap()).unwrap();
@@ -434,16 +386,11 @@ mod tests {
         let manual = fresh.manual_games().unwrap();
         assert_eq!(manual.len(), 1);
         assert_eq!(manual[0].title, "Torrented Game");
-        // The path came from another machine and may not exist here. Kept
-        // anyway: a wrong path beats an empty field, and a missing executable
-        // is reported clearly when it is used.
         assert_eq!(manual[0].executable.as_deref(), Some("/games/tg/game.exe"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The promise that makes import safe to try. Losing something on import is
-    /// the one outcome nobody would want, so nothing is ever deleted.
     #[test]
     fn import_never_deletes_what_is_already_here() {
         let here = store();
@@ -482,8 +429,6 @@ mod tests {
             .any(|m| m.title == "Only On This Machine"));
     }
 
-    /// Import is something the user asked for explicitly, so where the two
-    /// disagree the file wins. Anything else would make importing unpredictable.
     #[test]
     fn the_imported_value_wins_on_a_conflict() {
         let here = store();
@@ -515,8 +460,6 @@ mod tests {
         assert_eq!(flags[0].1.art_app_id.as_deref(), Some("222"));
     }
 
-    /// Silent when no folder is configured -- the feature is opt-in, and an app
-    /// that writes files somewhere by default is not.
     #[test]
     fn auto_export_only_writes_when_a_folder_is_set() {
         let s = store();
@@ -536,7 +479,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// A file from a newer version is refused rather than half-understood.
     #[test]
     fn a_newer_format_is_refused() {
         let dir = std::env::temp_dir().join("marquee-profile-future");
@@ -559,8 +501,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The folders games live in are searched, which is what makes a profile
-    /// survive a reinstall without anyone remembering where they saved it.
     #[test]
     fn discovery_looks_where_the_games_are() {
         let s = store();

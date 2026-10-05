@@ -1,13 +1,7 @@
-//! Games added by hand — everything that is not Steam.
+//! Games added by hand: everything that is not Steam.
 //!
-//! Epic, GOG, EA, Ubisoft, emulators, a decade-old installer: one code path
-//! instead of five undocumented per-store parsers, which is why there is no EA
-//! integration here to break.
-//!
-//! A game is added by **name** (see `search.rs`) and is complete the moment it
-//! is identified. Its executable is set separately and later, so it appears in
-//! the library looking finished before anything is known about where it lives
-//! on disk.
+//! One code path instead of a parser per store. A game is added by name (see
+//! `search.rs`); its executable can be set later.
 
 use std::path::PathBuf;
 
@@ -21,8 +15,7 @@ impl LibraryProvider for Manual<'_> {
         "manual"
     }
 
-    /// Always present. Unlike a store, this provider cannot be "not installed"
-    /// -- it is the escape hatch that works when nothing else does.
+    /// Always available, unlike a store.
     fn detect(&self) -> bool {
         true
     }
@@ -35,15 +28,12 @@ impl LibraryProvider for Manual<'_> {
             .map(|m| Game {
                 id: format!("manual:{}", m.id),
                 provider: "manual".into(),
-                // The Steam appid when the game was identified through search,
-                // which is what lets it borrow artwork and metadata. Empty
-                // otherwise: this used to fall back to the row id, and any
-                // run of digits is taken for a Steam appid downstream, so the
-                // tenth hand-added game was renamed Counter-Strike and given
-                // its cover.
+                // Steam appid from search, for artwork and metadata. Empty
+                // otherwise: falling back to the row id made digits look like
+                // an appid, so game 10 became Counter-Strike.
                 provider_id: m.steam_app_id.clone().unwrap_or_default(),
                 title: m.title,
-                // "Installed" here means playable: we know where it is.
+                // "Installed" means we know where the executable is.
                 installed: m.executable.is_some(),
                 update_available: false,
                 updating: false,

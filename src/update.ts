@@ -1,29 +1,8 @@
 /**
- * Over-the-air updates: the policy half.
- *
- * The plugin does the dangerous half. `check()` fetches the manifest, and
- * `downloadAndInstall()` verifies the bundle's signature against the public
- * key compiled into the binary before anything touches the installer. A
- * compromised host serves something that will not install rather than
- * something that runs. None of that is re-implemented here.
- *
- * What is here is *when to ask*, and that is the part a launcher gets wrong.
- * Two rules, both learned from launchers that are irritating to live with:
- *
- *   1. **Never interrupt.** A launcher lives on a television and its whole job
- *      is the four seconds between deciding to play something and the game
- *      starting. An update prompt in that gap -- or worse, over a running
- *      game -- is the single most annoying thing this class of app does. So
- *      the check happens once, after the library is up and idle, and the
- *      prompt only ever appears on the library screen with nothing else open.
- *
- *   2. **Say what changed, and take no for an answer.** A binary that silently
- *      replaces itself is indistinguishable from malware from the user's side,
- *      and Marquee already asks for a lot of trust by launching executables.
- *      The notes are shown, "Later" is real, and a refusal is remembered for
- *      that version so the same prompt does not reappear every launch.
- *
- * See docs/UPDATES.md for the release side: keys, manifest, CI.
+ * When to offer an update. The updater plugin fetches the manifest and checks
+ * the signature; this module checks once per session, offers only on an idle
+ * library screen, shows the notes, and remembers a refusal per version.
+ * See docs/UPDATES.md for the release side.
  */
 import { check, type Update } from '@tauri-apps/plugin-updater'
 import { relaunch } from '@tauri-apps/plugin-process'
@@ -35,13 +14,7 @@ import type { MenuItem } from './menu'
 /** Remembers the last version the user said no to. */
 const DECLINED = 'updateDeclined'
 
-/**
- * Long enough that the library is drawn, scanned and settled first.
- *
- * An update check is the least urgent thing the app does. It competes for the
- * network with artwork resolution, which is the thing the user is actually
- * looking at, so it waits its turn.
- */
+/** Wait for the library to settle so the check does not compete with artwork downloads. */
 const CHECK_AFTER_MS = 20_000
 
 export interface PendingUpdate {
@@ -52,11 +25,8 @@ export interface PendingUpdate {
 }
 
 /**
- * Ask whether there is a newer version.
- *
- * Returns undefined for every "no", including every failure: being offline,
- * a rate-limited host, a malformed manifest. An update check that cannot
- * happen is not an error the user needs to see -- they did not ask for it.
+ * Ask whether there is a newer version. Returns undefined for "no" and for
+ * any failure, which is logged but not shown, since the user did not ask.
  */
 export async function checkForUpdate(): Promise<PendingUpdate | undefined> {
   if (!inApp) return undefined
@@ -64,7 +34,6 @@ export async function checkForUpdate(): Promise<PendingUpdate | undefined> {
   try {
     update = await check()
   } catch (e) {
-    // Logged, not shown. Worth knowing when reading a log; not worth a toast.
     logWarn('update', 'could not check for updates', e)
     return undefined
   }
@@ -73,9 +42,7 @@ export async function checkForUpdate(): Promise<PendingUpdate | undefined> {
     return undefined
   }
 
-  // A version the user has already refused stays refused. Asking again every
-  // launch is how people learn to dismiss prompts without reading them, which
-  // is precisely what makes the important one dangerous.
+  // A refused version stays refused.
   try {
     const declined = (await getSettings()).updateDeclined
     if (declined === update.version) {
@@ -99,8 +66,7 @@ export async function checkForUpdate(): Promise<PendingUpdate | undefined> {
         const percent = progressStep(progress)
         if (percent !== undefined || event.event === 'Started') onProgress?.(percent)
       })
-      // Only reached if the installer did not take over the process. On
-      // Windows the passive installer replaces us, so this never returns.
+      // Not reached on Windows, where the installer replaces the process.
       logInfo('update', `installed ${update!.version}; restarting`)
       await relaunch()
     },
@@ -115,10 +81,8 @@ export interface Progress {
 }
 
 /**
- * The percentage to report for the bytes so far, or undefined when there is
- * nothing new to say: no known size, or the same figure as last time. A
- * download arrives in chunks far smaller than a percent of the whole, and
- * reporting each one was the reason the screen filled with identical toasts.
+ * The percentage to report, or undefined if the size is unknown or the figure
+ * has not changed. Reporting every chunk filled the screen with identical toasts.
  */
 export function progressStep(p: Progress): number | undefined {
   if (!p.total) return undefined
@@ -133,18 +97,12 @@ export async function declineUpdate(version: string): Promise<void> {
   try {
     await setSetting(DECLINED, version)
   } catch (e) {
-    // Worst case the prompt reappears next launch. Not worth telling anyone.
+    // Worst case, the prompt reappears next launch.
     logWarn('update', 'could not record the declined version', e)
   }
 }
 
-/**
- * Schedule the one check of the session.
- *
- * `isIdle` is asked at the moment the answer is offered, not when it is
- * scheduled -- twenty seconds is plenty of time to have opened a menu or
- * started a game.
- */
+/** Schedule the session's one check. `isIdle` is asked when the offer is made, not when scheduled. */
 export function scheduleUpdateCheck(
   isIdle: () => boolean,
   offer: (update: PendingUpdate) => void,
@@ -154,9 +112,7 @@ export function scheduleUpdateCheck(
     void checkForUpdate().then((update) => {
       if (!update) return
       if (!isIdle()) {
-        // Not deferred and retried: one attempt per session. A launcher that
-        // keeps trying to interrupt you is worse than one that waits until
-        // tomorrow.
+        // One attempt per session; no retry.
         logInfo('update', `${update.version} is available; not offering over a busy screen`)
         return
       }

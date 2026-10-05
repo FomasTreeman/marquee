@@ -1,10 +1,4 @@
-/**
- * Marquee.
- *
- * Wires the shell, the library and the input stream together. Everything of
- * substance lives in its own module; this file is the assembly and should stay
- * short enough to read in one go.
- */
+/** Wires the shell, the library and the input stream together. */
 import { createGrid } from './grid'
 import { createFrameMeter, installGrainTile, applyBackgroundStyle } from './perf'
 import { createShell, legendFor, setHints } from './shell'
@@ -36,8 +30,8 @@ import {
 } from './filter'
 
 const params = new URLSearchParams(location.search)
-/** ?mock=40 forces a synthetic library, for looking at the design on a machine
- *  without one and for measuring the grid at a scale no real library reaches. */
+/** ?mock=40 forces a synthetic library of that size, for design and grid
+ *  profiling. */
 const MOCK = Number(params.get('mock') ?? 0)
 
 // --- formatting ---------------------------------------------------------
@@ -69,9 +63,8 @@ function heroFacts(game: Game): string[] {
   const state = game.provider === 'manual' && !game.installed
     ? 'No executable set'
     : game.installed ? gib(game.sizeBytes) || 'Installed' : 'Not installed'
-  // Shown on the hero panel, not just the detail screen, so a hundred-gigabyte
-  // update is visible while browsing rather than a surprise at the moment
-  // Play is pressed.
+  // On the hero, not just the detail screen, so a large update is visible
+  // before Play is pressed.
   const update = game.updating ? 'Updating…' : game.updateAvailable ? 'Update available' : ''
   return [
     game.favourite ? '★ Favourite' : '',
@@ -83,13 +76,7 @@ function heroFacts(game: Game): string[] {
   ].filter(Boolean)
 }
 
-/**
- * An empty library must explain itself.
- *
- * Pitch black with nothing on it is what this design looks like when it is
- * working perfectly, which makes it the worst possible way to report that
- * nothing was found.
- */
+/** Explains an empty library, which would otherwise look like a blank screen. */
 function emptyMessage(scan: ScanResult): [string, string] {
   const failed = scan.providers.filter((p) => p.error)
   if (failed.length) {
@@ -107,26 +94,20 @@ async function main(): Promise<void> {
   const started = performance.now()
   installGrainTile()
 
-  // Before anything asks for an artwork URL: the answer differs between the
-  // app and a browser tab, and getting it late would mean two kinds of URL in
-  // one library.
+  // Before any artwork URL is built: the form differs between app and browser.
   await initArtwork()
 
   const shell = createShell(document.getElementById('app')!)
   const backdrop = createBackdrop(shell.backdropA, shell.backdropB)
 
-  // Library state. Rebuilt wholesale by reloadLibrary(), so adding a game
-  // arrives through exactly the same path as every other one rather than a
-  // second code path that could disagree with the first.
+  // Rebuilt wholesale by reloadLibrary(), so an added game takes the same path
+  // as every other.
   let games: Game[] = []
   let art: Artwork[] = []
   let scan: ScanResult = { games: [], providers: [], tookMs: 0 }
   const meta = new Map<string, Meta>()
 
-  // What the grid is currently showing: indices into `games`, in grid order.
-  // Keeping the filtered view as indices rather than a second array of games
-  // means a metadata update or a favourite toggle has exactly one place to
-  // write, whatever is on screen.
+  // Indices into `games` in grid order, so updates have one place to write.
   let view: number[] = []
   let preset: Preset = 'all'
   let query = ''
@@ -135,33 +116,30 @@ async function main(): Promise<void> {
   const gameAt = (viewIndex: number): Game | undefined => games[view[viewIndex] ?? -1]
   const artAt = (viewIndex: number): Artwork => art[view[viewIndex] ?? -1] ?? {}
 
-  /** Cleared on the next selection, so holding a direction does not leave the
-   *  hero stuck mid-fade. */
+  /** Cleared on each selection, so holding a direction cannot leave the hero
+   *  stuck mid-fade. */
   let heroSettle: number | undefined
 
   function refreshHero(viewIndex: number): void {
     const game = gameAt(viewIndex)
     if (!game) return
 
-    // Out, swap, in. The class is removed on the next frame rather than after
-    // the transition, so navigating quickly re-triggers cleanly instead of
-    // queueing a fade per keypress.
+    // Removed shortly rather than after the transition, so fast navigation
+    // does not queue a fade per keypress.
     shell.hero.classList.add('is-changing')
     window.clearTimeout(heroSettle)
     heroSettle = window.setTimeout(() => shell.hero.classList.remove('is-changing'), 60)
     const a = artAt(viewIndex)
     backdrop.show(a.hero)
 
-    // The transparent wordmark is the design's preferred title. Type is the
-    // fallback rather than an addition, so never both.
+    // Wordmark or typed title, never both.
     const logo = a.logo
     shell.heroLogo.hidden = !logo
     shell.heroTitle.hidden = !!logo
     if (logo && shell.heroLogo.getAttribute('src') !== logo) {
       shell.heroLogo.src = logo
       shell.heroLogo.onerror = () => {
-        // Falling back to type is correct; doing it silently is not, because it
-        // looks identical to a game that simply has no wordmark.
+        // Logged, as the fallback looks identical to a game with no wordmark.
         logWarn('art', `hero logo failed for ${game.title}`, logo)
         shell.heroLogo.hidden = true
         shell.heroTitle.hidden = false
@@ -183,21 +161,13 @@ async function main(): Promise<void> {
     })
   }
 
-  /**
-   * Open the details screen for a card.
-   *
-   * Hoisted and shared rather than defined per device, because it was
-   * previously only reachable from the legend closure -- which is how the
-   * mouse ended up with no route to it at all.
-   */
+  /** Shared by every device; a per-device copy once left the mouse without one. */
   function openDetails(index: number): void {
     const game = gameAt(index)
     if (!game) return
     detail.open(game, meta.get(game.providerId), artAt(index))
-    // The manifest is written when artwork resolves, which may be after the
-    // card was drawn, so it is fetched on open rather than cached. This lived
-    // in the Y handler alone, so the mouse and the legend opened a details
-    // screen that never learned where its artwork came from.
+    // Fetched on open, not cached: the manifest is written when artwork
+    // resolves, which may be after the card was drawn.
     void artworkReport([game.providerId])
       .then((r) => {
         if (r[0] && detail.isOpen) detail.open(game, meta.get(game.providerId), artAt(index), r[0])
@@ -221,9 +191,7 @@ async function main(): Promise<void> {
     b.textContent = title
     const span = document.createElement('span')
     span.textContent = body
-    // First run has no games to select and therefore nothing for A to do, so
-    // the prompt says what A does instead. A screen that can only be left with
-    // a mouse is not a screen for a television.
+    // With nothing to play, A adds a game, so a pad is not stuck here.
     const prompt = document.createElement('span')
     prompt.className = 'empty-prompt'
     prompt.textContent = 'Press A to add a game by name'
@@ -231,14 +199,7 @@ async function main(): Promise<void> {
     shell.gridViewport.appendChild(box)
   }
 
-  /**
-   * Move to the next or previous tab, wrapping.
-   *
-   * Wrapping because five tabs on a shoulder button is a ring, not a line --
-   * stopping at Hidden and making someone press the other shoulder four times
-   * to get back to All is the sort of thing that reads as the control being
-   * broken.
-   */
+  /** Move to the next or previous tab, wrapping round at either end. */
   function choosePreset(step: number): void {
     const at = PRESETS.findIndex((p) => p.id === preset)
     const next = PRESETS[(at + step + PRESETS.length) % PRESETS.length]
@@ -248,8 +209,7 @@ async function main(): Promise<void> {
 
   function selectPreset(id: Preset): void {
     preset = id
-    // A search is scoped to the tab it was typed in, so moving tab clears it
-    // rather than silently filtering the new one by an old query.
+    // A search belongs to its tab, so changing tab clears it.
     query = ''
     shell.query.hidden = true
     shell.query.value = ''
@@ -258,10 +218,8 @@ async function main(): Promise<void> {
   }
 
   function paintPresets(): void {
-    // Icon only -- the query itself lives in the field beside it, and again
-    // in the count next to the clock. Putting the same text on the button too
-    // was the third copy of a search that only needs stating once; this one
-    // stays as the accessible name rather than something sighted twice.
+    // Icon only, as the query already shows in the field and the count; the
+    // label is for screen readers.
     shell.searchButton.setAttribute('aria-label', searchLabel(query))
     shell.searchButton.dataset['active'] = query.trim() ? '1' : '0'
 
@@ -270,23 +228,19 @@ async function main(): Promise<void> {
       const pill = document.createElement('span')
       pill.className = 'preset'
       pill.dataset['active'] = p.id === preset ? '1' : '0'
-      // A preset that would show nothing is dimmed rather than hidden --
-      // hiding it would shift every other pill as the library changes.
+      // Dimmed rather than hidden, so the other pills do not shift.
       pill.dataset['empty'] = applyFilter(games, p.id, '').length ? '0' : '1'
       pill.textContent = p.label
-      // Clickable, because a mouse user has no stick to press and the pills
-      // already look like controls.
       pill.onclick = () => selectPreset(p.id)
       shell.presets.appendChild(pill)
     }
   }
 
-  /** Rebuild the grid from the current preset and query, keeping the cursor on
-   *  the same game where it survives the filter. */
+  /** Rebuild the grid from preset and query, keeping the cursor's game if it
+   *  survives the filter. */
   function applyView(): void {
     const keepId = gameAt(grid.focused)?.id
-    // Metadata feeds the search, so "roguelike" or "larian" finds something
-    // once a game's details have arrived.
+    // Metadata feeds the search, so genres and developers match too.
     view = applyFilter(games, preset, query, sort, (g) => meta.get(g.providerId))
     paintPresets()
     shell.count.textContent = describeFilter(preset, query, view.length, games.length, sort)
@@ -329,28 +283,22 @@ async function main(): Promise<void> {
       scan = { games: [], providers: [{ provider: 'scan', detected: true, error: String(e), tookMs: 0 }], tookMs: 0 }
     }
 
-    // Loaded on demand so the mock library -- a hundred-odd real appids and
-    // titles -- is not carried in the bundle every user downloads. It is a
-    // development affordance; `?mock=` is the only thing that reaches it.
+    // Imported on demand to keep the mock library out of the shipped bundle.
     if (MOCK) {
       const { SAMPLE_LIBRARY } = await import('./sample')
       games = SAMPLE_LIBRARY(MOCK)
     } else {
       games = scan.games
     }
-    // Artwork follows the user's override where there is one, so a game whose
-    // own appid has no cover can borrow another's.
+    // Follows the user's artwork override, if any.
     art = games.map((g) => { const key = artIdFor(g); return key ? steamArtwork(key) : {} })
-    // A title already known beats waiting for the worker to re-announce it.
     games.forEach((g) => { const m = meta.get(g.providerId); if (m && !g.title) g.title = m.name })
 
     applyView()
     if (!games.length) return
 
-    // Artwork needs no names -- every asset is keyed by appid alone -- so the
-    // library looks right immediately and fills in its text afterwards.
-    // Requested in library order, which is most-recently-played first, so what
-    // is on screen is named before anything below the fold.
+    // Artwork is keyed by appid, so it shows before names arrive. Requested in
+    // library order so on-screen games are named first.
     const appIds = games.filter((g) => g.providerId.match(/^\d+$/)).map((g) => g.providerId)
     const ready = await requestMeta(appIds)
     for (const m of ready) applyMeta(m)
@@ -363,19 +311,16 @@ async function main(): Promise<void> {
     games.forEach((g, gameIndex) => {
       if (g.providerId !== m.appId || g.title === m.name) return
       g.title = m.name
-      // Only the grid position, if this game is currently shown at all.
       const viewIndex = view.indexOf(gameIndex)
       if (viewIndex < 0) return
       grid.setTitle(viewIndex, m.name)
       if (viewIndex === grid.focused) refreshHero(viewIndex)
     })
-    // A name landing can change where its game belongs.
     resortLater()
   }
 
   const unlistenMeta = await onMeta(applyMeta)
-  // A launch that fails after spawning has no other way to reach the user:
-  // the button worked, the toast said "starting", and then nothing happened.
+  // The only way a failure after spawning reaches the user.
   const unlistenFailed = await onLaunchFailed(({ title, detail }) => {
     toast(
       `${title || 'That game'} ${detail}. Its executable may have moved, or need ` +
@@ -390,9 +335,7 @@ async function main(): Promise<void> {
 
   // --- actions ----------------------------------------------------------
 
-  // Guarded against repeats: A is the button most likely to be double-tapped,
-  // and asking Steam to start the same game twice in 200 ms is a good way to
-  // get two windows or none.
+  // Guards against a double-tapped A asking Steam to start a game twice.
   let launching = false
   async function play_(index: number): Promise<void> {
     const game = gameAt(index)
@@ -406,8 +349,7 @@ async function main(): Promise<void> {
     try {
       const how = await launchGame(game.id)
       logInfo('run', `launched ${label} via ${how}`)
-      // Steam is started silently first when it is closed, which takes a few
-      // seconds. Saying so beats a toast that implies the game is coming now.
+      // A closed Steam is started first, which takes a few seconds.
       const cold = how.includes('starting Steam')
       toast(
         cold ? `Starting Steam, then ${label}. This takes a few seconds.` : `Starting ${label}`,
@@ -426,8 +368,7 @@ async function main(): Promise<void> {
     if (!game) return
     try {
       game.favourite = await toggleFavourite(game.id)
-      // A game unfavourited while the Favourites preset is showing must leave
-      // the grid, or the filter is a lie.
+      // An unfavourited game must leave the Favourites view.
       if (preset === 'favourites') applyView()
       else { paintPresets(); refreshHero(index) }
       toast(game.favourite ? `Favourited ${game.title}` : `Removed ${game.title} from favourites`)
@@ -438,15 +379,12 @@ async function main(): Promise<void> {
 
   const osk = createOsk()
 
-  /** What is currently being held, per the same signal the legend follows.
-   *  Set for real once input starts below; a pad plugged in later switches
-   *  it live, same as a mouse touched later switches the legend. */
+  /** The device in hand, updated live by the same signal as the legend. */
   let heldDevice: Device = 'keyboard'
 
   const menu = createMenu()
 
-  /** Rebuild the legend for whatever is now being held. The table itself is
-   *  in shell.ts, as data, so "every action reaches every device" is tested. */
+  /** The legend table lives in shell.ts as data, so its coverage is tested. */
   function refreshHints(device: Device): void {
     heldDevice = device
     setHints(
@@ -463,13 +401,7 @@ async function main(): Promise<void> {
     )
   }
 
-  /**
-   * Sort is a menu of its own, on its own stick, because it is a separate
-   * question from which preset is showing. Presets themselves used to have a
-   * matching menu on the other stick, but it only re-listed the tabs already
-   * always visible along the top -- the same options behind an extra press
-   * rather than a real second path.
-   */
+  /** Sort has its own menu; presets need none, as the tabs are always visible. */
   function openSort(): void {
     menu.open({
       title: 'Sort by',
@@ -510,9 +442,7 @@ async function main(): Promise<void> {
     checkNow('menu')
   }
 
-  /** Re-sorting is debounced while names are still arriving: sorting by name
-   *  on a first run reshuffled the grid under the cursor once per metadata
-   *  event, which is intolerable on a pad. */
+  /** Debounced, or a name sort reshuffles the grid on every metadata event. */
   let resortPending: number | undefined
   function resortLater(): void {
     if (sort !== 'name') return
@@ -524,8 +454,7 @@ async function main(): Promise<void> {
     shell.query.hidden = false
     shell.query.focus()
     shell.query.select()
-    // The on-screen keyboard is what makes search reachable at all from a pad.
-    // Without it this opens a field nobody can type into.
+    // Without the on-screen keyboard a pad cannot type here.
     if (wantsOsk(heldDevice)) osk.attach(shell.query)
   }
 
@@ -538,8 +467,7 @@ async function main(): Promise<void> {
   })
   shell.query.addEventListener('blur', () => {
     osk.close()
-    // An empty search box left on screen is clutter; a populated one is state
-    // the user can see, so it stays.
+    // A populated search stays visible; an empty one is clutter.
     if (!query.trim()) shell.query.hidden = true
   })
   shell.query.addEventListener('keydown', (e) => {
@@ -549,13 +477,7 @@ async function main(): Promise<void> {
 
   const picker = createPicker(() => osk.close())
 
-  /**
-   * Re-run the invariants after a surface appears.
-   *
-   * Checking only at boot means every overlay is checked in the one state it
-   * is never in: closed. These are exactly the surfaces where something can be
-   * silently unreachable, so they are checked when they open.
-   */
+  /** Re-run the self-check when an overlay opens, as boot only sees it closed. */
   const checkNow = (context: string) => {
     if (import.meta.env.DEV || params.get('check') === '1') scheduleSelfCheck(600, context)
   }
@@ -564,10 +486,8 @@ async function main(): Promise<void> {
     picker.open({
       heading: 'Add a game',
       sub: 'Type its name — or browse for it, and the name is worked out for you.',
-      // Browsing answers "where is it"; the search still answers "what is it",
-      // because artwork and metadata are keyed by the game rather than by a
-      // path. Doing both in one pass means a hand-added game arrives complete
-      // and playable instead of needing a second visit to set its executable.
+      // Browsing gives the path; the search still identifies the game, since
+      // artwork and metadata are keyed by game, not path.
       browse: {
         label: 'Browse for a file…',
         async choose() {
@@ -583,12 +503,8 @@ async function main(): Promise<void> {
       },
       async onPick(hit, file) {
         try {
-          // A Steam hit carries an appid, and an appid carries metadata --
-          // description, genres, release date, artwork. A SteamGridDB hit
-          // carries artwork alone, so it is added with no appid and then
-          // pointed at its artwork separately. Passing the SteamGridDB id as
-          // a Steam appid would silently attach a different game's metadata,
-          // because that number is almost certainly some other game's appid.
+          // A SteamGridDB id is not a Steam appid; passing it as one would
+          // attach some other game's metadata. Its artwork is set separately.
           const steamAppId = hit.source === 'steam' ? hit.appId : undefined
           const id = await addManualGame(hit.name, steamAppId)
           if (hit.source === 'sgdb') await setArtSource(`manual:${id}`, artSourceFor(hit))
@@ -613,18 +529,10 @@ async function main(): Promise<void> {
     checkNow('add')
   }
 
-  /**
-   * Re-match a game's artwork.
-   *
-   * Reachable for any game, not just hand-added ones: a Steam release can have
-   * no cover on the CDN, or be listed there under a different name, and until
-   * now there was no way back from that.
-   */
+  /** Re-match any game's artwork, as Steam's CDN can lack a cover. */
   function openArtwork(game: Game): void {
     if (!steamGridDbKey) {
-      // Searching Steam here is what made the previous attempts do nothing:
-      // the obvious match is the game itself, and re-pointing a game at its own
-      // appid changes exactly nothing.
+      // Steam alone would just match the game to its own appid, changing nothing.
       toast(
         'Finding artwork needs a SteamGridDB key — it is the source that has ' +
           'the art Steam is missing. Add one in Settings (Select).',
@@ -657,8 +565,6 @@ async function main(): Promise<void> {
     checkNow('artwork')
   }
 
-  // Whether the second artwork source is available at all. Read once at start
-  // and refreshed when settings change.
   let steamGridDbKey = ''
   let savedSort = 'recent'
   async function refreshSettings(): Promise<void> {
@@ -668,8 +574,7 @@ async function main(): Promise<void> {
       savedSort = s.sort || 'recent'
       applyBackgroundStyle(s.backgroundStyle)
     } catch (e) {
-      // Losing settings means the saved sort and the SteamGridDB key both
-      // quietly revert, which reads as "it forgot" rather than as a failure.
+      // Logged, as a silent revert to defaults looks like forgetting.
       logWarn('settings', 'could not read settings; using defaults', e)
       steamGridDbKey = ''
       applyBackgroundStyle('grain')
@@ -680,9 +585,7 @@ async function main(): Promise<void> {
 
   const settings = createSettings(() => {
     void refreshSettings()
-    // Artwork was cleared, so every <img> must be asked again. Reloading the
-    // library rebuilds them all with the same URLs, which the webview will now
-    // re-request because the cache behind them is empty.
+    // Rebuilds every <img> so cleared artwork is fetched again.
     void reloadLibrary()
   }, () => osk.close())
 
@@ -690,17 +593,12 @@ async function main(): Promise<void> {
     onPlay: () => void play_(grid.focused),
     onChanged: () => void reloadLibrary(),
     onFindArtwork: openArtwork,
-    // Only when a pad is what is being held -- putting a keyboard on screen
-    // for someone who has one in front of them is in the way, not helpful.
-    // A closure rather than a conditional hook because heldDevice changes
-    // live, after this callback is wired up.
+    // A closure because heldDevice changes after this is wired up.
     onTextField: (field) => { if (wantsOsk(heldDevice)) osk.attach(field) },
     onTextFieldClosed: () => osk.close(),
   })
 
-  // Steam writes playtime into localconfig itself, so returning to the window
-  // after playing is exactly when a rescan is worth doing -- it picks up the
-  // real figure from Steam's own records with no process watching at all.
+  // Steam records playtime itself, so a rescan on return picks it up.
   let lastRefresh = Date.now()
   window.addEventListener('focus', () => {
     if (Date.now() - lastRefresh < 30_000) return
@@ -714,19 +612,15 @@ async function main(): Promise<void> {
     left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1],
   }
   const hud = createHud(grid, createFrameMeter())
-  // A starting guess for what is held, good enough for the very first paint
-  // below -- refreshHints() takes over from the moment real input arrives.
+  // A first guess; refreshHints() corrects it on real input.
   const pad = await padStatus()
   heldDevice = pad.connected > 0 ? 'pad' : 'keyboard'
 
   await createInput((e) => {
     hud.noteInput(e.latency)
 
-    // Overlays take input entirely while open, innermost first. Letting
-    // navigation fall through would move the selection behind them, so closing
-    // one would land the cursor somewhere the user never put it.
-    //
-    // The keyboard is innermost of all: while it is up, the pad is typing.
+    // Overlays swallow input, innermost first, so the selection behind them
+    // does not move.
     if (osk.handle(e.action)) return
     if (menu.handle(e.action)) return
     if (settings.handle(e.action)) return
@@ -740,7 +634,6 @@ async function main(): Promise<void> {
         return
       }
       if (e.action === 'a') {
-        // Nothing to play on an empty library, so A does the only useful thing.
         if (!view.length) openAdd()
         else void play_(grid.focused)
         return
@@ -752,13 +645,8 @@ async function main(): Promise<void> {
       if (e.action === 'y') { openDetails(grid.focused); return }
       if (e.action === 'sort') { openSort(); return }
     }
-    // The shoulders move between the tabs along the top -- All, Favourites,
-    // Installed, Never played, Hidden -- which is what a console does with
-    // them and what they look like they should do.
-    //
-    // They used to scroll the grid three rows at a time, which was a worse
-    // idea twice over: the sticks already scroll, and a second thing that
-    // scrolls slightly differently is just a surprise.
+    // Shoulders change tab, as on a console. They once scrolled the grid, which
+    // duplicated the sticks; do not bring that back.
     if (e.action === 'lb' || e.action === 'rb') {
       choosePreset(e.action === 'rb' ? 1 : -1)
       return
@@ -768,8 +656,8 @@ async function main(): Promise<void> {
     if (d) grid.move(d[0], d[1])
   }, refreshHints)
 
-  // Something has to be on screen before the first key is pressed. A pad is
-  // assumed only when one is actually connected.
+  // The legend must show before the first key is pressed. Assume a pad only
+  // when one is connected.
   refreshHints(heldDevice)
 
   await hud.attach({
@@ -780,12 +668,8 @@ async function main(): Promise<void> {
     total: games.length,
   })
 
-  // A handle on the running interface, for development only.
-  //
-  // Overlays and selection are otherwise reachable only through real input,
-  // which makes them awkward to inspect from a console or a driven browser --
-  // and an overlay nobody can open is an overlay nobody can check. Also lets
-  // the self-check reach state it would otherwise have to infer from the DOM.
+  // Development only: lets a console, a driven browser or the self-check open
+  // overlays and read state without real input.
   if (import.meta.env.DEV) {
     Object.assign(window as unknown as Record<string, unknown>, {
       __marquee: {
@@ -810,12 +694,8 @@ async function main(): Promise<void> {
     })
   }
 
-  // --- a profile left behind by a previous install ----------------------
-  //
-  // A fresh Windows install wipes %APPDATA% and takes the database with it,
-  // but the games are usually on another drive — and so, if a copy was kept
-  // beside them, is the profile. Offered rather than applied: importing over
-  // someone's library without asking is not a decision to make for them.
+  // A reinstall can lose the database but leave a profile beside the games.
+  // Offered, never imported without asking.
   if (games.length && !games.some((g) => g.favourite || g.hidden || g.provider === 'manual')) {
     void findProfile()
       .then(async (found) => {
@@ -846,9 +726,7 @@ async function main(): Promise<void> {
       .catch(() => { /* no profile is the normal case, not an error */ })
   }
 
-  // If artwork is missing and the source that would fix it is switched off,
-  // say so. Silence here is what made a missing key look like a broken app:
-  // the second source had never been consulted, and nothing on screen said so.
+  // Say when missing artwork needs a SteamGridDB key, or it looks like a bug.
   if (!steamGridDbKey && games.length) {
     void artworkReport(games.map((g) => g.providerId).filter((id) => /^\d+$/.test(id)))
       .then((report) => {
@@ -865,20 +743,13 @@ async function main(): Promise<void> {
       .catch(() => { /* a report we cannot read is not worth a message */ })
   }
 
-  // Asserts the invariants error handling cannot see -- artwork actually
-  // painted on top, the focus ring not clipped, the shell laid out, the hero
-  // populated. Every silent bug found so far would have failed one of these.
+  // Checks what error handling cannot see: painted artwork, unclipped focus
+  // ring, layout, hero. See docs/DEBUGGING.md.
   if (import.meta.env.DEV || params.get('check') === '1') scheduleSelfCheck()
 
   /**
-   * Offer an update, once, on a quiet screen.
-   *
-   * "Idle" means the library is showing with nothing over it. The check fires
-   * twenty seconds in, and by then the user may well have opened a menu or
-   * started a game -- so it is asked at the moment the answer arrives, not
-   * when the timer was set. If the screen is busy the offer is dropped for
-   * this session rather than retried: a launcher that keeps trying to
-   * interrupt you is worse than one that waits until tomorrow.
+   * Offer an update once, only if no overlay is open when the answer arrives.
+   * A busy screen drops the offer for this session rather than retrying.
    */
   scheduleUpdateCheck(
     () => !menu.isOpen && !settings.isOpen && !detail.isOpen && !picker.isOpen && !osk.isOpen,
@@ -898,8 +769,7 @@ async function main(): Promise<void> {
               if (percent !== undefined) progress.update(`Downloading… ${percent}%`)
             })
           } catch (e) {
-            // The signature check failing lands here too, which is the whole
-            // point of it -- a bad bundle is an error, not an install.
+            // Includes a failed signature check.
             toast(`Update failed. ${String(e)}`, 'error', 8000)
             logWarn('update', 'install failed', e)
           }
@@ -911,8 +781,6 @@ async function main(): Promise<void> {
   logInfo('boot', `ready in ${(performance.now() - started).toFixed(0)} ms · ${games.length} games · shell=${inApp ? 'tauri' : 'browser'}`)
 }
 
-// Installed before anything else runs, so a failure inside main() still
-// reaches the log and the screen. Without it, an unhandled rejection leaves a
-// window that renders nothing with no error anywhere.
+// First, so a failure in main() reaches the log and the screen.
 installErrorHandlers()
 main().catch(async (e) => renderFatal(e, await logPath()))

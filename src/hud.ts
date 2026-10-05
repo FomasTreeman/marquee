@@ -1,18 +1,8 @@
 /**
- * The performance HUD.
- *
- * Priority #1 is performance and docs/PLAN.md §2 states it in numbers, so the
- * numbers live on screen. Two rules learned the hard way:
- *
- *   1. **The instrument must not cost what it measures.** An earlier version
- *      rewrote `innerHTML` twice a second behind a 30px backdrop blur and was
- *      responsible for most of the frame time it was reporting. Built once,
- *      text nodes only, no blur.
- *   2. **Report dropped frames, not just p99.** A p99 over a 180-frame window
- *      is the second worst frame in three seconds, and one frame of rAF jitter
- *      is ordinary in every engine, so the floor sits just above the refresh
- *      interval regardless. Dropped frames is refresh-independent and matches
- *      what a hand on a stick feels.
+ * The performance HUD. Built once with text nodes and no blur, because an
+ * `innerHTML` version behind a backdrop blur cost most of the frame time it
+ * reported. Shows dropped frames as well as p99, which rAF jitter keeps just
+ * above the refresh interval.
  */
 import type { Grid } from './grid'
 import type { FrameStats } from './perf'
@@ -64,9 +54,7 @@ export function createHud(grid: Grid, meter: Meter) {
   let timer: number | undefined
   let refresh: () => void = () => {}
 
-  // Off unless asked for. It is a development instrument, and it was defaulting
-  // on in the shipped application -- a panel of frame timings in the corner of
-  // someone's television. On with ?hud=1, or P at any time.
+  // Off in release builds; on with ?hud=1 or P.
   let visible =
     new URLSearchParams(location.search).get('hud') === '1' ||
     (import.meta.env.DEV && new URLSearchParams(location.search).get('hud') !== '0')
@@ -83,9 +71,7 @@ export function createHud(grid: Grid, meter: Meter) {
     return p.connected === 0 ? 'none connected' : `${p.connected} connected`
   }
 
-  // The meter and the timer run only while the panel is on screen. Rule 1
-  // again: a hidden instrument that still costs a callback a frame is
-  // measuring itself.
+  // The meter and timer run only while shown, so a hidden HUD costs nothing.
   function show(on: boolean): void {
     visible = on
     el.style.display = on ? '' : 'none'
@@ -117,8 +103,6 @@ export function createHud(grid: Grid, meter: Meter) {
         const f = meter.read()
         const interval = f.hz ? 1000 / f.hz : 0
         const droppedPct = (f.dropped / 180) * 100
-        // Both, because they answer different questions: what the frames are
-        // arriving at, and what the display is capable of when pushed.
         set('display', f.hz
           ? `${f.hz} Hz${f.peakHz > f.hz ? ` (peak ${f.peakHz})` : ''} · ${interval.toFixed(1)} ms`
           : '—')

@@ -1,11 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-/**
- * The controller test in Settings taps the input stream and asks Rust for
- * the unmapped buttons too. The Rust side answers with an unlisten function
- * asynchronously, and a tap stopped before that answer arrived kept the Rust
- * listener for the life of the window, reporting to a panel that had gone.
- */
+// `listen` resolves asynchronously; a tap stopped before then must still detach.
 let resolveListen: (un: () => void) => void = () => {}
 vi.mock('@tauri-apps/api/event', () => ({
   listen: () => new Promise<() => void>((resolve) => { resolveListen = resolve }),

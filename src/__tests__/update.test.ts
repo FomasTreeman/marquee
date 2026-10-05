@@ -1,12 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { progressStep, scheduleUpdateCheck, updateMenuItems, type PendingUpdate } from '../update'
 
-/**
- * The plugin verifies signatures; none of that is re-tested here. What is
- * tested is the policy, because the policy is the part that decides whether
- * this app is pleasant to live with -- and "never interrupt" is a rule that
- * quietly stops holding the moment someone reorders a callback.
- */
+/** Tests the offer policy; the plugin's signature checks are not re-tested. */
 
 const update: PendingUpdate = { version: '0.2.0', notes: 'Faster.', install: async () => {} }
 
@@ -32,29 +27,20 @@ describe('when the offer is made', () => {
   })
 })
 
-/**
- * The menu is how the offer is made, so it has to obey the same rules as every
- * other menu: reachable on a pad, and refusable.
- */
 describe('the offer itself', () => {
   const items = updateMenuItems(update)
 
   it('always offers a way to say no', () => {
-    // An update prompt with only one button is a demand, and this app launches
-    // executables -- it does not get to demand things.
     expect(items.map((i) => i.id)).toContain('later')
     expect(items.find((i) => i.id === 'later')?.disabled).toBeUndefined()
   })
 
   it('names the version being offered', () => {
-    // "An update is available" tells you nothing about what you are agreeing
-    // to. The version is the minimum.
     expect(items.find((i) => i.id === 'install')?.detail).toBe('0.2.0')
   })
 
   it('does not make you confirm twice', () => {
-    // Installing is reversible -- the previous version is still downloadable
-    // -- so it does not earn the two-press treatment that shutdown gets.
+    // Installing is reversible, unlike shutdown.
     for (const i of items) expect(i.confirm).toBeUndefined()
   })
 
@@ -63,8 +49,6 @@ describe('the offer itself', () => {
   })
 
   it('offers exactly two choices', () => {
-    // A menu on a television is read from across a room. Two rows is the
-    // whole vocabulary this question needs.
     expect(items).toHaveLength(2)
   })
 })

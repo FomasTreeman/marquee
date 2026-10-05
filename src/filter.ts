@@ -1,17 +1,6 @@
 /**
- * Library filtering.
- *
- * With two hundred games the grid stops being browsable and starts needing a
- * way in. Two of them, deliberately different in kind:
- *
- *   * **Presets**, on the shoulder buttons. Zero-effort, always one press
- *     away, and the only one that works with a thumb on a sofa.
- *   * **A query**, for when you know the name. Needs a keyboard, so it is the
- *     secondary path rather than the primary one.
- *
- * Filtering is pure and synchronous. It never touches the backend: the library
- * is already in memory, and a round trip per keystroke would be slower and
- * could fail.
+ * Library filtering by preset (shoulder buttons) and by query. Pure and
+ * synchronous: the library is already in memory, so no backend round trip.
  */
 import type { Game } from './library'
 
@@ -22,24 +11,16 @@ export const PRESETS: Array<{ id: Preset; label: string }> = [
   { id: 'favourites', label: 'Favourites' },
   { id: 'installed', label: 'Installed' },
   { id: 'unplayed', label: 'Never played' },
-  // The only way back to a hidden game. Hiding something with no route to
-  // unhide it is a trap, not a feature.
+  // The only route back to a hidden game.
   { id: 'hidden', label: 'Hidden' },
 ]
 
-/** Case- and punctuation-insensitive, so "baldurs gate" finds "Baldur's Gate 3"
- *  and "reddead" finds "Red Dead Redemption 2". Typing an apostrophe on a pad
- *  is not something anyone should have to do. */
+/** Case- and punctuation-insensitive, so "baldurs gate" finds "Baldur's Gate 3". */
 function normalise(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9]+/g, '')
 }
 
-/** Extra text a query may match, beyond the title.
- *
- *  Searching "roguelike" or "larian" is a natural thing to try and previously
- *  found nothing. Genres and studios come from metadata, so this only works for
- *  games whose metadata has arrived — which is why it supplements the title
- *  match rather than replacing it. */
+/** Genres and studios a query may match besides the title, once metadata has arrived. */
 export interface Searchable {
   genres?: string[]
   developers?: string[]
@@ -52,8 +33,7 @@ export function matches(
   query: string,
   extra?: Searchable,
 ): boolean {
-  // Hidden games are absent from every view except the one that exists to find
-  // them. Checked first, because it overrides the others.
+  // Hidden games appear only under the hidden preset.
   if (preset === 'hidden') {
     if (!game.hidden) return false
   } else if (game.hidden) {
@@ -68,7 +48,6 @@ export function matches(
   const q = normalise(query)
   if (!q) return true
   if (normalise(game.title).includes(q)) return true
-  // Genre and studio, when metadata has arrived for this game.
   const others = [
     ...(extra?.genres ?? []),
     ...(extra?.developers ?? []),
@@ -78,12 +57,8 @@ export function matches(
 }
 
 /**
- * Sort orders.
- *
- * `recent` is the default and is deliberately not alphabetical: titles arrive
- * progressively from the metadata worker on a first run, so an alphabetical
- * library would reshuffle itself under the cursor for minutes. See the note on
- * `sortKey` for how `name` copes with that.
+ * Sort orders. The default is `recent`, not `name`, because titles arrive
+ * gradually on a first run and an alphabetical grid would reshuffle under the cursor.
  */
 export type Sort = 'recent' | 'played' | 'name' | 'size'
 
@@ -104,8 +79,7 @@ export function sortKey(title: string): string {
 }
 
 export function compare(a: Game, b: Game, sort: Sort): number {
-  // Favourites first in every order. Someone who marked a game wants it near
-  // the front whichever way the library is arranged.
+  // Favourites first in every order.
   if (a.favourite !== b.favourite) return a.favourite ? -1 : 1
 
   switch (sort) {
@@ -113,9 +87,8 @@ export function compare(a: Game, b: Game, sort: Sort): number {
       if (a.playtimeMinutes !== b.playtimeMinutes) return b.playtimeMinutes - a.playtimeMinutes
       break
     case 'name': {
-      // A game whose name has not arrived sorts last rather than under the
-      // empty string, where it would sit above everything and jump when the
-      // name lands.
+      // Untitled games sort last, so they do not jump from the top when the
+      // name arrives.
       const an = a.title ? sortKey(a.title) : '\uffff'
       const bn = b.title ? sortKey(b.title) : '\uffff'
       if (an !== bn) return an < bn ? -1 : 1
@@ -129,8 +102,7 @@ export function compare(a: Game, b: Game, sort: Sort): number {
       if (a.playtimeMinutes !== b.playtimeMinutes) return b.playtimeMinutes - a.playtimeMinutes
       break
   }
-  // Every order ends the same way, so it is total: two games that tie on the
-  // chosen key must not swap places between renders.
+  // Tie-break so the order is total and ties never swap between renders.
   if (a.installed !== b.installed) return a.installed ? -1 : 1
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0
 }
@@ -146,18 +118,13 @@ export function apply(
   for (let i = 0; i < games.length; i++) {
     if (matches(games[i]!, preset, query, extra?.(games[i]!))) out.push(i)
   }
-  // Indices, sorted by the games behind them, so the caller keeps a stable
-  // mapping back into the library.
+  // Return indices so the caller keeps a mapping back into the library.
   out.sort((x, y) => compare(games[x]!, games[y]!, sort))
   return out
 }
 
-/** Accessible name for the always-visible search button: the query when one
- *  is active, so a screen reader hears what is being searched for, or an
- *  invitation to type one when it is not. Not shown sighted -- the field the
- *  button opens already carries the query, and repeating it as the button's
- *  own visible label was a query shown three times over between the button,
- *  the field, and the result count. */
+/** Accessible name for the search button: the active query, or "Search".
+ *  Not shown visibly, as the field already shows the query. */
 export function searchLabel(query: string): string {
   const q = query.trim()
   return q ? `“${q}”` : 'Search'
@@ -171,8 +138,7 @@ export function describe(
   sort: Sort = 'recent',
 ): string {
   const label = PRESETS.find((p) => p.id === preset)?.label ?? 'All'
-  // A sort the build does not know -- saved by another version -- reads as
-  // the default it falls back to, not as the word "undefined" in the corner.
+  // An unknown sort saved by another version reads as the default, not "undefined".
   const known = SORTS.find((s) => s.id === sort)
   const order = !known || known.id === 'recent' ? '' : ` · ${known.label}`
   if (query.trim()) return `“${query.trim()}” · ${shown} of ${total}${order}`

@@ -1,13 +1,6 @@
-# CI on all three platforms.
-#
-# docs/PLAN.md §3 names three webview engines as the defining risk of the
-# stack, and the mitigation is that divergence is found in week one rather than
-# month four. That only works if every commit is built everywhere, so this runs
-# on all three from the start rather than "before release".
-#
-# This catches the compile-time half of that risk. The runtime half needs the
-# screenshot diff in §3, which is not built yet. Releases are a separate
-# workflow -- see release.yml and docs/UPDATES.md.
+# Builds and tests every commit on Linux, Windows and macOS, so divergence
+# between the three webview engines shows up at once (docs/PLAN.md §3).
+# Releases are separate: see release.yml and docs/UPDATES.md.
 
 name: CI
 
@@ -16,14 +9,8 @@ on:
     branches: [main]
   pull_request:
 
-# Explicit, and read-only, because CI builds and tests and writes nothing.
-#
-# Every workflow here declares what it needs, so the repository-wide default is
-# only ever a ceiling. That matters more than it looks: with the default set to
-# read, a `permissions:` block asking for write is *ignored* rather than
-# honoured -- the setting is a cap, not a starting point -- and the symptom is
-# "Resource not accessible by integration" from a workflow that plainly asked
-# for the permission it was denied.
+# Read-only. Every workflow declares its own permissions per job or workflow;
+# the repository default is only a ceiling, and a request above it is ignored.
 permissions:
   contents: read
 
@@ -38,20 +25,13 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    # release.yml describes CI as "about two minutes of work" and refuses
-    # to release without it. Nothing enforced that number, so a wedged
-    # Windows link had six hours of default to sit in.
+    # A wedged Windows link once had the six-hour default to sit in.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Defender scans every file cargo writes, and cargo writes tens of
-      # thousands of them. It is the single biggest cause of a Windows job
-      # sitting apparently idle for minutes at a time.
-      #
-      # Tolerant of failure on purpose: this is a speed-up, not a
-      # requirement, and a runner image that has moved Defender or dropped the
-      # cmdlet should not fail the build over it.
+      # Defender scanning cargo output is the main cause of slow Windows jobs.
+      # A speed-up only, so a runner without the cmdlet must not fail the build.
       - name: Keep Defender out of the build directories
         if: runner.os == 'Windows'
         shell: pwsh
@@ -63,8 +43,7 @@ jobs:
           Add-MpPreference -ExclusionProcess "rustc.exe" -ErrorAction SilentlyContinue
           Write-Host "Defender exclusions applied."
 
-      # WebKitGTK and its build dependencies. Nothing else in the matrix needs
-      # anything: WebView2 ships with Windows, WKWebView with macOS.
+      # WebKitGTK. Windows and macOS ship their webviews.
       - name: Linux dependencies
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -81,9 +60,8 @@ jobs:
         with:
           version: 9
 
-      # After pnpm, not before. `cache: pnpm` asks pnpm where its store is,
-      # so with the old order it found nothing and cached nothing -- silently,
-      # which is the only kind of missing cache there is.
+      # After pnpm: `cache: pnpm` asks pnpm for its store path, and before
+      # setup it silently cached nothing.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 20
@@ -96,17 +74,9 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # ---------------------------------------------------------------------
-      # Everything from here to the Rust step reads files and runs pure
-      # functions, so all three runners were computing the same answer. Three
-      # copies of it bought three identical failures to read and, on Windows,
-      # the slowest copy of each. Only cargo genuinely needs the matrix.
-      #
-      # They stay inside this job rather than moving to one of their own
-      # because the branch ruleset requires `build (ubuntu-latest)`,
-      # `build (windows-latest)` and `build (macos-latest)` by name. A new job
-      # would not be in that list, so a lint failure would stop blocking a
-      # merge -- and it would stop quietly, which is the failure this
-      # repository is worst at seeing.
+      # Platform-independent checks, so they run on Linux only. They stay in
+      # this job because the ruleset requires the `build (...)` job names; a
+      # separate job would quietly stop blocking merges.
       # ---------------------------------------------------------------------
       - name: Design tokens are in step with their source
         if: matrix.os == 'ubuntu-latest'
@@ -116,32 +86,25 @@ jobs:
           git diff --exit-code src/css/tokens.css \
             || { echo "::error::tokens.css is stale. Run: pnpm tokens"; exit 1; }
 
-      # A discarded failure with no log call and no comment saying why. Cheap,
-      # and it runs before the slow steps so it fails fast.
       - name: No unexplained discarded failures
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: tools/check-silence.sh
 
-      # The rules that decide what a person sees when they come back to a pile
-      # of work. Pure, so they cost nothing to check.
       - name: Board rules
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: node .github/scripts/board.test.mjs
 
-      # A schema-invalid workflow does not fail loudly -- it fails as a run
-      # named after the file path, in zero seconds, which reads like a rename
-      # rather than a break. Releases stopped for three merges before anyone
-      # noticed.
+      # An invalid workflow fails as a zero-second run named after its path,
+      # which once stopped releases for three merges unnoticed.
       - name: Workflows GitHub will accept
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: python3 tools/check-workflows.py
 
-      # Being refused a tool is not an error -- the agent is told no, carries
-      # on without it, and reports success having delivered nothing. Three
-      # separate stalls came from an instruction the tool list forbade.
+      # A refused tool does not fail the agent; it reports success having
+      # done nothing.
       - name: The agent can run what it is told to run
         if: matrix.os == 'ubuntu-latest'
         shell: bash
@@ -154,29 +117,14 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: pnpm exec vitest run
 
-      # Not ubuntu-only, and this one is not optional anywhere:
-      # `generate_context!` embeds the built frontend, so without dist/ the
-      # crate does not compile at all -- "the `frontendDist` configuration is
-      # set to `../dist` but this path doesn't exist", from a proc macro, which
-      # reads like a broken toolchain rather than a missing build step.
+      # Needed on every OS: `generate_context!` embeds dist/, and without it
+      # the crate fails to compile with a misleading proc-macro error.
       - run: pnpm exec vite build
 
-      # Warnings are errors here but not locally: a warning that blocks the
-      # inner loop gets silenced, and a warning nothing checks accumulates.
-      #
-      # `--lib` because every test is in the library. Plain `cargo test` also
-      # built the binary and a second test harness around it -- two whole-
-      # application links, on Windows the slowest thing in the run by a wide
-      # margin -- to find out that main.rs is six lines and holds no tests.
-      # It counted 128 tests before and counts the same 128 now. clippy still
-      # compiles main.rs, and release.yml links the real binary on all four
-      # targets on every push to main, in the profile that actually ships, so
-      # this was never the only proof that the thing links.
-      #
-      # opt-level 0 applies to our crate alone: the `package."*"` override in
-      # Cargo.toml pins the dependencies at 3 regardless, so this changes no
-      # dependency fingerprint and leaves the rust-cache valid. Tests that
-      # finish in under a second do not need optimising first.
+      # Warnings are errors in CI only, so they do not block the inner loop.
+      # `--lib` because every test is in the library, and linking the binary
+      # twice was the slowest part on Windows; release.yml proves it links.
+      # opt-level 0 affects only our crate, so the dependency cache stays valid.
       - name: Rust
         working-directory: src-tauri
         env:

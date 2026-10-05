@@ -1,19 +1,10 @@
-/**
- * Frontend logging, forwarded to the Rust log file.
- *
- * A webview's console goes nowhere unless someone has devtools open at the
- * exact moment something throws. That is not a debugging story — it is the
- * reason a blank window and a broken window look identical from the outside.
- *
- * So everything here is mirrored into `marquee.log` alongside the Rust lines,
- * in order, with a source tag. `pnpm logs` tails it.
- */
+/** Frontend logging, mirrored into `marquee.log` beside the Rust lines, since a
+ *  webview's console is lost without devtools open. `pnpm logs` tails it. */
 import { invoke } from '@tauri-apps/api/core'
 import { inApp } from './host'
 
 export type Level = 'debug' | 'info' | 'warn' | 'error'
 
-/** Anything at all, rendered as a string that is actually useful. */
 function describe(value: unknown): string {
   if (value instanceof Error) return `${value.name}: ${value.message}\n${value.stack ?? ''}`
   if (typeof value === 'string') return value
@@ -24,12 +15,7 @@ function describe(value: unknown): string {
   }
 }
 
-/**
- * Never throws and never awaits.
- *
- * Logging that can fail is worse than no logging: it turns a diagnosable bug
- * into two bugs, and the second one hides the first.
- */
+/** Never throws and never awaits, so a logging failure cannot hide the bug. */
 export function log(level: Level, source: string, message: string, detail?: unknown): void {
   const line = `[${source}] ${message}`
   if (level === 'error') console.error(line, detail ?? '')
@@ -51,15 +37,8 @@ export const logInfo = (src: string, msg: string, d?: unknown) => log('info', sr
 export const logWarn = (src: string, msg: string, d?: unknown) => log('warn', src, msg, d)
 export const logError = (src: string, msg: string, d?: unknown) => log('error', src, msg, d)
 
-/**
- * Catch everything the interface can throw, including the things that are
- * normally silent.
- *
- * `unhandledrejection` is the important one: `void main()` on an async
- * function swallows every rejection, and the symptom is a window that renders
- * nothing with no error anywhere. That is precisely the failure this exists to
- * make impossible.
- */
+/** Log every uncaught error, above all unhandled rejections, which otherwise
+ *  leave a blank window with no error anywhere. */
 export function installErrorHandlers(): void {
   window.addEventListener('error', (e) => {
     logError('ui', e.message, e.error ?? `${e.filename}:${e.lineno}:${e.colno}`)
@@ -69,9 +48,7 @@ export function installErrorHandlers(): void {
     logError('ui', 'unhandled promise rejection', e.reason)
   })
 
-  // Mirror anything the app or a library writes to console.error/warn, so a
-  // third-party warning is not invisible just because it did not come through
-  // our own helpers.
+  // Mirror console.error/warn too, so third-party warnings reach the log.
   for (const level of ['error', 'warn'] as const) {
     const original = console[level].bind(console)
     console[level] = (...args: unknown[]) => {
@@ -92,12 +69,7 @@ export function installErrorHandlers(): void {
   }
 }
 
-/**
- * A fatal error the user can actually see.
- *
- * The alternative is a black window, which is indistinguishable from the
- * design working correctly on a library with no games in it.
- */
+/** Show a fatal error on screen rather than leave a black window. */
 export function renderFatal(error: unknown, logFile?: string): void {
   const panel = document.createElement('div')
   panel.className = 'fatal'

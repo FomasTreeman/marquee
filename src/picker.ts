@@ -1,16 +1,6 @@
 /**
- * Pick a game by name.
- *
- * One overlay serving two jobs, because they are the same question asked twice:
- *
- *   * **Adding a game.** Type a name, get a game.
- *   * **Fixing artwork.** A Steam release with no cover on the CDN, or a
- *     hand-added copy matched to the wrong entry. Same search, and the answer
- *     is an appid to borrow art from rather than a game to create.
- *
- * Sharing it is not just economy. The second job only exists because the first
- * one can be wrong, so they must show the same candidates in the same order --
- * otherwise the fix cannot reach what the mistake reached.
+ * Pick a game by name, both to add a game and to fix its artwork. One overlay
+ * for both, so the fix offers the same candidates the original match did.
  */
 import { searchGames, searchArtwork, coverFor, type SearchHit } from './library'
 import { logWarn } from './log'
@@ -22,12 +12,8 @@ export interface PickRequest {
   heading: string
   sub: string
   initial?: string
-  /** Which catalogue to search.
-   *
-   *  `games` is the Steam store — "which game is this". `artwork` is
-   *  SteamGridDB — "whose artwork should this use". Using the first for the
-   *  second was the bug: it could only ever offer another Steam appid, which
-   *  is no help when the missing artwork is Steam's. */
+  /** `games` searches the Steam store; `artwork` searches SteamGridDB, which
+   *  can help when Steam itself has no artwork. */
   source?: 'games' | 'artwork'
   /** Offer a file picker alongside the search field. */
   browse?: {
@@ -35,18 +21,13 @@ export interface PickRequest {
     /** Runs the dialog; resolves to the chosen path, or null if cancelled. */
     choose(): Promise<string | null>
   }
-  /** Return true to close. Rejecting leaves the overlay up with its results.
-   *  `file` is whatever `browse` produced, if anything. */
+  /** Return true to close; rejecting keeps the results. `file` comes from `browse`. */
   onPick(hit: SearchHit, file: string | null): Promise<boolean>
 }
 
 /**
- * Guess a game's name from the path to its executable.
- *
- * The folder is named after the game far more often than the executable is --
- * `.../Elden Ring/Game/eldenring.exe` -- so walk up past the structural
- * directories every engine creates and use the first name that looks like a
- * title. It only has to be close: it seeds a search the user confirms.
+ * Guess a game's name from its executable path, to seed a search. Uses the
+ * nearest non-structural folder, as in `.../Elden Ring/Game/eldenring.exe`.
  */
 export function nameFromPath(path: string): string {
   const parts = path.split(/[/\\]/).filter(Boolean)
@@ -107,8 +88,7 @@ export function createPicker(onClose?: () => void): Picker {
       const img = el('img', undefined, card)
       img.alt = ''
       img.loading = 'lazy'
-      // Steam's own thumbnail is the last resort, and it is wide rather than
-      // portrait, so it is contained rather than cropped to a sliver.
+      // Fall back to Steam's wide thumbnail, contained rather than cropped.
       let triedThumbnail = false
       img.addEventListener('error', () => {
         if (!triedThumbnail && hit.thumbnail) {
@@ -119,24 +99,17 @@ export function createPicker(onClose?: () => void): Picker {
         }
         img.style.visibility = 'hidden'
       })
-      // Only reached for Steam's own thumbnail, which is a wide capsule. A
-      // cover from the artwork pipeline is always portrait.
       img.addEventListener('load', () => {
         if (img.naturalWidth > img.naturalHeight) img.style.objectFit = 'contain'
       })
-      // A SteamGridDB result has no Steam appid to build a cover from, so its
-      // own thumbnail is the picture. Decided by `source` rather than by
-      // sniffing the id for a prefix -- the prefix moved to the caller, and
-      // this check had quietly stopped matching anything.
+      // A SteamGridDB hit has no appid to build a cover from. Decided by
+      // `source`; an id-prefix check silently stopped matching once.
       img.src = hit.source === 'sgdb'
         ? (hit.thumbnail || '')
         : (coverFor(hit) ?? hit.thumbnail)
       const name = el('span', undefined, card)
       name.textContent = hit.name
-      // Which catalogue this came from. Worth a line of type: the two answer
-      // different questions -- a Steam entry brings metadata as well as art,
-      // a SteamGridDB one brings art alone -- and until now there was no way
-      // to tell from the screen whether both were even being searched.
+      // A Steam hit brings metadata and art; a SteamGridDB hit brings art only.
       const from = el('span', 'picker-source', card)
       from.textContent = hit.source === 'sgdb' ? 'SteamGridDB' : 'Steam'
       card.onclick = () => { selected = i; void choose() }
@@ -155,10 +128,6 @@ export function createPicker(onClose?: () => void): Picker {
     }
     status.textContent = 'Searching…'
     try {
-      // Both searches return the same shape now, tagged with the catalogue
-      // each hit came from. The prefixing that used to happen here moved to
-      // the caller, because "add a game" and "borrow artwork" want different
-      // things from a SteamGridDB hit.
       const found = request?.source === 'artwork'
         ? await searchArtwork(term)
         : await searchGames(term)
@@ -189,8 +158,7 @@ export function createPicker(onClose?: () => void): Picker {
     const chosen = await request.browse.choose()
     if (!chosen) return
     file = chosen
-    // The file answers "where is it"; the search still answers "what is it",
-    // because artwork and metadata are keyed by the game, not the path.
+    // Still search, because artwork and metadata are keyed by game, not path.
     const guess = nameFromPath(chosen)
     field.value = guess
     status.textContent = `Found ${chosen.split(/[/\\]/).pop()} — now pick the game it is`
@@ -203,16 +171,14 @@ export function createPicker(onClose?: () => void): Picker {
     field.blur()
     request = undefined
     generation++
-    // The field this panel owns is the only reason the on-screen keyboard is
-    // ever attached here; leaving it up after the panel closes is issue #18.
+    // Lets the caller dismiss the on-screen keyboard (issue #18).
     onClose?.()
   }
 
   field.addEventListener('input', () => {
     window.clearTimeout(timer)
     const term = field.value
-    // Debounced: typing "hollow knight" is thirteen keystrokes and Steam's
-    // search endpoint should see one request, not thirteen.
+    // Debounced so Steam sees one request per pause, not one per keystroke.
     timer = window.setTimeout(() => void run(term), DEBOUNCE_MS)
   })
 
@@ -225,8 +191,7 @@ export function createPicker(onClose?: () => void): Picker {
       file = null
       open = true
       root.hidden = false
-      // See the note in detail.ts: a transition started in the same frame as
-      // `display` changing does not run in WebKit.
+      // WebKit skips a transition started in the same frame as a `display` change.
       root.classList.add('is-entering')
       requestAnimationFrame(() => requestAnimationFrame(() => root.classList.remove('is-entering')))
       browseButton.hidden = !next.browse
@@ -239,8 +204,7 @@ export function createPicker(onClose?: () => void): Picker {
       selected = 0
       status.textContent = ''
       results.textContent = ''
-      // Focus after the frame: focusing a hidden element does nothing in
-      // WebKit, and the element is still hidden this tick.
+      // WebKit ignores focus on an element that is still hidden this tick.
       requestAnimationFrame(() => field.focus())
       if (field.value) void run(field.value)
     },
@@ -249,8 +213,7 @@ export function createPicker(onClose?: () => void): Picker {
 
     handle(action) {
       if (!open) return false
-      // Everything is consumed while open, so navigation cannot reach the grid
-      // behind the overlay.
+      // Consume everything so navigation cannot reach the grid behind.
       switch (action) {
         case 'b': close(); break
         case 'a': void choose(); break

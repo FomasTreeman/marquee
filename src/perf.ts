@@ -1,33 +1,18 @@
-/**
- * Frame timing.
- *
- * Priority #1 is performance, and docs/PLAN.md §2 states it in numbers. A
- * budget nobody can see is a budget nobody keeps, so this runs in dev and
- * puts the truth on screen.
- */
+/** Frame timing against the budget in docs/PLAN.md §2. */
 
 export interface FrameStats {
   fps: number
-  /** 99th percentile frame time. The number that actually matters: a mean of
-   *  60fps with a 40ms spike every second still feels broken on a pad. */
+  /** 99th percentile frame time; a good mean can hide a spike every second. */
   p99: number
   worst: number
-  /** Refresh rate the frames are actually arriving at, from the median
-   *  interval. Without it a p99 is uninterpretable -- 18 ms is a comfortable
-   *  pass at 60 Hz and two dropped frames at 120 Hz. */
+  /** Refresh rate from the median interval, without which a p99 cannot be
+   *  read: 18 ms passes at 60 Hz and drops frames at 120 Hz. */
   hz: number
-  /** The fastest interval seen in the window, as a rate.
-   *
-   *  Distinguishes "this display cannot go faster" from "the compositor chose
-   *  not to". macOS ProMotion is adaptive: it settles at a lower rate when
-   *  content is static and ramps up under sustained animation, so a still grid
-   *  reporting 60 Hz on a 120 Hz panel is the display working correctly, not a
-   *  cap. If `peakHz` reaches 120 while `hz` sits at 60, that is what is
-   *  happening. */
+  /** The fastest rate seen. Adaptive displays such as ProMotion idle at 60 Hz,
+   *  so a high `peakHz` over a low `hz` is the display resting, not a cap. */
   peakHz: number
-  /** Frames that overran the display's own interval by half or more. This is
-   *  the honest metric: refresh-independent, and it counts the judder a hand
-   *  on a stick actually feels. */
+  /** Frames that overran the display's interval by half or more; independent
+   *  of refresh rate. */
   dropped: number
 }
 
@@ -38,19 +23,14 @@ function nearestHz(medianMs: number): number {
   return rates.reduce((a, b) => (Math.abs(b - measured) < Math.abs(a - measured) ? b : a))
 }
 
-/**
- * Measures only between start() and stop(). It used to run from creation for
- * the life of the process, a callback every frame in every release build for
- * a readout nobody had opened; the HUD starts it when shown.
- */
+/** Measures only between start() and stop(), so a closed HUD costs nothing. */
 export function createFrameMeter(windowSize = 180) {
   const times: number[] = []
   let last = 0
   let raf = 0
 
   function tick(now: number) {
-    // The first frame after a start only sets the clock: measured from the
-    // moment of the call it would report the wait as a dropped frame.
+    // The first frame only sets the clock, or the wait counts as a drop.
     if (last) times.push(now - last)
     last = now
     if (times.length > windowSize) times.shift()
@@ -75,9 +55,7 @@ export function createFrameMeter(windowSize = 180) {
       const at = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * q))] ?? 0
       const median = at(0.5)
       const hz = nearestHz(median)
-      // The 5th percentile rather than the outright minimum: one freakishly
-      // short interval after a stall would otherwise claim a rate the display
-      // never sustained.
+      // 5th percentile, since one short interval after a stall overstates the rate.
       const peakHz = nearestHz(at(0.05))
       const interval = 1000 / hz
       return {
@@ -93,12 +71,8 @@ export function createFrameMeter(windowSize = 180) {
 }
 
 /**
- * Film grain as a single static tile.
- *
- * Generated once into a data URI and handed to CSS as a repeating background.
- * It must never be an animated canvas or a live SVG `feTurbulence` filter —
- * those repaint every frame for an effect the eye reads as texture, and it is
- * the classic way to lose a frame budget to something nobody asked for.
+ * Film grain as one static tile, generated once for a repeating background.
+ * An animated canvas or live `feTurbulence` would repaint every frame.
  */
 export function installGrainTile(size = 128): void {
   const c = document.createElement('canvas')
@@ -117,14 +91,8 @@ export function installGrainTile(size = 128): void {
 
 export type BackgroundStyle = 'grain' | 'blur'
 
-/**
- * Which background style a saved setting names.
- *
- * Anything other than exactly `'blur'` -- an empty first-run value, or a
- * value from a profile written by an older or newer build -- falls back to
- * grain rather than resolving to neither, which would leave the window with
- * no background treatment at all and nothing to say why.
- */
+/** Which background style a saved setting names; anything unrecognised is
+ *  grain, so the window never ends up with neither. */
 export function resolveBackgroundStyle(value: string): BackgroundStyle {
   return value === 'blur' ? 'blur' : 'grain'
 }

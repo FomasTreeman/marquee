@@ -1,32 +1,13 @@
-# Prove each token can do its own job, and nothing else.
-#
-# Actions -> Token check -> Run workflow.
-#
-# A token short of one permission does not fail loudly. The board moves cards
-# but never touches a label; the agent opens a pull request but cannot comment;
-# a commit touching a workflow file is refused with a message nobody reads.
-# Each looks like a different bug and none looks like permissions.
-#
-# Three tokens, three jobs, each checked against what it is actually for. That
-# separation is the point: testing repository access against the board token
-# would send somebody adding `repo` to a classic token that does not need it,
-# and a classic token with `repo` can write to every repository on the account.
-#
-# Read-only, apart from one label added and immediately removed.
-#
-# Weekly, as well as on demand. Running this only when somebody remembered to
-# meant it could not catch the thing it is best placed to catch: a classic
-# token has an expiry date, and the day it passes nothing announces itself --
-# the board simply stops moving, which looks like a bug in the board. A run
-# that fails on a Monday morning is the announcement.
+# Checks each token can do its own job and carries no more than it needs, and
+# warns before a token expires, since a missing permission or an expired token
+# fails silently. Weekly and on demand (Actions -> Token check -> Run workflow).
+# Read-only apart from one label added and removed.
 
 name: Token check
 
 on:
   schedule:
-    # Monday, before anything else runs. Dependabot opens its pull requests the
-    # same morning, so a token that expired over the weekend is found before it
-    # is blamed for those.
+    # Monday morning, before Dependabot's pull requests arrive.
     - cron: '13 7 * * 1'
   workflow_dispatch:
 
@@ -46,9 +27,7 @@ jobs:
           PROJECT_TOKEN: ${{ secrets.PROJECT_TOKEN }}
           PROJECT_NUMBER: ${{ vars.PROJECT_NUMBER || 8 }}
         with:
-          # Deliberately not github-token. Everything here goes through
-          # PROJECT_TOKEN by hand, so nothing can accidentally pass because the
-          # workflow's own token was picked up instead.
+          # No github-token, so nothing passes on the workflow's own token.
           script: |
             const token = process.env.PROJECT_TOKEN
             if (!token) {
@@ -74,9 +53,7 @@ jobs:
               catch (e) { rows.push(['MISSING', what, `${need} — ${e.message.split('\n')[0]}`]) }
             }
 
-            // GitHub returns a personal access token's expiry on every
-            // authenticated response. Nothing was reading it, so the first
-            // sign of an expired token was the automation quietly stopping.
+            // The expiry is in a response header; nothing announces it otherwise.
             const expiry = async () => {
               const res = await fetch('https://api.github.com/rate_limit',
                 { headers: { authorization: `bearer ${token}` } })
@@ -111,13 +88,9 @@ jobs:
               if (missing.length) throw new Error(`no column named ${missing.join(', ')}`)
             })
 
-            // It must NOT carry more than `project`. A classic token with
-            // `repo` as well would grant write access to everything on the
-            // account, to move a card. This used to be tested by asking
-            // whether the token could read this repository, which stopped
-            // meaning anything the day the repository went public: every
-            // token can. GitHub names a classic token's scopes in a response
-            // header instead, so those are read.
+            // It must not carry more than `project`: a classic token with `repo`
+            // can write to every repository on the account. Read the scopes header,
+            // since every token can read a public repository.
             const probe = await fetch('https://api.github.com/rate_limit',
               { headers: { authorization: `bearer ${token}` } })
             const scopes = (probe.headers.get('x-oauth-scopes') || '')
@@ -145,8 +118,7 @@ jobs:
       - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            // Not a PAT. Labels are written by the workflow itself, which is
-            // why PROJECT_TOKEN needs no repository access at all.
+            // Labels use the workflow token, so PROJECT_TOKEN needs no repo access.
             const { owner, repo } = context.repo
             const rows = []
             const try_ = async (what, need, fn) => {
@@ -159,12 +131,8 @@ jobs:
             await try_('read pull requests', 'permissions: pull-requests: read', () =>
               github.rest.pulls.list({ owner, repo, state: 'all', per_page: 1 }))
             await try_('write a label', 'permissions: issues: write', async () => {
-              // listForRepo returns pull requests as well as issues, and a
-              // label on a pull request needs `pull-requests: write` even
-              // though it goes through the issues endpoint. Testing against
-              // whichever came back first reported a missing `issues: write`
-              // that was not missing at all -- and board.yml only ever labels
-              // issues, so it was testing something nothing does.
+              // A plain issue: labelling a pull request needs `pull-requests:
+              // write`, which board.yml never uses and so falsely failed here.
               const { data } = await github.rest.issues.listForRepo({
                 owner, repo, state: 'all', per_page: 20 })
               const issue = data.find((i) => !i.pull_request)
@@ -214,15 +182,11 @@ jobs:
               github.rest.pulls.list({ owner, repo, state: 'all', per_page: 1 }))
             await try_('read issues', 'Issues: Read and write', () =>
               github.rest.issues.listForRepo({ owner, repo, per_page: 1 }))
-            // The one that gets missed. A commit touching anything under
-            // .github/workflows is refused without it, and the agent has
-            // written workflow files more than once.
+            // Commits touching .github/workflows are refused without this.
             await try_('see workflow files', 'Workflows: Read and write', () =>
               github.rest.repos.getContent({ owner, repo, path: '.github/workflows/ci.yml' }))
 
-            // Same as PROJECT_TOKEN: the expiry is in the response headers and
-            // nothing was looking at it. A fine-grained token expires by
-            // default, so this one is the more likely of the two to lapse.
+            // Fine-grained tokens expire by default, so check this one too.
             if (process.env.HAS_TOKEN === 'true') {
               const res = await github.request('GET /rate_limit')
               const when = res.headers['github-authentication-token-expiration']
@@ -255,19 +219,9 @@ jobs:
           HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
         with:
           script: |
-            // Presence only, deliberately. The token is a credential for a
-            // Claude subscription rather than for GitHub, so there is nothing
-            // here that can test it without spending a run of usage -- and the
-            // three workflows that use it will each say plainly if it is
-            // wrong. What they cannot say is anything at all when it is
-            // *missing*, which is the case this covers: claude.yml, review.yml
-            // and ci-repair.yml would each start, install a full toolchain,
-            // and fail at the last step.
-            //
-            // TAURI_SIGNING_PRIVATE_KEY is not checked here on purpose. It
-            // lives in the `release` environment rather than in repository
-            // secrets, and release.yml's `key` job already proves it decodes
-            // before every release rather than weekly.
+            // Presence only: the token cannot be tested without spending usage,
+            // and without it every Claude workflow fails only at its last step.
+            // TAURI_SIGNING_PRIVATE_KEY is checked by release.yml's `key` job.
             if (process.env.HAS_TOKEN !== 'true') {
               core.setFailed(
                 'CLAUDE_CODE_OAUTH_TOKEN is not set. Every Claude workflow will start, '

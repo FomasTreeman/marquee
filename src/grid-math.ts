@@ -1,13 +1,7 @@
 /**
- * The grid's arithmetic, with no DOM in it.
- *
- * Extracted because this is where the grid keeps going wrong. Four separate
- * bugs so far — stale slots left visible when the list shrank, a pool that was
- * never parked, dead space against the right edge, cards misaligned with the
- * hero — and every one of them was arithmetic, found by eye, in a component
- * that could not be tested without a browser.
- *
- * All of it is pure, so all of it is tested.
+ * The grid's arithmetic, kept free of the DOM so it can be tested. Stale
+ * slots, an unparked pool, dead space at the right edge and misalignment with
+ * the hero were all arithmetic bugs found only by eye.
  */
 
 export interface Metrics {
@@ -30,8 +24,8 @@ export interface MetricsInput {
   viewportHeight: number
   /** Preferred card width before fitting. */
   ideal: number
-  /** Horizontal gutter. Wider than the vertical one — cards are portrait, so
-   *  equal gaps read as tighter side to side. */
+  /** Horizontal gutter, wider than the vertical because portrait cards make
+   *  equal gaps look tighter side to side. */
   gapX: number
   gapY: number
   /** Cover aspect, width ÷ height. 2:3 box art is 0.6667. */
@@ -39,12 +33,8 @@ export interface MetricsInput {
   count: number
 }
 
-/**
- * How much a card may grow beyond its ideal width to fill the row.
- *
- * Without a cap, one or two columns produce a card taller than the window: at
- * 1 column the leftover *is* the whole row.
- */
+/** How far a card may grow to fill the row; uncapped, one column makes a card
+ *  taller than the window. */
 export const MAX_GROWTH = 1.35
 
 export function metrics(i: MetricsInput): Metrics {
@@ -54,12 +44,10 @@ export function metrics(i: MetricsInput): Metrics {
   const inner = Math.max(0, i.inner)
   const ratio = i.ratio > 0 ? i.ratio : 0.6667
 
-  // The gutter only exists *between* columns, hence the +gapX on both sides.
+  // Gutters sit only between columns, hence +gapX on both sides.
   const cols = Math.max(1, Math.floor((inner + gapX) / (ideal + gapX)))
 
-  // Cards grow to consume the leftover rather than leaving it as dead space at
-  // one edge; the gutters stay constant so the rhythm does not change with the
-  // window.
+  // Cards grow into the leftover while the gutters stay constant.
   const fitted = (inner - gapX * (cols - 1)) / cols
   const cardW = Math.max(ideal, Math.min(fitted, ideal * MAX_GROWTH))
   const cardH = Math.round(cardW / ratio)
@@ -74,8 +62,7 @@ export function metrics(i: MetricsInput): Metrics {
     cardH,
     rowH,
     sideInset: Math.max(0, (inner - used) / 2),
-    // padTop is one vertical gap, matching the gap between rows, so the first
-    // row is not tighter to the hero than the second is to the first.
+    // One gap above the first row, matching the gap between rows.
     canvasHeight: gapY + rows * rowH,
   }
 }
@@ -90,24 +77,16 @@ export function positionOf(index: number, m: Metrics, gapX: number, gapY: number
   }
 }
 
-/**
- * Move the selection, clamped to the library.
- *
- * Clamping rather than wrapping: on a pad, wrapping from the last item to the
- * first is disorienting, and holding a direction should come to rest at the
- * edge rather than cycling forever.
- */
+/** Move the selection, clamped rather than wrapped so a held direction stops
+ *  at the edge. */
 export function move(index: number, dx: number, dy: number, cols: number, count: number): number {
   if (count <= 0) return 0
   return Math.max(0, Math.min(count - 1, index + dx + dy * cols))
 }
 
 /**
- * The scroll position that brings `index` fully into view, or the current one
- * if it already is.
- *
- * Only ever moves by the minimum needed, so navigating along a visible row
- * does not scroll at all.
+ * The scroll position that brings `index` fully into view, moving by the
+ * minimum needed, or the current one if it already is.
  */
 export function scrollToShow(
   index: number,
@@ -115,10 +94,7 @@ export function scrollToShow(
   m: Metrics,
   viewportHeight: number,
   gapY: number,
-  /**
-   * Smallest space the focused row can have above it before its ring clips.
-   * From `topClearance`.
-   */
+  /** Smallest space above the focused row before its ring clips (`topClearance`). */
   minClearance = 0,
   /** How far a card's shadow reaches below its own box. */
   shadowReach = 0,
@@ -126,19 +102,9 @@ export function scrollToShow(
   const row = Math.floor(index / m.cols)
   const top = gapY + row * m.rowH
   const bottom = top + m.cardH
-
-  // Two opposed constraints, and the direction is easy to get backwards.
-  //
-  // The previous row's card ends `gapY` above this one, and its shadow reaches
-  // `shadowReach` further. Leaving *less* room above the focused row pushes
-  // that shadow out of view — so clipping it wants a SMALL clearance, exactly
-  // `gapY - shadowReach`. The focus ring wants a LARGE one. Taking the larger
-  // of the two satisfies the ring and leaves the shadow showing, which is
-  // precisely the bug this comment exists to prevent recurring.
-  //
-  // When the gap covers both (see gapCoversEdges) `gapY - shadowReach` is
-  // already at least `minClearance` and wins. When it does not, the ring is
-  // protected and the shadow bleeds — the less ugly of the two failures.
+  // The ring wants a large clearance; hiding the previous row's shadow wants a
+  // small one, `gapY - shadowReach`. Taking the plain maximum let the shadow
+  // show. If the gap cannot cover both, the ring wins.
   const above = row === 0 ? gapY : Math.max(minClearance, gapY - shadowReach)
   if (top - above < scrollY) return Math.max(0, top - above)
   if (bottom + gapY > scrollY + viewportHeight) return Math.max(0, bottom + gapY - viewportHeight)
@@ -146,12 +112,8 @@ export function scrollToShow(
 }
 
 /**
- * How much room the focused row needs above it.
- *
- * The focused card is larger than the box the grid lays out: it scales about
- * its centre, so it grows by half the extra height upwards, and its ring sits
- * outside that again. Clearance smaller than this clips the ring against the
- * top of the grid.
+ * Room the focused row needs above it: the card scales about its centre and
+ * its ring sits outside that.
  */
 export function topClearance(cardHeight: number, focusScale: number, ringOffset: number): number {
   const grown = (cardHeight * Math.max(1, focusScale) - cardHeight) / 2
@@ -159,29 +121,16 @@ export function topClearance(cardHeight: number, focusScale: number, ringOffset:
 }
 
 /**
- * Does the vertical gap pay for everything that has to fit inside it?
- *
- * The edge of the grid is a hard one, so exactly two things compete for the
- * space above a row scrolled to the top: the focused card's ring, which needs
- * clearance, and the previous row's shadow, which needs *not* to be cleared
- * into view. The gap has to cover both:
- *
- *     gapY  >=  shadowReach + topClearance
- *
- * A few pixels to spare at the ideal card size, and the card grows with the
- * column width, so it is three tuned numbers and not a property anyone should
- * rely on remembering. Hence a function, a test, and a runtime check.
+ * Whether the vertical gap covers both the focus ring's clearance and the
+ * previous row's shadow: `gapY >= shadowReach + topClearance`. The margin is a
+ * few pixels across three tuned tokens, hence a test and a runtime check.
  */
 export function gapCoversEdges(gapY: number, shadowReach: number, clearance: number): boolean {
   return gapY + 0.5 >= shadowReach + clearance
 }
 
-/**
- * The first item index the pooled slots should render, given where we are.
- *
- * Starts a couple of rows above the fold so a fast scroll does not reveal
- * empty space before the next row is painted.
- */
+/** The first item index the pool should render, starting a few rows above the
+ *  fold so a fast scroll does not reveal empty space. */
 export function firstVisibleIndex(
   scrollY: number,
   m: Metrics,
@@ -199,21 +148,9 @@ export function poolSize(m: Metrics, viewportHeight: number, overscanRows: numbe
 }
 
 /**
- * Ease-out for the scroll glide.
- *
- * Out, not in-out: the movement should start at full speed and settle, because
- * a press is an instruction and easing *into* it reads as lag. The same reason
- * every console list moves this way.
- */
-/**
- * What a recycled slot's image does with the art it is being handed, given
- * what it already holds and which cover last failed to decode in it.
- *
- * A cover that fails to decode is left in place, hidden, so it is not fetched
- * again on every pass. But the same slot handed the same item again -- every
- * layout() does this to every slot -- saw its own src already set and revealed
- * it, and a revealed <img> whose load failed is the browser's broken-image
- * glyph, on a card that had been correctly showing its title.
+ * What a recycled slot's image should do with the art it is handed. A cover
+ * that failed to decode stays hidden, or layout() re-reveals it as the
+ * browser's broken-image glyph.
  */
 export function imageAction(
   current: string | null, failed: string | undefined, art: string | undefined,
@@ -223,24 +160,21 @@ export function imageAction(
   return failed === art ? 'hide' : 'show'
 }
 
+/** Ease-out for the scroll glide: a press should start at full speed, or it
+ *  reads as lag. */
 export function easeOut(t: number): number {
   const c = Math.min(1, Math.max(0, t))
   return 1 - Math.pow(1 - c, 3)
 }
 
 /**
- * Where a scroll glide should be right now.
- *
- * Retargeting rather than restarting is the important part. Holding a direction
- * repeats every 95 ms while the glide lasts ~200 ms, so a glide that restarted
- * from a standstill on every repeat would stutter at exactly the moment
- * smoothness matters most. Continuing from wherever the last one had reached
- * turns a held direction into one continuous movement.
+ * Where a scroll glide should be now. Callers retarget from the current value
+ * rather than restarting, so a held direction is one continuous movement.
  */
 export function glide(from: number, to: number, elapsed: number, duration: number): number {
   if (duration <= 0) return to
   const value = from + (to - from) * easeOut(elapsed / duration)
-  // Snap the last fraction of a pixel: an animation that never quite arrives
-  // keeps scheduling frames forever.
+  // Snap the last half-pixel, or the animation never arrives and keeps
+  // scheduling frames.
   return Math.abs(to - value) < 0.5 ? to : value
 }

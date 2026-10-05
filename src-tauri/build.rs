@@ -1,18 +1,9 @@
 use std::path::Path;
 
 fn main() {
-    // Cargo does not know the interface is an input.
-    //
-    // `generate_context!` compiles the built frontend into the binary, but
-    // nothing tells cargo that. So rebuilding the frontend and then building
-    // the crate produces a binary with the *previous* interface embedded, and
-    // reports success: a stale build that looks identical to a fresh one. That
-    // shipped once, silently, and was only caught by checking the asset hash
-    // inside the executable.
-    //
-    // Directory mtimes are not enough either: changing a file's contents does
-    // not touch the mtime of every directory above it. So every file is
-    // declared individually.
+    // `generate_context!` embeds the frontend, but cargo does not track it, so
+    // a stale interface once shipped. Every file is declared, since editing a
+    // file does not change its parent directories' mtimes.
     if let Some(dist) = frontend_dist() {
         watch(&dist);
     }
@@ -20,8 +11,7 @@ fn main() {
     tauri_build::build()
 }
 
-/// Read `frontendDist` from tauri.conf.json rather than assuming `../dist`, so
-/// the two cannot disagree.
+/// Read `frontendDist` from tauri.conf.json so the two cannot disagree.
 fn frontend_dist() -> Option<std::path::PathBuf> {
     println!("cargo:rerun-if-changed=tauri.conf.json");
     let conf = std::fs::read_to_string("tauri.conf.json").ok()?;
@@ -32,8 +22,7 @@ fn frontend_dist() -> Option<std::path::PathBuf> {
 
 fn watch(path: &Path) {
     let Ok(entries) = std::fs::read_dir(path) else {
-        // Absent before the first frontend build. Declaring the directory means
-        // cargo notices when it appears.
+        // Absent before the first frontend build; watch for it appearing.
         println!("cargo:rerun-if-changed={}", path.display());
         return;
     };

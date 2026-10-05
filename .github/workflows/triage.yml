@@ -1,34 +1,7 @@
-# Route an issue the moment it is filed.
-#
-# The template asks who should fix it; this turns that answer into the label
-# the rest of the automation runs on. Without it somebody has to remember to
-# add a label by hand, and an issue arriving with neither sits in a queue
-# nobody is working through -- which is how a to-do list becomes a graveyard.
-#
-# Separate from board.yml because it runs once, at the start, and answers a
-# different question: not "where does this belong" but "whose is it".
-#
-# ---------------------------------------------------------------------------
-# This is the only thing that decides whether Claude picks an issue up, and
-# the only place that asks who filed it. Everything downstream -- the label
-# event, the Todo sweep, the `@claude` handover comment -- trusts the label,
-# so the gate on strangers has to be here or it is nowhere.
-#
-# It did not used to be the only thing. claude.yml also woke on `issues: opened`, and its
-# opt-out read `github.event.issue.labels` -- the labels in the *event
-# payload*, which at open time hold only what the template applied. The label
-# this workflow was in the middle of writing was not among them, both
-# workflows raced on the same event, and the race was not close: the third
-# option in the dropdown, "Me -- do not touch it", did nothing at all.
-#
-# So the handover is a label event now, which needs one thing to be true.
-# **GitHub will not run a workflow off an event GITHUB_TOKEN caused**, so a
-# `claude` label written by the workflow's own token wakes nothing. Writing it
-# with CLAUDE_WORKFLOW_TOKEN does. Without that secret the label is still
-# correct and nothing starts, so the fallback below says so on the issue
-# rather than leaving somebody waiting on a run that was never going to
-# happen.
-# ---------------------------------------------------------------------------
+# Labels each new issue `claude` or `no-ai`. This is the only gate on who can
+# start an agent run: everything downstream trusts the label. Only users with
+# write access get `claude`. The label is written with CLAUDE_WORKFLOW_TOKEN so
+# its event starts claude.yml; a GITHUB_TOKEN label would trigger nothing.
 
 name: Triage
 
@@ -48,8 +21,7 @@ jobs:
         env:
           HANDOVER: ${{ secrets.CLAUDE_WORKFLOW_TOKEN != '' }}
         with:
-          # The label write is the handover, so it goes through the token that
-          # can trigger a workflow. The comment below could use either.
+          # The label write is the handover, so it needs the PAT.
           github-token: ${{ secrets.CLAUDE_WORKFLOW_TOKEN || github.token }}
           script: |
             const body = context.payload.issue.body || ''
@@ -61,21 +33,9 @@ jobs:
               return
             }
 
-            // Who filed it decides, before what they asked for. The repository
-            // is public and an agent run is subscription usage, so the answer
-            // from a stranger is `no-ai` whatever the dropdown says -- the
-            // template offered "Claude" to anyone, and an issue that took it
-            // up landed in Todo, where pick-up-todo.yml hands it over with the
-            // owner's token. Anyone with a GitHub account could start a run.
-            //
-            // From someone with write access, the agent: an issue the owner
-            // types on a phone with a title and two lines is work they want
-            // done, and `no-ai` on it was a queue nobody was working through.
-            // "Me" in the dropdown is honoured for them too.
-            //
-            // claude.yml no longer runs on `opened` (it double-fired with
-            // `labeled`), so the label this puts on is the only thing that
-            // starts anything.
+            // Only someone with write access gets the agent, whatever the
+            // dropdown says: the repository is public and runs cost usage.
+            // "Me" is honoured. This label is the only thing that starts a run.
             const said = (body.match(/Who should fix this[\s\S]{0,120}?\b(Claude|Me)\b/i) || [])[1] || ''
             const ours = ['OWNER', 'MEMBER', 'COLLABORATOR']
               .includes(context.payload.issue.author_association)
@@ -90,10 +50,7 @@ jobs:
             })
             core.info(`#${context.payload.issue.number} -> ${label}`)
 
-            // Say so whenever the answer was not the one asked for. Silently
-            // deciding that nobody will work on something is worse than
-            // asking, and a stranger who ticked "Claude" deserves to know the
-            // agent does not take requests from the internet.
+            // Explain any answer that differs from what was asked for.
             if (!wantsClaude) {
               const why = askedForClaude
                 ? 'Thanks. The agent here only takes work handed over by a maintainer, '
@@ -110,9 +67,7 @@ jobs:
               return
             }
 
-            // Labelled for Claude, but with a token that cannot wake anything.
-            // The label is right and the run will never start, which is the
-            // exact shape of failure this repository is worst at seeing.
+            // Correct label, but the token cannot trigger the run.
             if (process.env.HANDOVER !== 'true') {
               core.warning(
                 'Labelled `claude`, but CLAUDE_WORKFLOW_TOKEN is not set, so the label '

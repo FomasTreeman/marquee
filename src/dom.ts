@@ -1,5 +1,4 @@
-/** Create an element, optionally classed and appended. The one DOM helper
- *  every screen builds itself from. */
+/** Create an element, optionally classed and appended. */
 export function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
   className?: string,

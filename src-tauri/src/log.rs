@@ -1,19 +1,6 @@
-//! Logging and diagnostics.
-//!
-//! Built because a Tauri app is two runtimes and, by default, you can see
-//! neither: Rust's stdout goes to whatever launched the process, and the
-//! webview's console goes nowhere at all. A blank window with a swallowed
-//! promise rejection looks exactly like a blank window with a layout bug.
-//!
-//! So everything lands in one file, in order, with a source tag:
-//!
-//! ```text
-//! 14:22:01.412 INFO  scan     steam: 1 game in 0 ms
-//! 14:22:01.418 ERROR ui       TypeError: g.providerId is undefined
-//! ```
-//!
-//! The path is printed on startup and returned by the `log_path` command, so
-//! it can always be found without knowing the platform's conventions.
+//! Logging for both runtimes. Rust output and the webview's console go to one
+//! file, in order, tagged by source, since by default the webview's console
+//! goes nowhere.
 
 use std::fmt;
 use std::fs::{File, OpenOptions};
@@ -64,14 +51,10 @@ struct Sink {
 
 static SINK: OnceLock<Mutex<Sink>> = OnceLock::new();
 
-/// Where logs live. Deliberately a plain platform path with no dependency on
-/// an AppHandle, so logging works before Tauri has finished starting -- which
-/// is exactly when the interesting failures happen.
+/// A plain platform path, not from the AppHandle, so logging works before
+/// Tauri has finished starting.
 fn log_dir() -> PathBuf {
-    // Tests must not write into the log of a running app. Otherwise `cargo
-    // test` interleaves migration lines into the diagnostic record someone is
-    // reading to debug something else -- which was exactly what happened, four
-    // identical "migrated to schema v1" lines from four in-memory databases.
+    // Keep `cargo test` output out of a running app's log.
     if cfg!(test) {
         return std::env::temp_dir().join("marquee-test-logs");
     }
@@ -97,13 +80,10 @@ fn log_dir() -> PathBuf {
         .join("marquee");
 }
 
-/// Roll the file over once it passes this, keeping exactly one previous.
-/// A launcher runs for hours on a television; an unbounded log is a slow leak.
+/// Roll the file over past this size, keeping one previous file.
 const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
-// Checked when the constant is edited rather than when the tests are run: a
-// log too small to hold one session is useless for debugging, and one too
-// large is not a bound at all.
+// Big enough to hold a session, small enough to be a real bound.
 const _: () = assert!(MAX_BYTES >= 1024 * 1024 && MAX_BYTES <= 16 * 1024 * 1024);
 
 pub fn path() -> PathBuf {
@@ -116,9 +96,8 @@ fn sink() -> &'static Mutex<Sink> {
         let file = (|| {
             std::fs::create_dir_all(path.parent()?).ok()?;
             if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > MAX_BYTES {
-                // Nothing to report this to: we are inside the initialiser for
-                // the log sink itself. A failed rotation just means the file
-                // keeps growing, which the next launch will try again.
+                // Nowhere to log this from inside the sink's initialiser; the
+                // next launch retries the rotation.
                 let _ = std::fs::rename(&path, path.with_extension("log.1"));
             }
             OpenOptions::new()
@@ -132,8 +111,7 @@ fn sink() -> &'static Mutex<Sink> {
 }
 
 fn stamp() -> String {
-    // Wall-clock to the millisecond, without pulling in a date library for
-    // one line of formatting.
+    // UTC time of day, without a date library.
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
@@ -145,16 +123,14 @@ fn stamp() -> String {
 pub fn write(level: Level, source: &str, message: &str) {
     let line = format!("{} {} {:<8} {}", stamp(), level.tag(), source, message);
 
-    // stderr as well as the file: when run from a terminal the developer
-    // should not have to go looking.
     if level >= Level::Warn {
         eprintln!("{line}");
     } else {
         println!("{line}");
     }
 
-    // Logging must never be the thing that breaks the app. A poisoned mutex or
-    // an unwritable disk is silently tolerated.
+    // Logging must never break the app, so a poisoned mutex or full disk is
+    // ignored.
     if let Ok(mut s) = sink().lock() {
         if let Some(f) = s.file.as_mut() {
             let _ = writeln!(f, "{line}");
@@ -180,11 +156,7 @@ macro_rules! log_debug {
     ($src:expr, $($arg:tt)*) => { $crate::log::write($crate::log::Level::Debug, $src, &format!($($arg)*)) };
 }
 
-/// Log a failure the caller has already decided to survive.
-///
-/// `let _ = write(..)` is how a cache that never persists looks correct
-/// forever: the app works, it just silently redoes the work on every launch
-/// and nothing ever says why. This keeps the tolerance and adds the sentence.
+/// Log a failure the caller has decided to survive, instead of `let _ =`.
 ///
 /// ```text
 /// log_if_err!("art", std::fs::rename(&tmp, path), "caching {}", slug);
@@ -202,8 +174,7 @@ macro_rules! log_if_err {
     };
 }
 
-/// Announce the session. Written first so every log file is self-describing:
-/// which build, which webview, which machine.
+/// Session header: build, webview and platform.
 pub fn banner(webview: &str) {
     let p = path();
     write(Level::Info, "start", &"-".repeat(60));
@@ -221,10 +192,7 @@ pub fn banner(webview: &str) {
     );
 }
 
-/// The webview's console, forwarded here.
-///
-/// Without this, a thrown error in the frontend is invisible unless someone
-/// happens to have devtools open at the moment it happens.
+/// The webview's console, forwarded to the log.
 #[tauri::command]
 pub fn log_from_ui(level: String, source: String, message: String, detail: Option<String>) {
     let level = Level::from(level.as_str());
@@ -239,11 +207,7 @@ pub fn log_path() -> String {
     path().display().to_string()
 }
 
-/// The tail of the log, for the diagnostic report in Settings.
-///
-/// Bounded rather than whole: the point is something a person can paste into
-/// an issue, and a four-megabyte file is not that. The end is what matters --
-/// whatever just went wrong is at the bottom.
+/// The last `lines` of the log, short enough to paste into an issue.
 pub fn tail(lines: usize) -> String {
     let Ok(text) = std::fs::read_to_string(path()) else {
         return String::from("(no log file yet)");
@@ -257,9 +221,6 @@ pub fn tail(lines: usize) -> String {
 mod tests {
     use super::*;
 
-    /// The frontend sends a level as a string. Anything unrecognised has to
-    /// land somewhere visible rather than being dropped or upgraded to a
-    /// warning nobody trusts.
     #[test]
     fn a_level_from_the_ui_is_parsed_generously() {
         assert_eq!(Level::from("debug"), Level::Debug);
@@ -277,8 +238,7 @@ mod tests {
         assert_eq!(Level::from("catastrophe"), Level::Info);
     }
 
-    /// `write` routes to stderr at Warn and above, so the ordering is not
-    /// cosmetic -- it decides which stream a line lands on.
+    /// `write` sends Warn and above to stderr, so the order matters.
     #[test]
     fn levels_order_by_severity() {
         assert!(Level::Debug < Level::Info);
@@ -286,8 +246,6 @@ mod tests {
         assert!(Level::Warn < Level::Error);
     }
 
-    /// Every tag is the same width so the source column lines up. A ragged
-    /// column is the difference between a log you scan and one you read.
     #[test]
     fn tags_are_a_fixed_width() {
         for l in [Level::Debug, Level::Info, Level::Warn, Level::Error] {
@@ -301,8 +259,6 @@ mod tests {
         assert_eq!(Level::Error.to_string(), "ERROR");
     }
 
-    /// Fixed-width, wall-clock, millisecond. Parsed by eye when correlating a
-    /// Rust line against a frontend one, so the shape has to be exact.
     #[test]
     fn the_timestamp_is_fixed_width() {
         let s = stamp();
@@ -325,8 +281,7 @@ mod tests {
         let p = path();
         assert!(p.is_absolute(), "{p:?} is relative");
         assert_eq!(p.file_name().unwrap(), "marquee.log");
-        // Rotation renames onto this. If the two ever disagreed the previous
-        // session would be written somewhere nothing looks.
+        // Rotation renames onto this name.
         assert_eq!(
             p.with_extension("log.1").file_name().unwrap(),
             "marquee.log.1"

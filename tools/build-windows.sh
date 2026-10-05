@@ -1,13 +1,7 @@
 #!/usr/bin/env bash
 #
-# Build a Windows executable from macOS or Linux.
-#
-# Cross-compiles with cargo-xwin, which downloads Microsoft's CRT and SDK
-# headers and links them with LLVM's clang-cl and lld-link. No Windows machine,
-# no virtual machine.
-#
-# What this produces is a bare .exe, not an installer -- see docs/WINDOWS.md for
-# why, and for what the target machine needs.
+# Cross-compile a bare Windows .exe from macOS or Linux with cargo-xwin, and
+# lint the Windows target. Not an installer: see docs/WINDOWS.md.
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -20,9 +14,7 @@ if [ -d /opt/homebrew/opt/llvm/bin ]; then
   export PATH="/opt/homebrew/opt/llvm/bin:$PATH"
 fi
 
-# clang-cl compiles and llvm-rc builds the Windows resource. The *linker* is
-# rust-lld, which ships with the Rust toolchain -- Homebrew's llvm formula does
-# not include lld-link, and requiring it blocks a build that works perfectly.
+# Linking uses rust-lld from the Rust toolchain; Homebrew's llvm lacks lld-link.
 for tool in clang-cl llvm-rc; do
   command -v "$tool" >/dev/null || {
     echo "error: $tool not found. Install LLVM:  brew install llvm" >&2
@@ -38,9 +30,7 @@ rustup target list --installed | grep -qx "$TARGET" || {
   exit 1
 }
 
-# The frontend is embedded into the binary at compile time, so it has to exist
-# and has to be current. Building it here rather than assuming means the exe can
-# never ship a stale interface.
+# The frontend is embedded at compile time, so build it fresh every time.
 echo "==> checking for unexplained discarded failures"
 tools/check-silence.sh
 
@@ -50,26 +40,15 @@ pnpm build
 echo "==> cross-compiling for Windows ($PROFILE)"
 cd src-tauri
 
-# Lint the Windows target, not just build it.
-#
-# Roughly a tenth of this codebase is behind #[cfg(target_os)] and macOS never
-# compiles it, so clippy on the development machine has no opinion about it. CI
-# runs clippy on a real Windows runner with -D warnings, which means a lint only
-# reachable on Windows is a red build discovered after pushing. This found one
-# the first time it ran.
+# Clippy on macOS never sees the Windows-only #[cfg(target_os)] code, which
+# CI lints with -D warnings.
 if [ "$PROFILE" = "release" ]; then
   echo "    linting the Windows target"
   cargo xwin clippy --release --target "$TARGET" --all-targets -- -D warnings
 fi
 
-# Verify this will be a production build, not a dev one.
-#
-# Tauri decides whether to load the dev server or its embedded interface from a
-# cargo feature -- `dev = !custom-protocol`, in tauri's own build.rs -- not from
-# the build profile. A release binary without it opens http://localhost:1420 and
-# shows "localhost refused to connect" on any machine with no dev server
-# running. That shipped, and nothing about the binary looked wrong: it was the
-# right size, it contained the frontend, and it was newer than the frontend.
+# Tauri picks dev mode from the `custom-protocol` feature, not the profile.
+# Without it a release binary loads localhost:1420; one shipped like that.
 if [ "$PROFILE" = "release" ]; then
   if ! cargo tree --target "$TARGET" -e features -i tauri 2>/dev/null \
        | grep -q 'tauri feature "custom-protocol"'; then
@@ -87,18 +66,9 @@ fi
 
 EXE="target/$TARGET/$PROFILE/marquee.exe"
 
-# Verify the binary is newer than the interface inside it.
-#
-# This is not paranoia. Cargo had no idea the frontend was an input, so
-# rebuilding it and then building the crate produced a binary carrying the
-# *previous* interface -- and reported success. build.rs now declares every
-# frontend file as a dependency; this confirms it worked, because a silently
-# stale build is worse than a failed one.
-#
-# By timestamp rather than by looking for the asset name inside the executable:
-# Tauri compresses the embedded files, so a hashed filename never appears in
-# plaintext and searching for one fails on a perfectly good build. That check
-# was written first and rejected this exact binary.
+# The binary must be newer than the frontend inside it; a stale embedded
+# interface once built with no error. Timestamps, because Tauri compresses
+# embedded assets so their names never appear in the executable.
 NEWEST_ASSET=$(find ../dist -type f -newer "$EXE" -print -quit 2>/dev/null || true)
 if [ -n "$NEWEST_ASSET" ]; then
   echo "error: $NEWEST_ASSET is newer than the executable -- the embedded interface is stale." >&2

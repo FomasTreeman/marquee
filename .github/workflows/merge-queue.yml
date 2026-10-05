@@ -1,33 +1,8 @@
-# Merging is one click. This is what makes the click enough.
-#
-# The ruleset on `main` requires a branch to be up to date before it merges --
-# the right rule, since a branch cut from an old `main` passes its own CI and
-# undoes everything merged since (see staleness.yml). But it has a cost that
-# fell on a person: every merge puts every other open pull request behind, and
-# each one then needs updating and a second CI run before its own merge button
-# works again. Four green pull requests took four rounds of update, wait, merge
-# by hand, and the second time through somebody asked for a merge and got
-# "the head branch is not up to date with the base branch".
-#
-# GitHub's own answer is the merge queue, which is not available on a personal
-# repository. So this is a merge queue in forty lines:
-#
-#   1. The person enables auto-merge on a pull request. That is the review
-#      gate, and it stays a person's -- nothing here decides that something
-#      should merge, only when a merge somebody asked for can happen.
-#   2. Whenever `main` moves, the oldest pull request waiting on auto-merge
-#      that is now behind is brought up to date. CI runs on the result and
-#      auto-merge completes it.
-#   3. That merge moves `main`, which is step 2 again for the next one.
-#
-# One at a time, oldest first, because updating them all at once would run a
-# full CI matrix on each and then invalidate all but one of those runs at the
-# next merge.
-#
-# The update goes through CLAUDE_WORKFLOW_TOKEN and must. It is the commit CI
-# has to run on, and GitHub will not run a workflow off a commit GITHUB_TOKEN
-# made -- so an update made with it would leave the pull request up to date,
-# unchecked and unmergeable, with nothing on the page saying why.
+# A small merge queue, since GitHub's is unavailable on personal repositories.
+# When main moves, the oldest auto-merge pull request that is behind gets
+# updated, CI runs and auto-merge completes it. A person enabling auto-merge
+# stays the review gate. One at a time, so each merge does not invalidate CI
+# on the rest. Uses CLAUDE_WORKFLOW_TOKEN: a GITHUB_TOKEN commit gets no CI.
 
 name: Merge queue
 
@@ -42,7 +17,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  # One updater at a time, for the same reason there is one update at a time.
+  # One updater at a time, matching one update at a time.
   group: merge-queue
   cancel-in-progress: false
 
@@ -55,17 +30,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.CLAUDE_WORKFLOW_TOKEN }}
           GH_REPO: ${{ github.repository }}
-          # Enabling auto-merge names the pull request; a push to main does
-          # not, and the queue is read instead.
+          # Set when auto-merge was enabled; empty on a push to main.
           ONLY: ${{ github.event.pull_request.number }}
-          # Which queued pull request goes first. `number` is oldest first.
-          # `clicked` is the order auto-merge was enabled in, so the order
-          # something lands is set by the click that queued it -- the small
-          # green one first, the wide refactor last -- with no label or
-          # column to keep up to date. Not on by default: it is a preference
-          # nobody has needed yet, and it stays here rather than in someone's
-          # memory so that switching it is a repository variable, not a
-          # rewrite.
+          # `number` is oldest first; `clicked` is the order auto-merge was
+          # enabled in. Set with the MERGE_QUEUE_ORDER repository variable.
           ORDER: ${{ vars.MERGE_QUEUE_ORDER || 'number' }}
         run: |
           set -euo pipefail
@@ -74,9 +42,7 @@ jobs:
             exit 1
           fi
 
-          # The merge state is computed lazily and reads UNKNOWN for a few
-          # seconds after main moves. Asking too early would skip every
-          # candidate and leave the queue standing.
+          # mergeStateStatus reads UNKNOWN for a few seconds after main moves.
           state_of() {
             for _ in 1 2 3 4 5 6; do
               s=$(gh pr view "$1" --json mergeStateStatus --jq .mergeStateStatus)
@@ -112,14 +78,11 @@ jobs:
                 exit 0
                 ;;
               DIRTY)
-                # A branch that will not merge cleanly is real work, and the
-                # agent already knows how to do it. Once per head commit, so a
-                # conflict it fails to resolve is not handed over again every
-                # time main moves.
+                # Hand conflicts to the agent, once per head commit so a
+                # failed resolution is not retried every time main moves.
                 head=$(gh pr view "$n" --json headRefOid --jq .headRefOid)
-                # jq rather than `grep -q`: grep exits on its first match and
-                # closes the pipe, gh dies of SIGPIPE, and under pipefail a
-                # marker that *was* there read as absent.
+                # jq rather than `grep -q`: grep closes the pipe early, gh dies
+                # of SIGPIPE and pipefail made a present marker read as absent.
                 if [ "$(gh pr view "$n" --json comments --jq "any(.comments[].body; contains(\"<!-- conflict:$head -->\"))")" = true ]; then
                   echo "::warning::#$n conflicts with main and was already handed over at $head; skipping."
                   continue

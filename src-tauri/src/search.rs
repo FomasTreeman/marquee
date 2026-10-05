@@ -1,14 +1,7 @@
-//! Finding a game by name.
+//! Finding a game by name for the add-game flow (docs/PLAN.md §5).
 //!
-//! This is the whole custom-game flow, per docs/PLAN.md §5: you type
-//! *"Hollow Knight"*, pick it from results with cover art, and it lands in the
-//! library complete with metadata and artwork. Pointing at an executable is a
-//! separate, later step.
-//!
-//! `store.steampowered.com/api/storesearch` needs no key. That it is Steam's
-//! index does not make this a Steam feature: a Steam **store page** exists for
-//! most PC games whoever sold them, so a GOG or Epic or EA copy is identified
-//! here and then borrows Steam's artwork by appid.
+//! Steam's keyless store search covers most PC games whoever sold them, so a
+//! GOG or Epic copy is identified here and borrows Steam's artwork by appid.
 
 use serde::Serialize;
 
@@ -19,19 +12,11 @@ use crate::{log_info, log_warn};
 pub struct SearchHit {
     pub app_id: String,
     pub name: String,
-    /// Which catalogue this came from: `steam` or `sgdb`.
-    ///
-    /// Not cosmetic. A Steam hit carries an appid that unlocks metadata --
-    /// description, genres, release date, playtime -- and a SteamGridDB hit
-    /// carries only artwork. The interface has to add them differently, and
-    /// the person choosing deserves to know which they are getting.
+    /// `steam` or `sgdb`. Only a Steam appid unlocks metadata; a SteamGridDB
+    /// hit carries artwork alone, so the interface adds them differently.
     pub source: &'static str,
-    /// Steam's own thumbnail for this result.
-    ///
-    /// A last resort only. The interface builds its cover from the appid so a
-    /// result goes through the same artwork pipeline as a card -- placeholder
-    /// detection, fallbacks, cache -- and therefore looks exactly like the card
-    /// it is about to become. This is what to show if even that finds nothing.
+    /// Fallback only; the interface builds the cover from the appid through the
+    /// normal artwork pipeline so a result matches the card it becomes.
     pub thumbnail: String,
 }
 
@@ -63,23 +48,9 @@ fn hits_from(body: &serde_json::Value) -> Vec<SearchHit> {
         .unwrap_or_default()
 }
 
-/// Find a game by name, from every catalogue we have.
-///
-/// Steam first, because a Steam hit carries an appid and an appid carries
-/// metadata -- description, genres, release date -- while a SteamGridDB hit
-/// carries artwork and nothing else.
-///
-/// SteamGridDB is asked only when Steam draws a blank, and that case is not
-/// rare: **Steam's store index only contains games Steam currently sells.**
-/// Rocket League was delisted in 2020 and returns zero results, so "Add a
-/// game" simply could not add it -- you typed the name of a game you owned and
-/// the app told you nothing at all. Anything that moved to Epic, or never
-/// shipped on Steam, was in the same position.
-///
-/// Asking both every time would be the obvious thing and is the wrong one: the
-/// SteamGridDB path costs a search plus a thumbnail request per result, and
-/// spending that on every keystroke for a game Steam already answered would
-/// make the common case slow to fix the uncommon one.
+/// Find a game by name: Steam first, since its appid carries metadata, then
+/// SteamGridDB only if Steam has nothing. Steam's index omits delisted games
+/// (Rocket League), and asking SteamGridDB every keystroke is too slow.
 #[tauri::command]
 pub async fn search_games(
     term: String,
@@ -99,9 +70,7 @@ pub async fn search_games(
         .setting(crate::sgdb::SETTING_KEY)?
         .filter(|k| !k.is_empty());
     let Some(key) = key else {
-        // Silence here is what made this feel broken. Steam has never heard of
-        // the game, the one catalogue that might have is switched off, and
-        // without saying so the app looks like it simply cannot search.
+        // Say why, or the app looks like it simply cannot search.
         log_warn!(
             "search",
             "{term:?} is not on Steam and no SteamGridDB key is set"
@@ -137,8 +106,7 @@ pub async fn search_games(
     Ok(found)
 }
 
-/// The Steam half, on its own. Used by the artwork picker, which wants both
-/// catalogues rather than one falling back to the other.
+/// Steam only, for the artwork picker, which merges both catalogues itself.
 pub async fn search_steam_hits(term: String) -> Result<Vec<SearchHit>, String> {
     let term = term.trim().to_string();
     if term.len() < 2 {
@@ -147,20 +115,9 @@ pub async fn search_steam_hits(term: String) -> Result<Vec<SearchHit>, String> {
     search_steam(term).await
 }
 
-/// Put `first` in front, then anything from `second` naming a different game,
-/// then bring an exact match for `term` to the very front of that.
-///
-/// Both catalogues list the same popular games, and a picker showing "Hollow
-/// Knight" twice makes the person choosing wonder which one is the real one.
-/// Names are compared loosely because the two sources punctuate differently --
-/// Steam writes "Battlefield™ 6" where SteamGridDB writes "Battlefield 6", and
-/// treating those as separate answers is the same duplicate with extra steps.
-///
-/// SteamGridDB is community-tagged, so its own relevance ranking is not
-/// always relevance: a brand new game's exact-name entry has been seen
-/// sitting behind four re-uploads and fan packs with looser titles, on a
-/// picker that was supposed to make "find artwork" a last resort rather than
-/// a guessing game. An exact match, wherever it came from, wins.
+/// `first`, then games from `second` it does not already list, with an exact
+/// match for `term` moved to the front. Names compare loosely because Steam
+/// writes "Battlefield™ 6" where SteamGridDB writes "Battlefield 6".
 pub fn merge(term: &str, first: Vec<SearchHit>, second: Vec<SearchHit>) -> Vec<SearchHit> {
     let mut seen: Vec<String> = first.iter().map(|h| loose(&h.name)).collect();
     let mut out = first;
@@ -176,10 +133,7 @@ pub fn merge(term: &str, first: Vec<SearchHit>, second: Vec<SearchHit>) -> Vec<S
 }
 
 /// Move an exact (loose) match for `term` to the front, stable otherwise.
-///
-/// Only exact matches are reordered. Ranking approximate matches against each
-/// other is a job both catalogues already do better than a loose-name
-/// comparison could.
+/// SteamGridDB's community ranking can bury the exact title behind fan packs.
 pub fn rank(term: &str, hits: Vec<SearchHit>) -> Vec<SearchHit> {
     let target = loose(term);
     let mut hits = hits;
@@ -199,8 +153,7 @@ fn loose(name: &str) -> String {
 
 async fn search_steam(term: String) -> Result<Vec<SearchHit>, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        // Shorter than the default: this is behind a search box, and ten
-        // seconds is already longer than anyone waits for a list.
+        // Shorter than the default timeout; this is behind a search box.
         let client = crate::meta::http_client_with(std::time::Duration::from_secs(10))
             .ok_or("no HTTP client")?;
 
@@ -238,9 +191,6 @@ mod tests {
         }
     }
 
-    /// The two catalogues list the same popular games. A picker showing
-    /// "Hollow Knight" twice makes the person choosing wonder which one is
-    /// real, and picking the wrong one is not an error they can see.
     #[test]
     fn merge_drops_the_same_game_listed_twice() {
         let out = merge(
@@ -252,8 +202,6 @@ mod tests {
         assert_eq!(out[0].source, "sgdb", "the first list wins");
     }
 
-    /// Steam writes "Battlefield™ 6"; SteamGridDB writes "Battlefield 6".
-    /// Comparing those strictly is the same duplicate with extra steps.
     #[test]
     fn merge_sees_through_punctuation_and_case() {
         for (a, b) in [
@@ -279,8 +227,6 @@ mod tests {
 
     #[test]
     fn merge_preserves_the_order_within_each_list() {
-        // Relevance order is the only ranking either catalogue gives us, when
-        // nothing is an exact match for the term.
         let out = merge(
             "does not match any of these",
             vec![hit("sgdb", "1", "A"), hit("sgdb", "2", "B")],
@@ -290,11 +236,6 @@ mod tests {
         assert_eq!(names, ["A", "B", "C", "D"]);
     }
 
-    /// The bug this exists for: SteamGridDB's own relevance ranking is
-    /// community-tagged and not always relevance, and the exact match for a
-    /// brand new release has been seen sitting fifth, behind fan packs and
-    /// re-uploads with looser titles, on a picker meant to make "find
-    /// artwork" a last resort rather than a guessing game.
     #[test]
     fn merge_puts_an_exact_match_first_however_low_its_catalogue_ranked_it() {
         let out = merge(
@@ -313,8 +254,6 @@ mod tests {
         assert_eq!(out[0].app_id, "5");
     }
 
-    /// Punctuation and case must not stop the exact match from being
-    /// recognised as one, or Steam's own trademark symbol would defeat this.
     #[test]
     fn an_exact_match_is_found_loosely_too() {
         let out = merge(
@@ -325,8 +264,6 @@ mod tests {
         assert_eq!(out[0].name, "Battlefield™ 6");
     }
 
-    /// With no exact match anywhere, the list is left exactly as ranked --
-    /// there is nothing here to prefer over the catalogues' own relevance.
     #[test]
     fn no_exact_match_leaves_the_order_untouched() {
         let out = rank(
@@ -342,8 +279,6 @@ mod tests {
 
     #[test]
     fn merge_drops_a_nameless_entry_rather_than_deduping_on_nothing() {
-        // Two entries with unnameable titles would otherwise collapse into
-        // one, or worse, swallow a real result whose name reduced to empty.
         let out = merge(
             "Real",
             vec![hit("sgdb", "1", "Real")],
@@ -354,8 +289,7 @@ mod tests {
 
     #[test]
     fn steam_hits_are_labelled_as_steam() {
-        // The label decides whether the appid is treated as metadata-bearing.
-        // Getting it wrong attaches another game's description and genres.
+        // A wrong label would attach another game's metadata to the appid.
         let hits = hits_from(&serde_json::from_str(SAMPLE).unwrap());
         assert!(hits.iter().all(|h| h.source == "steam"));
     }
@@ -375,8 +309,6 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].app_id, "367520");
         assert_eq!(hits[0].name, "Hollow Knight");
-        // Steam's own thumbnail, used only if the artwork pipeline finds
-        // nothing at all for the appid.
         assert_eq!(hits[0].thumbnail, "https://x/t.jpg");
     }
 
@@ -404,12 +336,7 @@ mod tests {
 
 #[cfg(test)]
 mod live {
-    /// The bug this whole fallback exists for, checked against the real
-    /// endpoints: Rocket League was delisted from Steam in 2020, so Steam's
-    /// store index returns nothing for it and "Add a game" could not add a
-    /// game the user owns. SteamGridDB has it.
-    ///
-    /// Needs a key in MARQUEE_SGDB_KEY.
+    /// Rocket League is delisted from Steam but on SteamGridDB.
     ///
     ///     MARQUEE_SGDB_KEY=... cargo test live -- --ignored --nocapture
     #[test]
@@ -452,10 +379,8 @@ mod live {
         );
     }
 
-    /// Hits the real endpoint. Ignored by default so the normal suite stays
-    /// offline and deterministic, but run it whenever the parsing above is
-    /// touched -- the golden tests prove we read the shape we captured, not
-    /// that Valve still sends it.
+    /// Run when touching the parser: the golden tests only prove we read the
+    /// captured shape, not that Valve still sends it.
     ///
     ///     cargo test live -- --ignored --nocapture
     #[test]

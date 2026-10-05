@@ -1,29 +1,12 @@
 /**
- * Runtime self-check.
+ * Runtime self-check: asserts the invariants behind bugs that never threw, such
+ * as a focus ring clipped by `contain: paint` and covers painted under their
+ * fallback. It hit-tests what is painted rather than trusting the DOM, and
+ * writes failures to the log.
  *
- * Error handling does not catch the bugs this project actually has. Both of
- * the real ones so far were silent and looked correct:
- *
- *   1. `contain: paint` on the card clipped the focus ring, drawn outset by
- *      design. No error. Ring simply never visible.
- *   2. `.card-fallback` was absolutely positioned and the cover image was
- *      static, so the fallback painted on top. Every cover in the library was
- *      fully loaded, network clean, `naturalWidth` correct, and invisible.
- *
- * Nothing throws in either case, so nothing logs. The only conventional way to
- * find them is for a human to look at the screen.
- *
- * So this asserts the invariants that would have failed. It hit-tests what is
- * actually painted on top rather than trusting the DOM, and writes failures to
- * the same log as everything else -- which means they can be read from a
- * terminal without anyone looking at the window.
- *
- * Runs in development, or with ?check=1. That flag is compiled into release
- * bundles too, and deliberately: an installed copy loads its frontend from
- * the bundle with no query string, so nothing on a user's machine can turn it
- * on, while `vite preview` of a production build can -- which is the only way
- * to run these checks against the code that actually ships rather than the
- * dev server's version of it.
+ * Runs in development or with ?check=1. The flag ships in release bundles on
+ * purpose: an installed copy has no query string, but `vite preview` of a
+ * production build can turn it on to check the code that actually ships.
  */
 import { logInfo, logError, logWarn } from './log'
 
@@ -51,8 +34,7 @@ function topmostAtCentre(el: Element): { ok: boolean; blocker?: string } {
 function describe(el: Element): string {
   const cls = typeof el.className === 'string' && el.className ? `.${el.className.split(/\s+/).join('.')}` : ''
   let out = `${el.tagName.toLowerCase()}${cls}`
-  // A bare tag name is useless when the blocker is a sibling of the same kind.
-  // Walk up far enough to say *which* one.
+  // A bare tag name cannot tell apart siblings of the same kind.
   const card = el.closest('.card')
   if (card && card !== el) {
     const cs = getComputedStyle(card)
@@ -65,12 +47,7 @@ function check(name: string, ok: boolean, detail?: string): Check {
   return { name, ok, detail }
 }
 
-/**
- * Is this element actually reachable, or is something painted over it?
- *
- * The question every overlay has to answer. A button behind a scrim looks
- * completely normal in the DOM and in a screenshot, and does nothing.
- */
+/** Is this element reachable, or is something painted over it? */
 function reachable(el: Element): { ok: boolean; blocker?: string } {
   const r = el.getBoundingClientRect()
   if (r.width < 2 || r.height < 2) return { ok: false, blocker: 'zero-sized' }
@@ -84,13 +61,8 @@ function reachable(el: Element): { ok: boolean; blocker?: string } {
 }
 
 /**
- * Every surface that legitimately covers the grid, innermost first.
- *
- * One list, used both to decide whether grid assertions apply and to pick the
- * topmost overlay to check. It was two hand-maintained lists, and adding a new
- * surface meant remembering both -- which was forgotten three times, each one
- * producing a confident false failure about the grid being covered by the thing
- * that is supposed to cover it.
+ * Every surface that legitimately covers the grid, innermost first. One list,
+ * because two hand-kept lists drifted and reported overlays as covering the grid.
  */
 const OVERLAYS: Array<[selector: string, name: string]> = [
   ['.menu', 'list menu'],
@@ -112,28 +84,16 @@ function openOverlay(): [string, string] | undefined {
 export function runSelfCheck(): Check[] {
   const out: Check[] = []
 
-  // Positions are written during a requestAnimationFrame, and a hidden window
-  // pauses those indefinitely while synchronous state carries on changing. So
-  // in a background tab the DOM can be an arbitrary number of moves behind
-  // reality, and any assertion about *where* something is measures the past.
-  //
-  // This has produced a false failure three times now, each one costing an
-  // investigation. Position is asserted only when the window can paint.
+  // Positions are written in rAF, which a hidden window pauses, so position is
+  // only asserted when the window can paint.
   const painting = document.visibilityState === 'visible'
 
-  // Assertions about the grid only mean anything while the grid is the top
-  // surface. With an overlay open, "the cover art is painted on top" is false
-  // and correct -- and a check that fires when the interface is working is
-  // worse than no check, because it teaches everyone to ignore the output.
+  // Grid assertions are only true while the grid is the top surface.
   const covering = openOverlay()?.[0]
 
   // --- artwork is actually visible ------------------------------------
-  // The exact bug from the header. A loaded image behind an opaque sibling
-  // passes every other kind of test there is.
-  // Only cards FULLY on screen. A partially visible card has its geometric
-  // centre outside the viewport, where elementFromPoint returns null -- which
-  // the hit test would report as "covered by nothing". A check that cries wolf
-  // is a check that gets ignored, so it only asserts what it can actually see.
+  // Only cards fully on screen: a partly visible card's centre can be off the
+  // viewport, where elementFromPoint returns null.
   const cards = covering ? [] : [...document.querySelectorAll<HTMLElement>('.card')].filter((c) => {
     const r = c.getBoundingClientRect()
     return (
@@ -162,9 +122,8 @@ export function runSelfCheck(): Check[] {
   }
 
   // --- the focus ring exists and is not clipped -----------------------
-  // Exactly one, and it must be the one the grid thinks it is. Pooled slots
-  // are reused, so a stale attribute leaves a second ring on a card that has
-  // been recycled to a different game -- which is what happened.
+  // Slots are pooled, so a stale attribute can leave a second ring on a
+  // recycled card.
   const marked = document.querySelectorAll<HTMLElement>('.card[data-focus="1"]')
   if (!covering && document.querySelector('.card')) {
     out.push(check('exactly one card is marked focused', marked.length === 1,
@@ -173,8 +132,6 @@ export function runSelfCheck(): Check[] {
 
   const focused = covering ? null : (marked[0] ?? null)
   if (focused) {
-    // Not just any card -- the focused one is where the cursor is, and a
-    // cursor off the bottom of the viewport is how a grid loses its user.
     const fr = focused.getBoundingClientRect()
     if (painting) {
       out.push(check('the focused card is on screen',
@@ -182,10 +139,8 @@ export function runSelfCheck(): Check[] {
         `top ${Math.round(fr.top)} bottom ${Math.round(fr.bottom)} of ${window.innerHeight}`))
     }
 
-    // The ring's opacity is transitioned, and a hidden window freezes
-    // compositor animations mid-flight -- so a backgrounded tab reports 0 for a
-    // ring that is plainly visible in a screenshot. Assert the DOM state
-    // always, and the painted value only when the window can actually paint.
+    // The ring's opacity transition freezes in a hidden window, so the painted
+    // value is only asserted when visible.
     const ring = focused.querySelector<HTMLElement>('.card-ring')
     const style = ring ? getComputedStyle(ring) : undefined
     const present = !!ring && style!.display !== 'none' && style!.visibility !== 'hidden'
@@ -213,9 +168,7 @@ export function runSelfCheck(): Check[] {
   }
 
   // --- the grid fills its width ---------------------------------------
-  // Cards are fixed-width by default, so an awkward window size leaves up to a
-  // whole card's worth of dead space against the right edge. Nothing else here
-  // can see that: every card is painted, aligned and correct.
+  // Fixed-width cards can leave nearly a card's width of dead space on the right.
   const fitRaw = document.querySelector<HTMLElement>('.grid-canvas')?.dataset['fit']
   if (fitRaw) {
     try {
@@ -230,10 +183,7 @@ export function runSelfCheck(): Check[] {
   }
 
   // --- animation stays on the compositor -------------------------------
-  // Priority #1 is performance, and "we only animate transform and opacity" is
-  // a promise nothing checked. Animating a layout property is invisible until
-  // a television with a slow GPU is dropping frames on a menu, so it is
-  // asserted here where it costs nothing to be sure.
+  // Animating a layout property only shows up as dropped frames on a slow GPU.
   const offenders = animatedLayoutProperties()
   out.push(check('nothing animates a layout property', offenders.length === 0,
     offenders.length ? offenders.slice(0, 3).join('; ') : 'transform and opacity only'))
@@ -261,10 +211,7 @@ export function runSelfCheck(): Check[] {
   }
 
   // --- the design's alignment invariants ------------------------------
-  // The hero, the top bar and the first card share a left edge. That is the
-  // single most load-bearing rule in the design -- it took many iterations to
-  // get right in the Playnite theme -- and it is exactly the kind of thing a
-  // description like "the card is halfway down on the right" is reporting.
+  // The hero, the top bar and the first card share a left edge.
   const firstCard = covering
     ? null
     : document.querySelector<HTMLElement>('.card[data-focus="1"]')
@@ -286,9 +233,8 @@ export function runSelfCheck(): Check[] {
   }
 
   // --- the hero actually says something --------------------------------
-  // With one game in the library the initial selection was never announced,
-  // so the hero stayed empty and the screen was black but for a lone card.
-  // Nothing errored. This is that bug, as an assertion.
+  // With one game the initial selection was never announced and the hero
+  // stayed empty.
   const logo = document.querySelector<HTMLImageElement>('.hero-logo')
   const heroTitle = document.querySelector<HTMLElement>('.hero-title')
   const heroMeta = document.querySelector<HTMLElement>('.hero-meta')
@@ -302,9 +248,8 @@ export function runSelfCheck(): Check[] {
   }
 
   // --- the grid shows what it was given --------------------------------
-  // Pooled slots are hidden rather than removed, so a shrinking item list can
-  // leave stale cards on screen looking entirely correct. Filtering to two
-  // results once showed forty-eight of them, and nothing errored.
+  // Pooled slots are hidden, not removed, so a shrinking list can leave stale
+  // cards visible.
   const canvas = document.querySelector<HTMLElement>('.grid-canvas')
   const declared = Number(canvas?.dataset['items'] ?? NaN)
   if (Number.isFinite(declared)) {
@@ -315,8 +260,6 @@ export function runSelfCheck(): Check[] {
   }
 
   // --- filter presets --------------------------------------------------
-  // Exactly one preset is active. Zero means the pills are decoration; two
-  // means the grid is showing one filter and the bar is claiming another.
   const pills = [...document.querySelectorAll<HTMLElement>('.preset')]
   if (pills.length) {
     const active = pills.filter((p) => p.dataset['active'] === '1')
@@ -325,10 +268,7 @@ export function runSelfCheck(): Check[] {
   }
 
   // --- the search entry is reachable ------------------------------------
-  // The one part of search meant to be visible at all times -- see
-  // shell.ts. A button sitting in the DOM behind the backdrop scrim or a
-  // later sibling looks identical to a working one and reads as "there is no
-  // search", which is the discoverability bug it exists to fix.
+  // A button behind the scrim looks identical to a working one.
   if (!covering) {
     const searchButton = document.querySelector<HTMLElement>('.search-button')
     if (searchButton) {
@@ -336,12 +276,8 @@ export function runSelfCheck(): Check[] {
       out.push(check('search button is reachable', hit.ok, hit.blocker ?? 'ok'))
     }
 
-    // The icon used to sit beside the preset tabs while the field it opens
-    // lived on the far side of the top bar's spacer -- so opening search
-    // looked like a second, unrelated search bar appearing on the other
-    // side of the screen rather than the icon's own field opening beside
-    // it. A large gap here is that bug; a small one is the icon and the
-    // field it drives being the same control.
+    // The field once opened across the bar from its icon and read as a second,
+    // unrelated search bar.
     const field = document.querySelector<HTMLElement>('.query')
     if (searchButton && field && !field.hidden) {
       const b = searchButton.getBoundingClientRect()
@@ -353,13 +289,8 @@ export function runSelfCheck(): Check[] {
   }
 
   // --- overlays, when one is open --------------------------------------
-  // Only asserted while open. An overlay is exactly the kind of surface that
-  // is hard to reach and easy to break, and its buttons are the only things in
-  // the interface that can be silently unclickable.
-  //
-  // Only the TOPMOST one. The picker opens from the detail view, which stays
-  // open underneath with its buttons correctly unreachable; asserting on it
-  // reported a failure while the interface was working exactly as designed.
+  // Only the topmost: the picker opens over the detail view, whose buttons are
+  // correctly unreachable underneath.
   const topmost = openOverlay()
   for (const [sel, name] of topmost ? [topmost] : []) {
     const overlay = document.querySelector<HTMLElement>(sel)
@@ -369,8 +300,7 @@ export function runSelfCheck(): Check[] {
       r.width >= window.innerWidth - 1 && r.height >= window.innerHeight - 1,
       `${Math.round(r.width)}x${Math.round(r.height)} of ${window.innerWidth}x${window.innerHeight}`))
 
-    // Settings scrolls, so a button below the fold is out of view, not
-    // painted over; only what is on screen can be blocked.
+    // Settings scrolls; only what is on screen can be blocked.
     const buttons = [...overlay.querySelectorAll<HTMLElement>('.action, .add-result')]
       .filter((b) => { const br = b.getBoundingClientRect(); return br.bottom > 0 && br.top < window.innerHeight })
     const blocked = buttons.map((b) => ({ b, hit: reachable(b) })).filter((x) => !x.hit.ok)
@@ -381,8 +311,7 @@ export function runSelfCheck(): Check[] {
           : `${buttons.length} reachable`))
     }
 
-    // A picker with a field the keyboard cannot reach is unusable, and the
-    // on-screen keyboard is bottom-anchored while the panel is centred.
+    // The on-screen keyboard is bottom-anchored while the panel is centred.
     const input = overlay.querySelector<HTMLInputElement>('input')
     if (input) out.push(check(`${name} field is reachable`, reachable(input).ok,
       reachable(input).blocker ?? 'ok'))
@@ -399,8 +328,6 @@ export function runSelfCheck(): Check[] {
     const on = rows.filter((r) => r.dataset['on'] === '1')
     out.push(check('exactly one menu row is highlighted', on.length === 1, `${on.length}`))
 
-    // A highlighted row that is disabled is a cursor resting somewhere that
-    // does nothing, which reads as the menu being broken.
     out.push(check('the highlighted row is not disabled',
       on.length === 0 || on[0]!.dataset['disabled'] !== '1'))
 
@@ -416,7 +343,6 @@ export function runSelfCheck(): Check[] {
     const on = osk.querySelectorAll('.osk-key[data-on="1"]')
     out.push(check('exactly one key is highlighted', on.length === 1, `${on.length} keys`))
 
-    // It must not cover the field it is driving, or you type blind.
     const oskRect = osk.getBoundingClientRect()
     const fields = [...document.querySelectorAll<HTMLElement>('.add-field, .query')]
       .filter((f) => !f.hidden && f.getBoundingClientRect().width > 0)
@@ -428,10 +354,7 @@ export function runSelfCheck(): Check[] {
     out.push(check('keyboard does not cover the field it drives', covered.length === 0,
       `${covered.length} field(s) overlapped`))
 
-    // The keyboard is only ever attached from inside one of these screens, so
-    // it has no reason to be up once all of them have closed. It used to stay
-    // up regardless -- issue #18, where adding a game left it on screen with
-    // nothing left to type into.
+    // Issue #18: the keyboard stayed up after its screen had closed.
     const owner = ['.settings', '.add', '.detail', '.query'].some((sel) => {
       const el = document.querySelector<HTMLElement>(sel)
       return !!el && !el.hidden
@@ -458,12 +381,8 @@ export function runSelfCheck(): Check[] {
 }
 
 /**
- * Properties that are cheap to animate.
- *
- * `transform` and `opacity` are handled by the compositor and never touch
- * layout or paint. `backdrop-filter` and `filter` do repaint, but there is no
- * other way to express a couple of things the design needs, so they are
- * permitted and used sparingly rather than banned.
+ * Properties cheap enough to animate. `transform` and `opacity` stay on the
+ * compositor; `filter` and `backdrop-filter` repaint but are allowed sparingly.
  */
 const COMPOSITOR_SAFE = new Set(['transform', 'opacity', 'filter', 'backdrop-filter', 'all', 'none', ''])
 
@@ -486,7 +405,6 @@ function animatedLayoutProperties(): string[] {
           for (const p of Array.from(frame.style)) note(`@keyframes ${rule.name}`, p)
         }
       } else if ('cssRules' in rule) {
-        // Media queries and other groupings.
         walk((rule as CSSGroupingRule).cssRules, from)
       }
     }
@@ -513,10 +431,8 @@ function ancestorsOf(el: HTMLElement): HTMLElement[] {
 }
 
 /**
- * Run once the interface has settled, and report to the log.
- *
- * Deferred by a beat because several of these checks hit-test real pixels, and
- * hit-testing before the first paint answers a question nobody asked.
+ * Run once the interface has settled and report to the log. Deferred because
+ * hit-testing before the first paint means nothing.
  */
 export function scheduleSelfCheck(delayMs = 900, context = ''): void {
   window.setTimeout(() => {
@@ -527,8 +443,7 @@ export function scheduleSelfCheck(delayMs = 900, context = ''): void {
       logInfo('selfcheck', `${results.length} checks passed${where}`)
       return
     }
-    // Below the fold in a hidden tab everything is unreliable; say so rather
-    // than reporting noise as a defect.
+    // Results from a hidden window are unreliable, so they warn rather than fail.
     const level = document.visibilityState === 'hidden' ? logWarn : logError
     level(
       'selfcheck',

@@ -1,43 +1,16 @@
-# Merge a pull request, get a release. Nobody types a version number.
-#
-# This used to be two workflows and a hand-typed tag, which produced exactly
-# the failure it was meant to prevent: a tag pushed by hand, a version in
-# tauri.conf.json that disagreed with it, and a build that refused. Worse, the
-# two could not be joined up, because **a tag pushed with GITHUB_TOKEN does not
-# trigger another workflow** -- GitHub blocks that to stop workflows looping.
-# So the tag landed and the build never ran, which is why the only release on
-# the repository had nothing in it but source archives.
-#
-# It is one workflow now. Deciding the version, tagging, building and
-# publishing happen in a single run, so there is nothing to trigger and nothing
-# to keep in step.
-#
-# ---------------------------------------------------------------------------
-# What decides the version: the labels on the pull request that was merged.
-#
-#     breaking                -> major     1.4.2 -> 2.0.0
-#     enhancement | feature   -> minor     1.4.2 -> 1.5.0
-#     anything else           -> patch     1.4.2 -> 1.4.3
-#     no-release              -> nothing happens
-#
-# There is no decision left for a person to get wrong. Override it by running
-# the workflow by hand and choosing a bump.
-# ---------------------------------------------------------------------------
+# On merge to main: pick the version from the PR's labels (breaking -> major,
+# enhancement/feature -> minor, else patch, no-release -> skip), wait for green CI,
+# build and sign every platform into a draft, verify latest.json, then publish.
+# One workflow, because a tag pushed with GITHUB_TOKEN would not trigger a build.
+# Run it by hand to override the bump.
 
 name: Release
 
 on:
   push:
     branches: [main]
-    # A version number is a thing every installed copy downloads, so it should
-    # correspond to something they could not already do. A change to these
-    # paths ships nothing a user can run: prose, the workflows that build the
-    # thing, and the token source the build regenerates from.
-    #
-    # Only a commit touching *nothing else* is skipped. A change that edits
-    # docs alongside code releases exactly as before, so this cannot quietly
-    # withhold a fix. `no-release` remains the way to skip one that does touch
-    # code.
+    # A commit touching only these paths ships nothing a user runs, so no release.
+    # A commit that also touches code still releases.
     paths-ignore:
       - '**.md'
       - 'docs/**'
@@ -57,8 +30,7 @@ on:
 permissions:
   contents: write
   pull-requests: read
-  # Reading the CI run for this commit, which the `ci` job below refuses to
-  # release without. Read and not write: nothing here needs to start a run.
+  # Read only: the `ci` job reads CI runs and starts nothing.
   actions: read
 
 concurrency:
@@ -76,10 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Tags are needed to work out where we are, and a shallow checkout
-          # has none. Losing this does not fail the build -- it quietly makes
-          # every release start from the version in the file, which is exactly
-          # the collision the newest-tag floor exists to prevent.
+          # Tags are needed for the version floor; a shallow clone silently has none.
           fetch-depth: 0
 
       - name: Work out what to release
@@ -92,15 +61,10 @@ jobs:
 
           msg=$(git log -1 --pretty=%s)
 
-          # The pull request this commit came from, if any. A direct push to
-          # main has none, and gets a patch.
+          # The PR this commit came from; a direct push has none and gets a patch.
           pr=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" \
                  --jq '.[0] // empty' 2>/dev/null || true)
-          # Not `${pr:-{}}`. Bash reads that as ${pr:-{} followed by a literal
-          # }, so an empty pr gives a valid {} and a real one gives the whole
-          # JSON with a stray brace stuck on the end -- which parses fine until
-          # the first time a commit actually has a pull request behind it, and
-          # then fails with "Unmatched '}'" halfway through the object.
+          # Not `${pr:-{}}`: bash parses that as ${pr:-{} plus a stray }.
           [ -n "$pr" ] || pr='{}'
           labels=$(echo "$pr" | jq -r '(.labels // []) | map(.name) | join(" ")')
           title=$(echo "$pr" | jq -r '.title // ""')
@@ -122,10 +86,8 @@ jobs:
             echo "Overridden to $bump"
           fi
 
-          # Start from whichever is higher: the version in the file, or the
-          # newest tag. That makes it impossible to compute a tag that already
-          # exists, however the repository got into its current state -- which
-          # is the trap that produced v0.2.0 sitting above a 0.0.1 config.
+          # Start from the higher of the file version and the newest tag, so a tag
+          # that already exists can never be computed. No tags is fine, hence || true.
           from_file=$(node -p "require('./src-tauri/tauri.conf.json').version")
           from_tags=$(git tag -l 'v*' | sed 's/^v//' \
                         | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
@@ -142,8 +104,7 @@ jobs:
           next="$major.$minor.$patch"
           echo "Releasing $base -> $next ($bump)"
 
-          # The notes people see in the update prompt. The pull request title
-          # is a real sentence about what changed; "see the commit log" is not.
+          # The PR title is the release note shown in the update prompt.
           if [ -n "$number" ]; then
             notes="$title (#$number)"
           else
@@ -155,21 +116,9 @@ jobs:
             echo "notes=$notes"
           } >> "$GITHUB_OUTPUT"
 
-      # A release is built as a draft and published only once every platform is
-      # in it, which leaves one loose end: a run that dies between those two
-      # points leaves the draft behind.
-      #
-      # A draft carries no tag -- GitHub creates the tag when the release is
-      # published -- and the version floor above reads the newest tag. So the
-      # next run computes the same version, and tauri-action, finding a release
-      # already at that tag, adds this run's bundles to the previous run's
-      # half-finished draft. Publishing that would ship a latest.json
-      # describing two different builds, which is a worse version of the bug
-      # the draft was introduced to fix.
-      #
-      # Only a draft is ever deleted. A *published* release cannot be sitting
-      # at this version, because publishing is what creates the tag and the tag
-      # is what the floor above steps over.
+      # A run that died before publishing leaves a draft, which has no tag, so the
+      # next run computes the same version and would add to that stale draft. Delete
+      # it. Only drafts are deleted; a published release always has its tag.
       - name: Clear a draft left behind by an earlier attempt
         if: steps.plan.outputs.skip != 'true'
         env:
@@ -178,16 +127,10 @@ jobs:
           VERSION: ${{ steps.plan.outputs.version }}
         run: |
           set -euo pipefail
-          # Absent is the ordinary case, and `gh release view` exits non-zero
-          # for it. Anything else -- a published release, or no release at all
-          # -- leaves this alone.
+          # `gh release view` fails when there is no release, which is the usual case.
           state=$(gh release view "v$VERSION" --json isDraft --jq .isDraft 2>/dev/null || echo none)
           if [ "$state" = "true" ]; then
-            # No `--cleanup-tag`. A draft has no tag -- that is the whole
-            # reason this step exists -- and asking gh to delete one anyway
-            # deleted the draft, then failed on "Reference does not exist",
-            # which failed the job. The one time this path ran for real, the
-            # recovery from a failed release was itself the failed release.
+            # No `--cleanup-tag`: a draft has no tag, and gh fails the job looking for it.
             gh release delete "v$VERSION" --yes
             echo "::warning::Deleted a leftover draft v$VERSION from an earlier attempt. Rebuilding it."
           else
@@ -195,26 +138,13 @@ jobs:
           fi
 
 
-  # Merging is the release, so merging is the last moment anyone could notice
-  # that main does not work. Nothing was looking.
-  #
-  # This workflow fired on push to main and went straight to bundling, and the
-  # bundler only compiles -- it runs no tests at all. So a commit that compiled
-  # and broke the suite was built, signed and published to every installed
-  # copy's updater, and the first evidence was somebody's launcher behaving
-  # oddly. Required status checks on main stop a red pull request being merged,
-  # which covers most of the ways this happens; they do not cover two branches
-  # that were each green and are not green together, which is the way that
-  # actually reaches main unnoticed.
-  #
-  # So: wait for CI on this exact commit, and release nothing without it.
+  # The bundler runs no tests, and two PRs green alone can break main together, so
+  # nothing is released until CI is green on this exact commit.
   ci:
     needs: decide
     if: needs.decide.outputs.skip != 'true'
     runs-on: ubuntu-latest
-    # Above the half-hour deadline the step sets for itself, so the step's own
-    # message -- which names the run and its last known status -- is what fails
-    # the job, rather than a bare cancellation that says nothing.
+    # Longer than the step's own 30-minute deadline, so its error message wins.
     timeout-minutes: 35
     outputs:
       green: ${{ steps.wait.outputs.green }}
@@ -228,26 +158,18 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Half an hour. CI is about two minutes of work, so anything past
-          # this is a queue that is not going to clear, not a slow build.
+          # CI takes minutes; half an hour means a stuck queue.
           deadline=$(( $(date +%s) + 1800 ))
 
           while :; do
-            # A call that fails is not a run that has not started, and this
-            # discarded both into the same empty string. A rate limit or a blip
-            # then read as "CI has not begun", the loop polled on for the full
-            # half hour, and the release failed blaming CI for something that
-            # had never been asked. Still not fatal -- one blip should not stop
-            # a release -- but no longer indistinguishable.
+            # An API failure is warned about, not mistaken for "CI has not started".
             if ! run=$(gh api \
                     "repos/$GH_REPO/actions/workflows/ci.yml/runs?head_sha=$SHA&per_page=1" \
                     --jq '.workflow_runs[0] // empty' 2>err.log); then
               echo "::warning::could not read CI runs for $SHA: $(tail -1 err.log)"
               run=''
             fi
-            # Not `${run:-{}}`. Bash reads that as ${run:-{} followed by a
-            # literal }, which parses fine until the first time there is a real
-            # run to find. The same trap is written up in `decide` above.
+            # Not `${run:-{}}`, for the same reason as in `decide`.
             [ -n "$run" ] || run='{}'
 
             status=$(echo "$run" | jq -r '.status // "none"')
@@ -262,12 +184,8 @@ jobs:
                   exit 0
                   ;;
                 cancelled)
-                  # CI cancels itself when a newer push lands on the same ref.
-                  # If this commit is no longer the tip, that is what happened,
-                  # and the newer commit's release will carry this change --
-                  # so this is a clean stop, not a failure. Failing here would
-                  # put a red cross on a release that was correctly skipped,
-                  # and a red cross that is usually nothing is one nobody reads.
+                  # CI cancels itself on a newer push; if this is no longer the tip,
+                  # the newer commit carries the release, so stop cleanly.
                   tip=$(gh api "repos/$GH_REPO/commits/main" --jq '.sha')
                   if [ "$tip" != "$SHA" ]; then
                     echo "green=false" >> "$GITHUB_OUTPUT"
@@ -293,14 +211,8 @@ jobs:
             sleep 20
           done
 
-  # Prove the signing key works before spending nine minutes finding out it
-  # does not.
-  #
-  # The whole matrix built for 5-9 minutes each and then died at the very last
-  # step on "incorrect updater private key password: Wrong password for that
-  # key" -- the bundler signs after it has built everything. This does the same
-  # decode against a scratch file in about a minute, so a key problem costs a
-  # minute and says so plainly.
+  # Signing happens at the end of a 5 to 9 minute build, so check the key and its
+  # password first and fail in a minute.
   key:
     needs: decide
     if: needs.decide.outputs.skip != 'true'
@@ -344,35 +256,13 @@ jobs:
     if: needs.decide.outputs.skip != 'true' && needs.ci.outputs.green == 'true'
     strategy:
       fail-fast: false
-      # One at a time, and this is not a preference.
-      #
-      # Every job writes `latest.json` -- the file the updater actually reads --
-      # by downloading it, adding its own platform and uploading it again. Run
-      # four of those at once and it is a read-modify-write race: whoever
-      # finishes last wins and the others' entries are gone.
-      #
-      # v0.2.9 shipped that way. The release page looked perfect, the .exe and
-      # its signature were both attached, and `latest.json` had eight platform
-      # entries instead of eleven -- none of them Windows. Every Windows
-      # install was told it was up to date, indefinitely, with the update
-      # sitting right there.
-      #
-      # Four targets in sequence cost twenty-five minutes on v0.2.20, against
-      # about twelve if they ran together: 4.0 and 4.3 for the two macOS
-      # targets, 5.1 for Windows, and 11.8 for Linux, which builds an AppImage,
-      # a .deb and a .rpm where the others build one bundle each. Twenty-nine
-      # minutes for the whole run.
-      #
-      # That is worth writing down rather than estimating, because the figure
-      # is what a future reader will weigh against going parallel again. It
-      # used to say fifteen minutes, which was a guess and was wrong by half.
-      #
-      # A release nobody receives still costs more.
+      # Serial on purpose: each job read-modify-writes `latest.json`, so parallel jobs
+      # drop each other's platforms (v0.2.9 shipped without Windows). Costs about
+      # 25 minutes against 12 in parallel.
       max-parallel: 1
       matrix:
         include:
-          # Apple silicon and Intel are separate bundles; the updater picks by
-          # target triple, so shipping one strands half the Macs.
+          # The updater picks by target triple, so both Macs need a bundle.
           - os: macos-latest
             target: aarch64-apple-darwin
           - os: macos-latest
@@ -384,41 +274,22 @@ jobs:
 
     runs-on: ${{ matrix.os }}
 
-    # Per target, and the matrix is serial, so the worst case is four of these.
-    # The bundles take five to nine minutes each; this leaves room for a slow
-    # runner without leaving room for a wedged one, which would otherwise hold
-    # `concurrency: release` -- it does not cancel in progress -- and block
-    # every release behind it for the six-hour default.
+    # Bounded so a wedged runner cannot hold `concurrency: release` for six hours.
     timeout-minutes: 45
 
-    # The signing key lives here rather than in repository secrets, so no other
-    # workflow -- including one added by a pull request -- can reach it. Safe
-    # if the environment does not exist yet: a job with an environment still
-    # sees repository secrets.
-    #
-    # If the environment does exist, its "deployment branches and tags" rule
-    # must allow **main**, not a `v*` tag pattern. GitHub checks that against
-    # the ref the workflow is running on -- a push to main -- not against the
-    # tag this job checks out below. A tag pattern here fails the whole release
-    # with "Branch main is not allowed to deploy", which reads like a
-    # permissions problem and is not one. Allowing main still blocks pull
-    # requests, which run on refs/pull/<n>/merge. See docs/UPDATES.md.
+    # The signing key is in the `release` environment so no other workflow, including
+    # one from a PR, can read it. Its deployment rule must allow branch `main`, not a
+    # `v*` tag: GitHub checks the triggering ref. See docs/UPDATES.md.
     environment: release
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The exact commit that triggered this, so all four targets build
-          # identical source however busy main is.
+          # The triggering commit, so all four targets build the same source.
           ref: ${{ github.sha }}
 
-      # Defender scans every file cargo writes, and cargo writes tens of
-      # thousands of them. It is the single biggest cause of a Windows job
-      # sitting apparently idle for minutes at a time.
-      #
-      # Tolerant of failure on purpose: this is a speed-up, not a
-      # requirement, and a runner image that has moved Defender or dropped the
-      # cmdlet should not fail the build over it.
+      # Defender scanning cargo output stalls Windows builds. Only a speed-up, so a
+      # runner image without the cmdlet must not fail the build.
       - name: Keep Defender out of the build directories
         if: runner.os == 'Windows'
         shell: pwsh
@@ -430,14 +301,8 @@ jobs:
           Add-MpPreference -ExclusionProcess "rustc.exe" -ErrorAction SilentlyContinue
           Write-Host "Defender exclusions applied."
 
-      # Written into the working copy and never committed.
-      #
-      # An earlier version committed the bump and pushed it to main, which
-      # meant the release automation needed write access to the one branch
-      # that should only ever change through a reviewed pull request -- every
-      # protection worth having would have had to carve out an exception for
-      # it. The tag and the release are the record of what shipped; the number
-      # sitting in main is not, and `decide` reads the newest tag anyway.
+      # Never committed, so release automation needs no push access to main. The tag
+      # is the record of what shipped.
       - name: Set the version for this build
         shell: bash
         run: |
@@ -452,9 +317,7 @@ jobs:
               fs.writeFileSync(f, JSON.stringify(j, null, 2) + "\n");
             }
           ' "$next"
-          # Node rather than sed or perl: this same step runs on four runner
-          # images including Windows, and the one tool guaranteed on all of
-          # them is the one the frontend already needs.
+          # Node rather than sed or perl: it is on all four runner images.
           node -e '
             const fs = require("fs");
             const f = "src-tauri/Cargo.toml";
@@ -506,32 +369,15 @@ jobs:
 
             Installed copies will offer this version shortly after their next
             launch. Or ask now: Settings → Updates → Check for updates.
-          # A draft until every platform is in.
-          #
-          # tauri-action publishes as it goes, so the release went live the
-          # moment the *first* target finished -- and `/releases/latest`
-          # started answering with a manifest listing one platform. On Windows,
-          # which runs last, that meant "you are up to date" for the twenty-five
-          # minutes the rest of the matrix was still going, with the update
-          # sitting on the page. Measured on v0.2.20; see the matrix above.
-          #
-          # A draft is invisible to `/releases/latest`, which is exactly what is
-          # wanted here: nobody is told anything until the release is whole.
-          # The verify job below checks it and publishes it.
+          # Draft until verify publishes it, or `/releases/latest` serves a manifest
+          # missing the platforms still building.
           releaseDraft: true
           prerelease: false
-          # Writes latest.json, which is the file the updater actually reads.
-          # Without it the release is just installers nobody's app will find.
-          #
-          # This was `includeUpdaterJson`, the v0.4 name, which v1 does not
-          # know: every leg logged "Unexpected input(s) 'includeUpdaterJson'"
-          # and the file was written only because the real input defaults to
-          # true. Named correctly so that default is no longer load-bearing.
+          # Writes latest.json, the file the updater reads. (`includeUpdaterJson` was
+          # the v0.4 name and is ignored by v1.)
           uploadUpdaterJson: true
 
-  # The release page can look perfect while the one file that matters is
-  # incomplete. Nothing noticed that until a Windows user was told they were up
-  # to date for the third day running, so it is checked here instead.
+  # The release page can look complete while latest.json is not, so check it.
   verify:
     needs: [decide, build]
     if: needs.decide.outputs.skip != 'true'
@@ -576,10 +422,7 @@ jobs:
           VERSION: ${{ needs.decide.outputs.version }}
         run: |
           set -euo pipefail
-          # Only now does anything reach an installed copy. Until this line the
-          # release is a draft and `/releases/latest` still answers with the
-          # previous version, which is the honest answer while this one is
-          # half-built.
+          # Publishing is what makes the release visible to installed copies.
           gh release edit "v$VERSION" --repo "${{ github.repository }}" --draft=false
           echo "v$VERSION is live."
 

@@ -1,11 +1,5 @@
-/**
- * Transient messages.
- *
- * A launcher fails in ways the user needs to know about and cannot read a log
- * for: a game whose executable has moved, a store that is not running. These
- * say so on screen, briefly, without stealing focus -- there is no pointer and
- * no keyboard on a television, so nothing here may require dismissing.
- */
+/** Transient messages. They never take focus or need dismissing, as a pad
+ *  user has no pointer. */
 import { logWarn } from './log'
 
 let host: HTMLElement | undefined
@@ -19,9 +13,8 @@ function ensureHost(): HTMLElement {
   return host
 }
 
-/** A toast that is still on screen, for updating its text in place. */
 export interface Toast {
-  /** Replace the text and restart the clock. Nothing happens once it has gone. */
+  /** Replace the text and restart the clock. No-op once it has gone. */
   update(message: string): void
 }
 
@@ -32,8 +25,7 @@ export function toast(message: string, kind: 'info' | 'error' = 'info', ms = 400
   ensureHost().appendChild(el)
   if (kind === 'error') logWarn('toast', message)
 
-  // Fade, then remove. Removing on transitionend alone would leak an element
-  // per toast if the window is hidden and the transition never fires.
+  // Timers, not transitionend, which never fires in a hidden window.
   let leaving: number | undefined
   let gone = false
   const arm = (): void => {
@@ -47,9 +39,7 @@ export function toast(message: string, kind: 'info' | 'error' = 'info', ms = 400
   arm()
 
   return {
-    // Downloading an update reported progress with a fresh toast per chunk,
-    // which stacked "Downloading… 41%" thirty deep down the side of the
-    // screen. One toast, edited, reads as a counter.
+    // For progress, which stacked dozens deep as a new toast per chunk.
     update(next) {
       if (gone) return
       el.textContent = next

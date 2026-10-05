@@ -1,26 +1,9 @@
 #!/usr/bin/env python3
 """
-Every command the agent is told to run, it is allowed to run.
-
-Three times now the instructions have demanded something the tool list forbade,
-and every time the symptom was the same: a run that works for fifteen minutes,
-reports success, and delivers nothing.
-
-  * `gh pr create` was missing while claude-instructions.md said, twice, that
-    the pull request is the deliverable. Runs pushed a branch and left a
-    "Create PR" link for somebody to click.
-  * `cd` was missing while both CLAUDE.md and claude-instructions.md say to run
-    `cd src-tauri && cargo clippy --all-targets -- -D warnings` before claiming
-    to be done. Issue #76 stopped on exactly that line, after thirteen
-    permission denials, with "Open PR" left unticked.
-
-None of it failed loudly. The action reports `is_error: false` and the job goes
-green, because being refused a tool is not an error -- it is the agent being
-told no, and then doing its best without it.
-
-So: read the commands out of the fenced bash blocks the agent is pointed at,
-read the allowlists out of the workflows that point at them, and refuse any
-instruction the agent could not carry out.
+Fail when the agent's instructions ask for a command its workflow's
+--allowed-tools does not grant. A refused tool is not an error: the run
+reports success having delivered nothing. Commands are read from the fenced
+bash blocks in each workflow's brief.
 """
 import pathlib
 import re
@@ -28,32 +11,15 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 
-# Each workflow against its own brief, which is not the same brief.
-#
-# claude.yml points an agent at these documents and tells it to follow them, so
-# everything they ask for it has to be able to do. ci-repair.yml is a narrower
-# job -- it fixes a red pull request on a branch that already exists -- and its
-# tool list is correctly narrower for it. Checking the shared documents against
-# both would demand `gh issue edit` from a workflow that has no business
-# editing issues, which is how a check earns its way into being switched off.
-#
-# So ci-repair.yml is checked against the commands in its own `prompt:`, which
-# is the brief it actually gets.
+# Each workflow against its own brief. ci-repair.yml's job is narrower, so it
+# is checked against its own `prompt:`, not the shared documents.
 BRIEFS = {
     "claude.yml": [ROOT / "CLAUDE.md", ROOT / ".github" / "claude-instructions.md"],
     "ci-repair.yml": [ROOT / ".github" / "workflows" / "ci-repair.yml"],
     "review.yml": [ROOT / ".github" / "workflows" / "review.yml"],
 }
 
-# What the loop depends on that no fenced block spells out.
-#
-# Parsing the documents catches an instruction written as a command. It cannot
-# catch one written as prose, and the most expensive omission so far was
-# exactly that: claude-instructions.md says "the pull request is the
-# deliverable" twice, at length, and never as a shell line -- so nothing
-# noticed that `gh pr create` was absent for as long as it was. These are
-# named here because a capability the loop cannot do without should not depend
-# on somebody having phrased it as code.
+# Capabilities the loop needs that the briefs state only in prose.
 REQUIRED = {
     "claude.yml": [
         "gh pr create",     # the deliverable, stated in prose only
@@ -65,16 +31,13 @@ REQUIRED = {
         "git",               # it pushes to an existing branch
         "gh pr comment",     # how it says which it concluded and why
     ],
-    # The review's brief was "post ONE comment" and its tool list was `git`.
-    # Sixty-nine runs, every one reported success, not one comment posted:
-    # the agent was refused, gave up, and the run had nothing to fail on.
+    # Without this, review runs once reported success and posted nothing.
     "review.yml": [
         "gh pr comment",     # the whole job, per its own prompt
     ],
 }
 
-# Shell built-ins and operators that are not commands needing a grant, plus
-# the placeholders documentation uses in place of a real argument.
+# Shell keywords and operators, which need no grant.
 IGNORE = {"", "#", "&&", "||", "|", "then", "else", "fi", "do", "done"}
 
 
@@ -92,13 +55,8 @@ def commands(doc: pathlib.Path) -> list[str]:
             line = line.split("#", 1)[0].strip()
             if not line:
                 continue
-            # Split on `&&` and `||`, which chain commands the agent has to
-            # run, and not on a single `|`, which pipes into a filter. The
-            # distinction matters: `cd src-tauri && cargo clippy` hides a
-            # second command that needs granting -- that is the bug this file
-            # exists for -- while `git log | head` in an example would
-            # otherwise demand a grant for `head` and fail the build over
-            # documentation.
+            # Split on `&&` and `||`, which chain commands that each need a
+            # grant, not on `|`, which pipes into a filter such as `head`.
             for part in re.split(r"&&|\|\|", line):
                 part = part.strip()
                 if part and part.split()[0] not in IGNORE:

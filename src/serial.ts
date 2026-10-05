@@ -1,13 +1,6 @@
 /**
- * Run an async job at most once at a time. A call made while one is in flight
- * gets a single follow-up run, started when the first finishes and shared by
- * every caller that arrived during it, so the answer they get reflects the
- * state at the time they asked rather than an earlier one.
- *
- * Library reloads are triggered by the window regaining focus, by Settings,
- * by the detail view and by the picker, and two arriving together used to
- * race: both scanned, both rebuilt the grid, and whichever finished second
- * won regardless of which had the newer facts.
+ * Run an async job one at a time. Calls made during a run share one follow-up
+ * run, so they see current state. Concurrent library reloads used to race.
  */
 export function serialised<T>(run: () => Promise<T>): () => Promise<T> {
   let current: Promise<T> | undefined
@@ -18,8 +11,7 @@ export function serialised<T>(run: () => Promise<T>): () => Promise<T> {
   }
   return () => {
     if (!current) return start()
-    // One queued run answers everyone who asked during the current one, and
-    // goes through start() so that it, too, can be queued behind.
+    // Through start(), so later calls can queue behind it in turn.
     queued ??= current
       .catch(() => { /* the first run's failure is its own callers' to hear */ })
       .then(() => { queued = undefined; return start() })

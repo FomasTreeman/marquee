@@ -1,11 +1,5 @@
-/**
- * A sample library of real Steam titles.
- *
- * Real appids on purpose, so `?mock=` exercises the actual artwork path --
- * cover, wide key art and transparent wordmark, straight off the CDN -- rather
- * than only proving the layout. It is also the only way to see the design
- * fully populated on a machine with two games installed.
- */
+/** A sample library of real Steam appids, so `?mock=` exercises the real
+ *  artwork path as well as the layout. */
 import type { Game, SearchHit } from './library'
 
 const SAMPLE: Array<[string, string]> = [

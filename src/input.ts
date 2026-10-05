@@ -1,13 +1,7 @@
 /**
- * Input.
- *
- * One abstract action stream. The gamepad arrives from Rust (see
- * src-tauri/src/input.rs for why it is not the browser Gamepad API) and the
- * keyboard is handled here; nothing downstream ever branches on which.
- *
- * This mirrors the abstraction in the browser prototype's input.js, which was
- * written for the Playnite theme. Keeping the same action names is what makes
- * the rest of the prototype port across unchanged.
+ * One abstract action stream from pad and keyboard; nothing downstream
+ * branches on which. The pad arrives from Rust (src-tauri/src/input.rs says
+ * why), with the webview's Gamepad API as a fallback.
  */
 import { listen } from '@tauri-apps/api/event'
 import { call, inApp } from './host'
@@ -21,8 +15,7 @@ export type Action =
   | 'menu'
   /** Add a game -- Select/Back on a pad. */
   | 'add'
-  /** Keyboard only. The HUD is a development tool and does not deserve a
-   *  face button. */
+  /** Keyboard only: the HUD is a development tool. */
   | 'perf'
   /** Open the library search field — right stick click. */
   | 'search'
@@ -34,13 +27,8 @@ export type Action =
 export type Device = 'pad' | 'keyboard' | 'mouse'
 
 /**
- * Whether the on-screen keyboard should be offered for whatever is currently
- * held.
- *
- * It used to be offered whenever a pad was plugged in at all, which put a
- * keyboard on screen for someone typing on a real one two feet away just
- * because a pad sat connected on the sofa. The legend already tracks what is
- * actually being held via `note()` below -- this follows the same signal.
+ * Whether to offer the on-screen keyboard. Follows the device being held, not
+ * whether a pad is connected, so a keyboard user is not shown one.
  */
 export function wantsOsk(device: Device): boolean {
   return device === 'pad'
@@ -53,12 +41,11 @@ export interface ActionEvent {
   /** Delivery latency in ms, or null when it cannot be measured (keyboard,
    *  or running as a plain browser tab). */
   latency: number | null
-  /** Where it came from. The legend follows this: telling someone to press A
-   *  when they are holding a mouse is worse than telling them nothing. */
+  /** Where it came from; the legend follows this. */
   device: Device
 }
 
-/** Xbox layout, PlayStation in brackets — matches the prototype exactly.
+/** Xbox layout, PlayStation in brackets.
  *    A [X]  confirm     B [O]  back
  *    X [□]  quick       Y [△]  details
  */
@@ -77,14 +64,7 @@ export const KEYMAP: Record<string, Action> = {
   KeyO: 'sort',
 }
 
-/**
- * Every action a controller can produce.
- *
- * Marquee is controller-first but has to be fully usable on keyboard and
- * mouse, and "fully" is the part that rots: a new pad binding gets added and
- * the keyboard route is remembered a release later, if at all. Listing them
- * here lets a test hold the two in step.
- */
+/** Every action a controller can produce, so a test can check each has a key. */
 export const PAD_ACTIONS: readonly Action[] = [
   'up', 'down', 'left', 'right',
   'a', 'b', 'x', 'y',
@@ -96,12 +76,8 @@ export const PAD_ACTIONS: readonly Action[] = [
 interface RustInputEvent { action: Action; repeat: boolean; t: number }
 
 /**
- * Align the Rust monotonic clock with `performance.now()`.
- *
- * Each sample is biased by roughly half an IPC round trip, so we take the best
- * of several — the fastest round trip is the least biased one. The residual
- * error is well under a millisecond, which is noise against the 50 ms input
- * budget in docs/PLAN.md §2.
+ * Align the Rust monotonic clock with `performance.now()`. Each sample is off
+ * by about half a round trip, so the fastest of several is used.
  */
 async function syncClock(samples = 12): Promise<number> {
   let best = Infinity
@@ -113,8 +89,7 @@ async function syncClock(samples = 12): Promise<number> {
     const rtt = after - before
     if (rtt < best) {
       best = rtt
-      // Rust read its clock somewhere inside the round trip; the midpoint is
-      // the best available estimate of when.
+      // Assume Rust read its clock at the midpoint of the round trip.
       offset = (before + after) / 2 - rust
     }
   }
@@ -126,7 +101,7 @@ export interface PadStatus {
   connected: number
   /** The platform API in play: Windows.Gaming.Input, IOKit or evdev. */
   backend: string
-  /** One line per device the backend enumerated. Empty is an answer too. */
+  /** One line per device the backend enumerated. */
   devices: string[]
   /** Why there is no input, when there is a reason worth repeating. */
   failure: string | null
@@ -151,8 +126,7 @@ export async function createInput(
 ): Promise<() => void> {
   const disposers: Array<() => void> = []
 
-  // Mouse movement never produces an action, but it does answer "what are they
-  // holding", which is what the legend needs to know.
+  // The mouse produces no actions, but the legend needs to know it is in use.
   let device: Device | undefined
   const note = (next: Device) => {
     if (device === next) return
@@ -168,12 +142,8 @@ export async function createInput(
   })
 
   const onKey = (e: KeyboardEvent) => {
-    // While a text field has focus, the keyboard belongs to it. Otherwise the
-    // search box eats no letters at all, because W/A/S/D are bound to
-    // navigation and Space is bound to confirm.
-    //
-    // Escape still gets through: a modal you cannot leave from the keyboard is
-    // a trap, and the pad's B button reaches the same handler by another road.
+    // A focused text field gets the keys, or WASD and Space never reach it.
+    // Escape still passes so the field can be left.
     const target = e.target as HTMLElement | null
     const typing = !!target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
     if (typing && e.code !== 'Escape') return
@@ -181,8 +151,6 @@ export async function createInput(
     const action = KEYMAP[e.code]
     if (!action) return
     e.preventDefault()
-    // Browser key repeat is the OS's, not ours, and its cadence differs per
-    // platform. The pad's repeat is tuned in Rust; this just reports honestly.
     note('keyboard')
     dispatch({ action, repeat: e.repeat, latency: null, device: 'keyboard' })
     tap(action, 'keyboard')
@@ -190,24 +158,20 @@ export async function createInput(
   window.addEventListener('keydown', onKey)
   disposers.push(() => window.removeEventListener('keydown', onKey))
 
-  // Whether the Rust path has ever actually delivered a press. Not whether it
-  // says it is running -- a thread that enumerated a pad and then died still
-  // reports a pad. Only an event that arrived proves the route works.
+  // Only a delivered press proves the Rust path works; a thread that
+  // enumerated a pad and then died still reports one.
   let nativeDelivered = false
 
   if (inApp) {
     const offset = await syncClock()
     const unlisten = await listen<RustInputEvent>('input', (ev) => {
       const p = ev.payload
-      // Arriving at all is the proof; it is recorded before anything else so
-      // the webview can see it and stand down on its next frame.
+      // Recorded first so the webview stands down on its next frame.
       const wasFirst = !nativeDelivered
       nativeDelivered = true
 
-      // Exactly one path dispatches at any moment. If the webview is driving
-      // it owns this press too -- including the very first native event, which
-      // it has already handled. Dispatching here as well would double it, and
-      // a doubled A launches a game twice.
+      // Only one path dispatches. While the webview drives it has already
+      // handled this press, and a doubled A launches a game twice.
       if (webPad?.armed()) {
         if (wasFirst) {
           logInfo('input', 'the native path delivered; handing the pad back to it')
@@ -226,28 +190,16 @@ export async function createInput(
     disposers.push(unlisten)
   }
 
-  /**
-   * Exactly one path drives: whichever sees more hardware. Native is
-   * preferred (latency, repeat, survives a game taking focus), but gilrs
-   * reads Windows.Gaming.Input and the webview reads XInput, HID and
-   * DirectInput, so a DualSense working natively once hid an Xbox pad gilrs
-   * could not see. Count both; the webview takes over completely, because
-   * both at once is every press twice.
-   */
+  // Whichever path sees more hardware drives, alone. Native is preferred, but
+  // the webview reads APIs gilrs does not, and once saw an Xbox pad it missed.
   let nativePads = (await padStatus()).connected
 
-  /**
-   * Only a delivered event proves the native path works. `connected > 0` is
-   * a claim, not evidence: gilrs has reported one pad, enumerated nothing and
-   * never sent a button, and counting that stood the webview down. The count
-   * says how much native covers; whether it works at all is whether anything
-   * has arrived from it.
-   */
+  // gilrs has reported a pad and never sent a button, so the count alone is
+  // not enough.
   const nativeHandlesEverything = () =>
     nativeDelivered && nativePads >= (webPad?.usable() ?? 0)
 
-  // The count changes whenever a pad is plugged in, wakes up or goes to sleep,
-  // and a snapshot taken at startup is exactly what made the old version wrong.
+  // Pads come and go, so a count from startup goes stale.
   const recount = window.setInterval(() => {
     void padStatus()
       .then((s) => { nativePads = s.connected })
@@ -286,12 +238,6 @@ function tap(action: Action, device: Device): void {
 
 /**
  * Watch every action as it arrives, and every button that mapped to nothing.
- *
- * The second half is the point. A pad whose buttons arrive under names we do
- * not recognise behaves identically to a pad that sends nothing at all, and no
- * device list separates the two -- but one is a two-line fix and the other is
- * a driver problem.
- *
  * Returns a function that stops watching.
  */
 export function onAnyInput(
@@ -302,9 +248,7 @@ export function onAnyInput(
   let stopRust: (() => void) | undefined
   let stopped = false
   if (inApp) {
-    // Stopping before listen() has resolved -- a quick toggle of the test --
-    // left the Rust listener attached for the life of the window, reporting
-    // to a panel that had gone.
+    // Stopping before listen() resolves must still detach it.
     void listen<string>('input-unmapped', (e) => onUnmapped(e.payload))
       .then((un) => { if (stopped) un(); else stopRust = un })
       .catch((e) => logWarn('input', 'could not watch for unmapped buttons', e))

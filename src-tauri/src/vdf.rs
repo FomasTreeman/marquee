@@ -1,15 +1,7 @@
-//! Valve Data Format.
+//! Text VDF, as used by `libraryfolders.vdf` and `appmanifest_*.acf`.
 //!
-//! Steam's `libraryfolders.vdf` and every `appmanifest_*.acf` are text VDF:
-//! quoted keys, quoted values or a nested brace block, tabs between them. The
-//! format is undocumented, so this parser is written to be tolerant of things
-//! Valve does that a strict reader would reject -- comments, unquoted tokens,
-//! duplicate keys, and a stray conditional suffix like `[$WINDOWS]`.
-//!
-//! It is deliberately its own module with its own tests. docs/PLAN.md §11
-//! notes that Valve owes us nothing and could change any of this; when that
-//! happens the failure should be one parse error in one place, not a mystery
-//! somewhere in the scan.
+//! The format is undocumented, so the parser tolerates comments, unquoted
+//! tokens, duplicate keys and conditional suffixes like `[$WINDOWS]`.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -31,11 +23,8 @@ impl Value {
     pub fn get(&self, key: &str) -> Option<&Value> {
         match self {
             Value::Map(m) => m.get(key).or_else(|| {
-                // Valve is inconsistent about capitalisation across files and
-                // even across versions of the same file -- `LastPlayed` and
-                // `lastupdated` sit two lines apart in a real manifest. Fall
-                // back to a case-insensitive match rather than making every
-                // caller guess.
+                // Valve's key casing is inconsistent (`LastPlayed` beside
+                // `lastupdated`), so fall back to a case-insensitive match.
                 let want = key.to_ascii_lowercase();
                 m.iter()
                     .find(|(k, _)| k.to_ascii_lowercase() == want)
@@ -53,8 +42,7 @@ impl Value {
         self.str_at(key)?.trim().parse().ok()
     }
 
-    /// The single child of a one-entry document, which is how every Steam file
-    /// is shaped: `"AppState" { ... }`, `"libraryfolders" { ... }`.
+    /// The single child of a one-entry document, such as `"AppState" { ... }`.
     pub fn root_child(&self) -> Option<&Value> {
         match self {
             Value::Map(m) if m.len() == 1 => m.values().next(),
@@ -133,9 +121,7 @@ impl<'a> Parser<'a> {
 
     fn quoted(&mut self) -> Result<String, ParseError> {
         self.bump(); // opening quote
-                     // Bytes until the closing quote, decoded once at the end. Pushing
-                     // each byte as a char decoded UTF-8 as Latin-1, so every accented or
-                     // Japanese title came out as mojibake.
+                     // Decode once at the end; byte-by-byte chars made UTF-8 mojibake.
         let mut out = Vec::new();
         loop {
             match self.bump() {
@@ -146,9 +132,7 @@ impl<'a> Parser<'a> {
                     Some(b't') => out.push(b'\t'),
                     Some(b'\\') => out.push(b'\\'),
                     Some(b'"') => out.push(b'"'),
-                    // Windows paths in these files are written with single
-                    // backslashes as often as escaped ones. Keep whatever
-                    // followed rather than losing a path separator.
+                    // Windows paths often use unescaped backslashes; keep the separator.
                     Some(other) => {
                         out.push(b'\\');
                         out.push(other);
@@ -180,8 +164,7 @@ impl<'a> Parser<'a> {
     }
 
     fn map(&mut self, depth: usize) -> Result<Value, ParseError> {
-        // A malformed or hostile file must not blow the stack. Real Steam
-        // files nest four or five deep.
+        // Stop a hostile file blowing the stack; real files nest about five deep.
         if depth > 64 {
             return self.err("nested too deeply");
         }
@@ -204,7 +187,7 @@ impl<'a> Parser<'a> {
             }
             self.skip_trivia();
 
-            // `"key" "value" [$WINDOWS]` -- a platform conditional we ignore.
+            // Skip a trailing platform conditional such as `[$WINDOWS]`.
             let value = match self.peek() {
                 Some(b'{') => {
                     self.bump();
@@ -221,8 +204,7 @@ impl<'a> Parser<'a> {
                     }
                 }
             }
-            // Last wins. Valve emits duplicate keys occasionally and the later
-            // one is the live value.
+            // Valve sometimes emits duplicate keys; the later one is live.
             out.insert(key, value);
         }
     }
@@ -243,10 +225,7 @@ pub fn parse(input: &str) -> Result<Value, ParseError> {
 mod tests {
     use super::*;
 
-    /// Real file, captured from a working Steam install with only the home
-    /// path anonymised. docs/PLAN.md §11 is explicit that these tests cannot
-    /// prevent Valve changing the format -- they catch us breaking the reader,
-    /// which is the failure we control.
+    /// Captured from a real Steam install, with the home path anonymised.
     const REAL_MANIFEST: &str = include_str!("../tests/fixtures/appmanifest_365670.acf");
     const REAL_LIBFOLDERS: &str = include_str!("../tests/fixtures/libraryfolders.vdf");
     const MULTI_LIBFOLDERS: &str = include_str!("../tests/fixtures/libraryfolders_multi.vdf");
@@ -260,7 +239,6 @@ mod tests {
         assert_eq!(app.str_at("installdir"), Some("Blender"));
         assert_eq!(app.u64_at("StateFlags"), Some(4));
         assert_eq!(app.u64_at("SizeOnDisk"), Some(901233084));
-        // Nested block, several levels down.
         assert!(app.get("InstalledDepots").is_some());
     }
 
@@ -272,9 +250,6 @@ mod tests {
         assert!(first.str_at("path").unwrap().ends_with("Steam"));
     }
 
-    /// Valve is inconsistent about capitalisation inside a single file --
-    /// `LastPlayed` and `lastupdated` sit two lines apart in the real manifest
-    /// above. Callers should not have to guess.
     #[test]
     fn key_lookup_is_case_insensitive() {
         let app = parse(REAL_MANIFEST).unwrap();
@@ -291,7 +266,7 @@ mod tests {
             folders.get("0").unwrap().str_at("path"),
             Some("C:\\Program Files (x86)\\Steam")
         );
-        // `"label" "games" [$WINDOWS]` -- the conditional must not become a key.
+        // `"label" "games" [$WINDOWS]`: the conditional must not become a key.
         assert_eq!(folders.get("1").unwrap().str_at("label"), Some("games"));
         assert_eq!(
             folders.get("1").unwrap().str_at("path"),
@@ -310,8 +285,7 @@ mod tests {
 
     #[test]
     fn a_truncated_file_is_an_error_not_a_panic() {
-        // A manifest half-written by Steam while we happened to read it. This
-        // must degrade, never crash -- priority #2.
+        // A manifest Steam was halfway through writing.
         let truncated = &REAL_MANIFEST[..REAL_MANIFEST.len() / 2];
         let _ = parse(truncated);
 

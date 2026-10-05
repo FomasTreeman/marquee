@@ -1,29 +1,18 @@
-//! Fullscreen, and keeping the screen awake.
+//! Keeping the screen awake while the window is focused.
 //!
-//! Both exist for the same reason: a controller is not an input device as far
-//! as the operating system is concerned. Browsing a library for ten minutes
-//! with a pad looks exactly like ten minutes of inactivity, so the screensaver
-//! arrives in the middle of active use. Nothing else in this app can fix that.
-//!
-//! Held only while the window is focused. A launcher minimised behind a game
-//! has no business keeping a display awake -- the game will do that itself if
-//! it needs to, and if nothing is running the screen should be allowed to
-//! sleep.
+//! The OS does not count gamepad input as activity, so browsing with a pad
+//! would otherwise trigger the screensaver.
 
 use std::process::Child;
 use std::sync::Mutex;
 
 use crate::{log_info, log_warn};
 
-/// The child process holding the inhibit, on platforms where that is how it is
-/// done. Windows uses an API call instead and stores nothing.
+/// The process holding the inhibit on macOS and Linux. Unused on Windows.
 static KEEP_AWAKE: Mutex<Option<Child>> = Mutex::new(None);
 
-/// Ask the system not to blank the screen.
-///
-/// Idempotent: calling it twice does not stack, and a failure is logged once
-/// rather than repeatedly -- a machine where this does not work should not
-/// produce a line per focus event.
+/// Ask the system not to blank the screen, or release that request.
+/// Idempotent: repeated calls do not stack.
 pub fn keep_awake(on: bool) {
     let mut held = match KEEP_AWAKE.lock() {
         Ok(h) => h,
@@ -41,23 +30,19 @@ pub fn keep_awake(on: bool) {
         return;
     }
 
-    // Already holding it. Calling twice must not stack a second inhibit.
     if held.is_some() {
         return;
     }
 
-    // Windows is a thread-state flag rather than a child process, so there is
-    // nothing to store -- which is why the two branches cannot share a body.
+    // Windows uses a thread-state flag, so there is no child to store.
     #[cfg(target_os = "windows")]
     {
         windows_keep_awake(true);
         log_info!("screen", "holding the display awake");
     }
 
-    // A child process rather than a library binding. `caffeinate` and
-    // `systemd-inhibit` are the supported interfaces on their platforms, they
-    // die with us if we crash, and neither adds a dependency that has to
-    // compile on all three targets.
+    // `caffeinate` and `systemd-inhibit` are the supported interfaces and
+    // need no extra dependency.
     #[cfg(target_os = "macos")]
     let spawned = std::process::Command::new("caffeinate").arg("-d").spawn();
 
@@ -85,15 +70,12 @@ pub fn keep_awake(on: bool) {
 
 #[cfg(target_os = "windows")]
 fn windows_keep_awake(on: bool) {
-    // ES_CONTINUOUS with ES_DISPLAY_REQUIRED holds until cleared; ES_CONTINUOUS
-    // alone releases it. This is thread state, so it must be set from the same
-    // thread that clears it -- both calls come from the event loop.
+    // Thread state: set and cleared from the same thread (the event loop).
     const ES_CONTINUOUS: u32 = 0x8000_0000;
     const ES_DISPLAY_REQUIRED: u32 = 0x0000_0002;
     const ES_SYSTEM_REQUIRED: u32 = 0x0000_0001;
-    // Returns the previous state, or zero on failure. Worth reporting: a
-    // machine where this silently does nothing is one where the screen blanks
-    // mid-session and nobody knows why.
+    // SAFETY: takes a plain flag value and touches no memory of ours.
+    // Returns zero on failure, which is logged below.
     let previous = unsafe {
         windows_sys::Win32::System::Power::SetThreadExecutionState(if on {
             ES_CONTINUOUS | ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED
@@ -106,10 +88,7 @@ fn windows_keep_awake(on: bool) {
     }
 }
 
-/// Release on the way out.
-///
-/// `caffeinate` would otherwise outlive a hard shutdown and hold the display
-/// awake with nothing on screen.
+/// Release on exit, or `caffeinate` can outlive us and hold the display awake.
 pub fn release_on_exit() {
     keep_awake(false);
 }

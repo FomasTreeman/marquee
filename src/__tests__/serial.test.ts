@@ -36,7 +36,6 @@ describe('a serialised job', () => {
     const third = j.run()
     j.release()
     await first
-    // The follow-up starts only once the first has settled.
     await Promise.resolve()
     expect(j.runs()).toBe(2)
     j.release()
