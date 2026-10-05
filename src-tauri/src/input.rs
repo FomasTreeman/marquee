@@ -538,6 +538,9 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
                 EventType::Disconnected => {
                     // Saturating, because a disconnect can arrive for a pad
                     // that was already gone when we enumerated at startup.
+                    // `try_update` is the replacement, but it only stabilised in
+                    // 1.95 and Cargo.toml pins rust-version to 1.77.
+                    #[allow(deprecated)]
                     let _ =
                         shared
                             .connected
