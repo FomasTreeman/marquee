@@ -71,42 +71,49 @@ The pipeline is as much a part of this project as the launcher.
 limits it. [docs/DEVSECOPS.md](docs/DEVSECOPS.md) lists the controls in place
 and the ones still to add, with the trade-offs of each.
 
-## How AI is used here
+## How development works now
 
-Claude Code does a lot of the work in this repository, and the automation is
-built around it. A person stays in charge of what ships.
+I built Marquee and then handed its ongoing development to an AI loop. People
+decide what gets worked on and what ships; Claude Code does the work in
+between.
 
-1. An issue is filed. The maintainer decides whether an agent or a person
-   takes it.
-2. For an agent, Claude Code works from the issue and opens a pull request.
-3. CI runs. If it fails, an agent gets up to three attempts at a fix, then
-   stops and asks.
-4. A second agent run, with no memory of writing the change, leaves a review
-   comment. It cannot approve anything.
-5. **A person reviews every pull request.** Nothing merges until that person
-   enables it, and merging is what starts a release.
+1. **A person files an issue.**
+2. **An agent fixes it.** Claude Code works from the issue and opens a pull
+   request. If the issue needs a decision, it asks one question on the issue
+   with the `needs-decision` label and waits for the reply.
+3. **CI checks it** on Linux, Windows and macOS. If CI fails, an agent gets up
+   to three attempts at a fix, then stops and asks.
+4. **A second agent run reviews the diff** and leaves a comment. It cannot
+   approve anything.
+5. **A person reviews every pull request.** Nothing merges until they enable
+   it, and merging starts the release.
 
 Only someone with write access can start an agent run, and issue text is
-treated as untrusted input. One gap is worth stating plainly: the human review is a rule
-the project follows, not yet one GitHub enforces. Making it enforced is the
-first item in [docs/DEVSECOPS.md](docs/DEVSECOPS.md).
+treated as untrusted input. One gap is worth stating plainly: the human review
+is a rule the project follows, not yet one GitHub enforces. Enforcing it is
+the first item in [docs/DEVSECOPS.md](docs/DEVSECOPS.md).
 
 [docs/AUTOMATION.md](docs/AUTOMATION.md) describes the whole loop.
 
 ## What is next
 
-- **Agents as a team with separate roles.** Today one agent writes and a second
-  run reviews. The next step is distinct roles, such as a planner that breaks
-  down and prioritises issues, a developer and a reviewer, each with its own
-  identity and only the permissions that role needs. The human reviewer stays
-  the one who approves.
+- **Catching problems before anyone files them.** A service that runs the
+  launcher in a sandbox, exercises it the way a person would, and opens an
+  issue when something breaks. That would close the loop: issues would come
+  from testing as well as from people, and the agents would pick them up as
+  usual.
+- **Agents as a team with separate roles.** Today one agent writes and a
+  second run reviews. The next step is distinct roles, such as a project
+  manager that breaks down and prioritises issues, a developer and a reviewer,
+  each with its own identity and only the permissions that role needs. A person
+  still approves.
 - **Better context management.** Each agent run starts cold and reads the same
   long instructions. Shorter briefs per role, and a summary carried from one
   run to the next, would make runs cheaper and more focused.
 - **A route to running offline.** The loop depends on a hosted model through
   one action. Putting that behind a small interface would let a local model
-  take some roles, for cost or for privacy. It is the least likely of the three
-  in the near term, because hosted models are well ahead for this kind of work.
+  take some roles, for cost or for privacy. It is the least likely of these in
+  the near term, because hosted models are well ahead for this kind of work.
 - **The security list.** The open items in
   [docs/DEVSECOPS.md](docs/DEVSECOPS.md): static analysis, dependency auditing,
   build provenance and pinned toolchains among them.
