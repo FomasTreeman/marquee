@@ -6,6 +6,8 @@ you own, whichever store it came from.
 Runs on Windows, macOS and Linux. Built with Tauri v2: a Rust core and a
 TypeScript frontend with no UI framework.
 
+![The Marquee library on a television: a grid of game covers, with Marvel Rivals selected and its hours played shown above the grid](docs/images/library.jpg)
+
 ## What it does
 
 - **Reads your Steam library on its own**, with cover art, and launches games
