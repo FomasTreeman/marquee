@@ -447,3 +447,15 @@ export function tintFor(title: string): string {
   for (let i = 0; i < title.length; i++) h = (h * 31 + title.charCodeAt(i)) | 0
   return `hsl(${Math.abs(h) % 360} 22% 14%)`
 }
+
+/** The glyph drawn large and faint on a fallback card, behind the title: the
+ *  first printable character, taken as a whole code point so a surrogate pair
+ *  (an emoji title) or a combining accent is not sliced in half. Falls back to
+ *  '?' for a title that is empty or entirely whitespace -- metadata still
+ *  arriving, or a manual entry with no name yet -- rather than leaving the
+ *  slot blank, which is indistinguishable from the glyph having failed to
+ *  render. */
+export function monogramFor(title: string): string {
+  const glyph = [...title.trim()][0]
+  return glyph ? glyph.toUpperCase() : '?'
+}
