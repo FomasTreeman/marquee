@@ -588,10 +588,21 @@ pub fn start(
                 }
             });
         }
-        Launch::Process { program, args, cwd, elevated } => {
+        Launch::Process {
+            program,
+            args,
+            cwd,
+            elevated,
+        } => {
             #[cfg(target_os = "windows")]
             if *elevated {
-                start_elevated(program, cwd.as_deref(), game.title.clone(), on_failure, on_exit)?;
+                start_elevated(
+                    program,
+                    cwd.as_deref(),
+                    game.title.clone(),
+                    on_failure,
+                    on_exit,
+                )?;
                 return Ok(plan);
             }
             #[cfg(not(target_os = "windows"))]
