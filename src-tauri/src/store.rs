@@ -73,6 +73,13 @@ const MIGRATIONS: &[&str] = &[
     // it was launched. Recorded here instead, at the moment we spawn it
     // ourselves, since a manual game is the one case where we own the launch.
     "ALTER TABLE manual_game ADD COLUMN last_played INTEGER;",
+    // v6. Some manually-added games refuse to run, or run but misbehave,
+    // without administrator rights -- older installers and a few DRM wrappers
+    // in particular. Steam decides this for its own games through its own
+    // client, so the column lives on manual_game rather than user_game: it is
+    // part of how this one game is launched, the same as `executable`, not a
+    // cosmetic override that applies regardless of provider.
+    "ALTER TABLE manual_game ADD COLUMN run_as_admin INTEGER NOT NULL DEFAULT 0;",
 ];
 
 pub struct Store(Mutex<Connection>);
@@ -154,13 +161,16 @@ pub struct ManualGame {
     /// successful launch -- there is no scanner that could ever learn this from
     /// elsewhere, unlike Steam's `localconfig.vdf`.
     pub last_played: Option<i64>,
+    /// Launch elevated. Windows only -- see `run::plan` and `run::start`.
+    pub run_as_admin: bool,
 }
 
 impl Store {
     pub fn manual_games(&self) -> Result<Vec<ManualGame>, String> {
         self.with(|c| {
             let mut stmt = c.prepare(
-                "SELECT id, title, steam_app_id, executable, args, last_played FROM manual_game ORDER BY id",
+                "SELECT id, title, steam_app_id, executable, args, last_played, run_as_admin
+                 FROM manual_game ORDER BY id",
             )?;
             let rows = stmt.query_map([], |r| {
                 Ok(ManualGame {
@@ -170,6 +180,7 @@ impl Store {
                     executable: r.get(3)?,
                     args: r.get(4)?,
                     last_played: r.get(5)?,
+                    run_as_admin: r.get::<_, i64>(6)? != 0,
                 })
             })?;
             rows.collect()
@@ -210,6 +221,16 @@ impl Store {
             c.execute(
                 "UPDATE manual_game SET executable = ?2 WHERE id = ?1",
                 params![id, executable],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn set_run_as_admin(&self, id: i64, on: bool) -> Result<(), String> {
+        self.with(|c| {
+            c.execute(
+                "UPDATE manual_game SET run_as_admin = ?2 WHERE id = ?1",
+                params![id, i64::from(on)],
             )?;
             Ok(())
         })
@@ -495,6 +516,20 @@ mod tests {
         assert_eq!(games[0].title, "Hollow Knight");
         assert_eq!(games[0].steam_app_id.as_deref(), Some("367520"));
         assert_eq!(games[0].executable.as_deref(), Some("/games/hk/hk.exe"));
+        assert!(!games[0].run_as_admin, "should not be elevated by default");
+    }
+
+    #[test]
+    fn run_as_administrator_can_be_toggled() {
+        let s = memory();
+        let id = s.add_manual_game("Old Installer", None).unwrap();
+        assert!(!s.manual_games().unwrap()[0].run_as_admin);
+
+        s.set_run_as_admin(id, true).unwrap();
+        assert!(s.manual_games().unwrap()[0].run_as_admin);
+
+        s.set_run_as_admin(id, false).unwrap();
+        assert!(!s.manual_games().unwrap()[0].run_as_admin);
     }
 
     /// A hand-added game has no `localconfig.vdf` for anything to learn its

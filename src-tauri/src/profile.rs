@@ -178,6 +178,9 @@ pub fn apply(store: &Store, profile: &Profile) -> Result<ImportSummary, String> 
         if let Some(exe) = &game.executable {
             store.set_executable(id, Some(exe))?;
         }
+        if game.run_as_admin {
+            store.set_run_as_admin(id, true)?;
+        }
         added += 1;
     }
 
@@ -272,6 +275,7 @@ mod tests {
             .unwrap();
         a.set_executable(manual, Some("/games/stg/game.exe"))
             .unwrap();
+        a.set_run_as_admin(manual, true).unwrap();
 
         let exported = collect(&a).unwrap();
         let dir = std::env::temp_dir().join("marquee-profile-test");
@@ -305,7 +309,8 @@ mod tests {
             .manual
             .iter()
             .any(|m| m.title == "Some Torrented Game"
-                && m.executable.as_deref() == Some("/games/stg/game.exe")));
+                && m.executable.as_deref() == Some("/games/stg/game.exe")
+                && m.run_as_admin));
         assert_eq!(loaded.games.len(), exported.games.len());
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -375,6 +380,7 @@ mod tests {
                 executable: None,
                 args: String::new(),
                 last_played: None,
+                run_as_admin: false,
             }],
             roots: vec![],
         };
@@ -406,6 +412,7 @@ mod tests {
             .add_manual_game("Torrented Game", Some("367520"))
             .unwrap();
         old.set_executable(id, Some("/games/tg/game.exe")).unwrap();
+        old.set_run_as_admin(id, true).unwrap();
 
         let dir = std::env::temp_dir().join("marquee-profile-restore");
         let _ = std::fs::remove_dir_all(&dir);
@@ -438,6 +445,10 @@ mod tests {
         // anyway: a wrong path beats an empty field, and a missing executable
         // is reported clearly when it is used.
         assert_eq!(manual[0].executable.as_deref(), Some("/games/tg/game.exe"));
+        assert!(
+            manual[0].run_as_admin,
+            "a game that needed administrator on the old machine still should here"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

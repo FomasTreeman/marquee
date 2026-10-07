@@ -68,6 +68,7 @@ export function SAMPLE_LIBRARY(n: number): Game[] {
       favourite: i % 11 === 0,
       hidden: false,
       artAppId: null,
+      runAsAdmin: false,
     })
   }
   return out

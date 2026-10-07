@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createDetail, nextActionFocus, renameIntent, revealThenFocus } from '../detail'
-import { viewInStore } from '../library'
+import { viewInStore, setRunAsAdmin } from '../library'
 import type { Game } from '../library'
 
 vi.mock('../library', async (importOriginal) => {
@@ -9,6 +9,7 @@ vi.mock('../library', async (importOriginal) => {
     ...actual,
     setHidden: vi.fn(() => Promise.resolve()),
     viewInStore: vi.fn(() => Promise.resolve('steam://store/220')),
+    setRunAsAdmin: vi.fn(() => Promise.resolve()),
   }
 })
 
@@ -125,7 +126,7 @@ describe('createDetail hide button', () => {
   const game: Game = {
     id: 'steam:220', provider: 'steam', providerId: '220', title: 'Half-Life 2',
     installed: false, updateAvailable: false, updating: false, installDir: null, sizeBytes: 0, lastPlayed: null,
-    playtimeMinutes: 0, favourite: false, hidden: false, artAppId: null,
+    playtimeMinutes: 0, favourite: false, hidden: false, artAppId: null, runAsAdmin: false,
   }
 
   afterEach(() => vi.unstubAllGlobals())
@@ -204,12 +205,12 @@ describe('createDetail view in store button', () => {
   const steamGame: Game = {
     id: 'steam:220', provider: 'steam', providerId: '220', title: 'Half-Life 2',
     installed: false, updateAvailable: false, updating: false, installDir: null, sizeBytes: 0, lastPlayed: null,
-    playtimeMinutes: 0, favourite: false, hidden: false, artAppId: null,
+    playtimeMinutes: 0, favourite: false, hidden: false, artAppId: null, runAsAdmin: false,
   }
   const manualGame: Game = {
     id: 'manual:1', provider: 'manual', providerId: '1', title: 'Some Game',
     installed: true, updateAvailable: false, updating: false, installDir: 'C:/game.exe', sizeBytes: 0, lastPlayed: null,
-    playtimeMinutes: 0, favourite: false, hidden: false, artAppId: null,
+    playtimeMinutes: 0, favourite: false, hidden: false, artAppId: null, runAsAdmin: false,
   }
 
   afterEach(() => vi.unstubAllGlobals())
@@ -242,6 +243,75 @@ describe('createDetail view in store button', () => {
 
     const root = (body.children as Record<string, unknown>[])[0]
     expect(findByText(root, 'View in Steam Store')).toBeUndefined()
+  })
+})
+
+/**
+ * "Run as administrator" only means anything on Windows -- there is no UAC
+ * prompt to show elsewhere -- and only once a hand-added game has an
+ * executable to elevate. `supportsRunAsAdmin` is how main.ts tells the view
+ * which machine it is on; without that guard this would show on every
+ * platform and do nothing useful when pressed on two of the three.
+ */
+describe('createDetail run as administrator button', () => {
+  const manualGame: Game = {
+    id: 'manual:1', provider: 'manual', providerId: '1', title: 'Some Game',
+    installed: true, updateAvailable: false, updating: false, installDir: 'C:/game.exe', sizeBytes: 0, lastPlayed: null,
+    playtimeMinutes: 0, favourite: false, hidden: false, artAppId: null, runAsAdmin: false,
+  }
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  function stubDom(): { body: Record<string, unknown> } {
+    const body = fakeElement()
+    vi.stubGlobal('document', { createElement: () => fakeElement(), body })
+    vi.stubGlobal('window', { setTimeout: (cb: () => void, ms: number) => setTimeout(cb, ms) })
+    vi.stubGlobal('requestAnimationFrame', () => 0)
+    return { body }
+  }
+
+  it('does not show when the platform does not support it', () => {
+    const { body } = stubDom()
+    const view = createDetail({ onPlay: vi.fn(), onChanged: vi.fn(), onFindArtwork: vi.fn() })
+    view.open(manualGame, undefined, {})
+
+    const root = (body.children as Record<string, unknown>[])[0]
+    expect(findByText(root, 'Run as administrator')).toBeUndefined()
+  })
+
+  it('does not show for a game with no executable yet', () => {
+    const { body } = stubDom()
+    const view = createDetail({
+      onPlay: vi.fn(), onChanged: vi.fn(), onFindArtwork: vi.fn(), supportsRunAsAdmin: true,
+    })
+    view.open({ ...manualGame, installed: false }, undefined, {})
+
+    const root = (body.children as Record<string, unknown>[])[0]
+    expect(findByText(root, 'Run as administrator')).toBeUndefined()
+  })
+
+  it('toggles on and off, saving each change', async () => {
+    const { body } = stubDom()
+    const onChanged = vi.fn()
+    const view = createDetail({
+      onPlay: vi.fn(), onChanged, onFindArtwork: vi.fn(), supportsRunAsAdmin: true,
+    })
+    view.open(manualGame, undefined, {})
+
+    const root = (body.children as Record<string, unknown>[])[0]
+    const admin = findByText(root, 'Run as administrator')
+    expect(admin?.textContent).toBe('Run as administrator: Off')
+
+    ;(admin?.onclick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(setRunAsAdmin).toHaveBeenCalledWith(1, true)
+    expect(admin?.textContent).toBe('Run as administrator: On')
+    expect(onChanged).toHaveBeenCalledOnce()
+
+    ;(admin?.onclick as () => void)()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(setRunAsAdmin).toHaveBeenCalledWith(1, false)
+    expect(admin?.textContent).toBe('Run as administrator: Off')
   })
 })
 

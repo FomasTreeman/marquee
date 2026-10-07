@@ -70,8 +70,22 @@ tauri-plugin-process = "2"
 windows-sys = { version = "0.59", features = [
     "Win32_System_Power",
     # ShellExecuteW, for opening steam:// without a console window flashing
-    # up. See run::shell_execute.
+    # up, and ShellExecuteExW's "runas" verb, the only way to show a UAC
+    # prompt for a game that needs to run as administrator. See
+    # run::shell_execute and run::spawn_elevated.
     "Win32_UI_Shell",
+    # HANDLE and CloseHandle, for the process handle ShellExecuteExW hands
+    # back instead of a std::process::Child. See run::ElevatedChild.
+    "Win32_Foundation",
+    # WaitForSingleObject and GetExitCodeProcess, to watch that handle the
+    # same way the ordinary launch path watches an owned Child. See
+    # run::start_elevated.
+    "Win32_System_Threading",
+    # SHELLEXECUTEINFOW and ShellExecuteExW are gated behind this feature in
+    # windows-sys, for reasons that have nothing to do with the registry --
+    # the struct has an HKEY field it does not otherwise use. See
+    # run::spawn_elevated.
+    "Win32_System_Registry",
 ] }
 # Steam records its own install path in the registry. Reading it beats
 # guessing Program Files, because a lot of people move Steam to another drive.

@@ -30,6 +30,10 @@ export interface Game {
   hidden: boolean
   /** Where artwork comes from, when not from providerId. User-set. */
   artAppId: string | null
+  /** Launch elevated. Only meaningful for a manual game on Windows -- a Steam
+   *  game launches through Steam's own client, which decides this for
+   *  itself, so it is always false there. */
+  runAsAdmin: boolean
 }
 
 export interface Meta {
@@ -143,6 +147,11 @@ export async function addManualGame(title: string, steamAppId?: string): Promise
 
 export async function setManualExecutable(id: number, executable: string | null): Promise<void> {
   return call<void>('set_manual_executable', { id, executable })
+}
+
+/** Launch elevated, or not. Windows only -- see src-tauri/src/run.rs. */
+export async function setRunAsAdmin(id: number, on: boolean): Promise<void> {
+  return call<void>('set_manual_run_as_admin', { id, on })
 }
 
 export async function removeManualGame(id: number): Promise<void> {

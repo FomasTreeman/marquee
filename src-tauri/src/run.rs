@@ -31,6 +31,16 @@
 //!
 //! **Manual** games spawn directly, so we own the child and can time the
 //! session exactly.
+//!
+//! A manual game can also ask to run elevated -- some installers and DRM
+//! wrappers refuse to start, or misbehave, without it. `std::process::Command`
+//! has no way to show the UAC prompt; only `ShellExecuteExW`'s `"runas"` verb
+//! does, and it hands back a raw process handle rather than a `Child`, so
+//! `spawn_elevated` and `start_elevated` watch that by hand instead of through
+//! `Child::try_wait`/`Child::wait`, to keep the same session-end behaviour
+//! (and so the same window restore) as the non-elevated path. Windows only --
+//! there is no controller-friendly equivalent of a UAC prompt or a sudo
+//! password elsewhere.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -49,6 +59,8 @@ pub enum Launch {
         program: PathBuf,
         args: Vec<String>,
         cwd: Option<PathBuf>,
+        /// Show a UAC prompt and run elevated. Windows only -- see `start`.
+        elevated: bool,
     },
 }
 
@@ -84,6 +96,7 @@ pub fn plan(game: &Game) -> Result<Launch, String> {
                 program: path,
                 args: Vec::new(),
                 cwd,
+                elevated: game.run_as_admin,
             })
         }
         other => Err(format!("do not know how to launch a {other} game")),
@@ -196,6 +209,186 @@ fn shell_execute(uri: &str) -> Result<(), String> {
             std::io::Error::last_os_error()
         ));
     }
+    Ok(())
+}
+
+/// `SEE_MASK_NOCLOSEPROCESS`. Asks `ShellExecuteExW` to hand back a process
+/// handle in `hProcess` instead of closing it, which is the only way to keep
+/// watching an elevated launch at all -- defined here rather than imported,
+/// the same as `SHOW_NORMAL` above, because it is one stable, decades-old
+/// value and the module otherwise only needs the function itself.
+#[cfg(target_os = "windows")]
+const SEE_MASK_NOCLOSEPROCESS: u32 = 0x00000040;
+
+/// An elevated process, launched by [`spawn_elevated`].
+///
+/// `std::process::Command` cannot elevate at all -- `CreateProcess` has no
+/// "ask for administrator" flag, only `ShellExecuteExW`'s `"runas"` verb does,
+/// and that hands back a raw `HANDLE` rather than a `Child`. This wraps the
+/// handle so the watching code below can treat it the same way: poll it for
+/// an exit code, or block until one appears.
+#[cfg(target_os = "windows")]
+struct ElevatedChild(windows_sys::Win32::Foundation::HANDLE);
+
+// A HANDLE is an opaque identifier the kernel looks up by value; Microsoft's
+// own docs call out that the same handle may be used from any thread. The raw
+// pointer it may be represented as here is never dereferenced, only ever
+// handed back to the three Win32 calls below -- there is nothing thread-local
+// about it for Rust's auto-trait rules to be protecting against.
+#[cfg(target_os = "windows")]
+unsafe impl Send for ElevatedChild {}
+
+#[cfg(target_os = "windows")]
+impl Drop for ElevatedChild {
+    fn drop(&mut self) {
+        // SAFETY: self.0 was returned by ShellExecuteExW for this process and
+        // is not closed anywhere else.
+        unsafe { windows_sys::Win32::Foundation::CloseHandle(self.0) };
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl ElevatedChild {
+    /// Mirrors `Child::try_wait`: `Some(code)` once the process has exited,
+    /// `None` while it is still running.
+    fn try_exit_code(&self) -> Option<u32> {
+        use windows_sys::Win32::System::Threading::{GetExitCodeProcess, WaitForSingleObject};
+
+        // A zero timeout makes this a poll rather than a wait, the same shape
+        // as `Child::try_wait`'s single non-blocking check.
+        // SAFETY: self.0 is a valid, open process handle for the life of self.
+        if unsafe { WaitForSingleObject(self.0, 0) } != 0 {
+            return None;
+        }
+        let mut code: u32 = 0;
+        // SAFETY: code is a valid out-pointer for the duration of this call.
+        unsafe { GetExitCodeProcess(self.0, &mut code) };
+        Some(code)
+    }
+
+    /// Block until the process exits. Mirrors `Child::wait`.
+    fn wait(&self) {
+        use windows_sys::Win32::System::Threading::{WaitForSingleObject, INFINITE};
+        // SAFETY: self.0 is a valid, open process handle for the life of self.
+        unsafe { WaitForSingleObject(self.0, INFINITE) };
+    }
+}
+
+/// Start `program` elevated, showing the UAC prompt, and keep the process
+/// handle so the caller can still watch the session end.
+///
+/// `ERROR_CANCELLED` is what Windows reports when the prompt is dismissed --
+/// a refusal, not a bug, and worth saying as one rather than as a raw error
+/// code.
+#[cfg(target_os = "windows")]
+fn spawn_elevated(
+    program: &std::path::Path,
+    cwd: Option<&std::path::Path>,
+) -> Result<ElevatedChild, String> {
+    use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW};
+
+    const ERROR_CANCELLED: i32 = 1223;
+
+    fn wide(s: &std::ffi::OsStr) -> Vec<u16> {
+        use std::os::windows::ffi::OsStrExt;
+        s.encode_wide().chain(std::iter::once(0)).collect()
+    }
+
+    let verb = wide(std::ffi::OsStr::new("runas"));
+    let file = wide(program.as_os_str());
+    let dir = cwd.map(|d| wide(d.as_os_str()));
+
+    // Zeroed rather than naming every field: the ones this does not set --
+    // lpParameters, the hIcon/hMonitor union, hkeyClass and the rest -- are
+    // all documented as "none" at zero, and `SHELLEXECUTEINFOW` has no
+    // `Default` impl to lean on instead.
+    // SAFETY: SHELLEXECUTEINFOW is a plain-old-data struct of integers and
+    // pointers, and all-zero is a valid value for every field in it.
+    let mut info: SHELLEXECUTEINFOW = unsafe { std::mem::zeroed() };
+    // `hProcess`'s all-zero value, whatever that is -- kept rather than
+    // written as a literal so this does not have to know or assume how
+    // `HANDLE` is represented, only that the zeroed struct above already set
+    // it to "none".
+    let no_process = info.hProcess;
+    info.cbSize = std::mem::size_of::<SHELLEXECUTEINFOW>() as u32;
+    info.fMask = SEE_MASK_NOCLOSEPROCESS;
+    info.lpVerb = verb.as_ptr();
+    info.lpFile = file.as_ptr();
+    info.lpDirectory = dir.as_ref().map_or(std::ptr::null(), |d| d.as_ptr());
+    info.nShow = 1; // SW_SHOWNORMAL
+
+    // SAFETY: every pointer field set above points at a NUL-terminated buffer
+    // that outlives this call.
+    let ok = unsafe { ShellExecuteExW(&mut info) };
+    if ok == 0 {
+        let err = std::io::Error::last_os_error();
+        return Err(if err.raw_os_error() == Some(ERROR_CANCELLED) {
+            format!(
+                "the administrator prompt for {} was dismissed",
+                program.display()
+            )
+        } else {
+            format!(
+                "could not start {} as administrator: {err}",
+                program.display()
+            )
+        });
+    }
+    if info.hProcess == no_process {
+        // Some verbs never hand back a process even when SEE_MASK_NOCLOSEPROCESS
+        // asks for one -- nothing to watch, so this is a session that cannot be
+        // reported on rather than a session wrongly reported as something else.
+        return Err(format!(
+            "{} did not report a process to watch",
+            program.display()
+        ));
+    }
+    Ok(ElevatedChild(info.hProcess))
+}
+
+/// Start `program` elevated and watch it the same way the ordinary path below
+/// watches an owned `Child`: a clean, instant exit is treated as a launcher
+/// stub rather than a failure; a non-zero one is reported; anything that
+/// survives the grace period gets `on_exit` when it finally ends, which is
+/// what brings Marquee's window back (see the module doc and #63/#90).
+///
+/// Has to exist at all because `ShellExecuteExW`'s `"runas"` verb is the only
+/// way to show the UAC prompt, and what it hands back is a raw process
+/// handle, not a `std::process::Child`.
+#[cfg(target_os = "windows")]
+fn start_elevated(
+    program: &std::path::Path,
+    cwd: Option<&std::path::Path>,
+    title: String,
+    on_failure: impl FnOnce(String) + Send + 'static,
+    on_exit: impl FnOnce() + Send + 'static,
+) -> Result<(), String> {
+    log_info!("run", "spawning {} as administrator", program.display());
+    let child = spawn_elevated(program, cwd)?;
+
+    std::thread::spawn(move || {
+        std::thread::sleep(STARTUP_GRACE);
+        match child.try_exit_code() {
+            Some(0) => {
+                log_info!(
+                    "run",
+                    "{title} exited immediately, cleanly -- probably a launcher stub"
+                );
+                return;
+            }
+            Some(code) => {
+                let detail = format!("exited immediately with code {code}");
+                log_warn!("run", "{title} {detail}");
+                on_failure(detail);
+                return;
+            }
+            None => log_info!("run", "{title} is running"),
+        }
+
+        child.wait();
+        log_info!("run", "{title} session ended");
+        on_exit();
+    });
     Ok(())
 }
 
@@ -395,7 +588,39 @@ pub fn start(
                 }
             });
         }
-        Launch::Process { program, args, cwd } => {
+        Launch::Process {
+            program,
+            args,
+            cwd,
+            elevated,
+        } => {
+            #[cfg(target_os = "windows")]
+            if *elevated {
+                start_elevated(
+                    program,
+                    cwd.as_deref(),
+                    game.title.clone(),
+                    on_failure,
+                    on_exit,
+                )?;
+                return Ok(plan);
+            }
+            #[cfg(not(target_os = "windows"))]
+            if *elevated {
+                // There is no cross-platform equivalent of a UAC prompt, and
+                // typing a sudo password with a controller is not a thing this
+                // app can offer. Started normally rather than silently refused
+                // -- a game that merely *prefers* administrator usually still
+                // runs without it, and this can be reached here by importing a
+                // profile written on a Windows machine (docs/PLAN.md §3.5).
+                log_warn!(
+                    "run",
+                    "{} is set to run as administrator, which only applies on \
+                     Windows; starting it normally",
+                    game.title
+                );
+            }
+
             log_info!("run", "spawning {}", program.display());
             let mut cmd = Command::new(program);
             cmd.args(args);
@@ -513,6 +738,7 @@ mod tests {
             favourite: false,
             hidden: false,
             art_app_id: None,
+            run_as_admin: false,
         }
     }
 
@@ -682,6 +908,32 @@ mod tests {
         g.provider = "manual".into();
         let err = plan(&g).unwrap_err();
         assert!(err.contains("no executable"), "{err}");
+    }
+
+    /// `run_as_admin` on the game record is what `start` branches on to show
+    /// a UAC prompt instead of spawning directly, so it has to survive into
+    /// the plan rather than being dropped on the way.
+    #[test]
+    fn a_manual_game_set_to_run_as_administrator_plans_elevated() {
+        let mut g = steam_game("1");
+        g.provider = "manual".into();
+        g.install_dir = Some(std::env::current_exe().unwrap());
+        g.run_as_admin = true;
+        let Launch::Process { elevated, .. } = plan(&g).unwrap() else {
+            panic!("a manual game plans as a Process");
+        };
+        assert!(elevated, "run_as_admin should carry through to the plan");
+    }
+
+    #[test]
+    fn a_manual_game_defaults_to_not_elevated() {
+        let mut g = steam_game("1");
+        g.provider = "manual".into();
+        g.install_dir = Some(std::env::current_exe().unwrap());
+        let Launch::Process { elevated, .. } = plan(&g).unwrap() else {
+            panic!("a manual game plans as a Process");
+        };
+        assert!(!elevated);
     }
 
     /// An appid that never shows up as Steam's running game -- a hand-off

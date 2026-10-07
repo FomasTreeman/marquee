@@ -12,7 +12,7 @@
 import { open as openFileDialog } from '@tauri-apps/plugin-dialog'
 import {
   setManualExecutable, removeManualGame, findExecutable, setHidden, uninstallGame,
-  setCustomTitle, updateGame, viewInStore,
+  setCustomTitle, updateGame, viewInStore, setRunAsAdmin,
   type ArtworkManifest, type Game, type Meta, type Artwork,
 } from './library'
 import { toast } from './toast'
@@ -141,6 +141,10 @@ export interface DetailHooks {
   /** The rename field it was offered for is going away -- close it too, or it
    *  is left on screen with nothing left to type into (issue #18). */
   onTextFieldClosed?(): void
+  /** Whether to offer "Run as administrator" at all. Windows only -- a UAC
+   *  prompt has no equivalent elsewhere, so the control stays off the screen
+   *  rather than showing something that would do nothing if pressed. */
+  supportsRunAsAdmin?: boolean
 }
 
 /**
@@ -176,7 +180,10 @@ async function autoLocate(game: Game, button: HTMLElement, onChanged: () => void
 }
 
 export function createDetail(hooks: DetailHooks): DetailView {
-  const { onPlay, onChanged, onFindArtwork, onTextField, onTextFieldClosed } = hooks
+  const {
+    onPlay, onChanged, onFindArtwork, onTextField, onTextFieldClosed,
+    supportsRunAsAdmin = false,
+  } = hooks
   const root = el('div', 'detail', document.body)
   root.hidden = true
 
@@ -487,6 +494,32 @@ export function createDetail(hooks: DetailHooks): DetailView {
               .then(() => { toast(`Removed ${game.title}.`); onChanged() })
               .catch((e) => toast(`Could not remove that. ${String(e)}`, 'error'))
           }
+        }
+      }
+
+      // Windows only, and only once there is something to elevate -- some
+      // older installers and DRM wrappers refuse to run, or misbehave,
+      // without administrator rights.
+      if (manual && game.installed && supportsRunAsAdmin) {
+        let elevated = game.runAsAdmin
+        const admin = el('button', 'action', actions)
+        const describeAdmin = (): void => {
+          admin.textContent = elevated ? 'Run as administrator: On' : 'Run as administrator: Off'
+        }
+        describeAdmin()
+        admin.onclick = () => {
+          const id = Number(game.id.split(':')[1])
+          const next = !elevated
+          void setRunAsAdmin(id, next)
+            .then(() => {
+              elevated = next
+              describeAdmin()
+              toast(next
+                ? `${game.title} will ask to run as administrator next time.`
+                : `${game.title} will run normally next time.`)
+              onChanged()
+            })
+            .catch((e) => toast(`Could not set that. ${String(e)}`, 'error'))
         }
       }
 

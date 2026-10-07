@@ -248,6 +248,21 @@ fn set_manual_executable(
     Ok(())
 }
 
+/// Launch elevated, or not. Windows only in effect -- see `run::plan` and
+/// `run::start` -- but stored regardless of platform, the same as every other
+/// manual-game setting, so it survives a profile exported from one machine
+/// and imported onto another.
+#[tauri::command]
+fn set_manual_run_as_admin(
+    id: i64,
+    on: bool,
+    store: tauri::State<'_, std::sync::Arc<store::Store>>,
+) -> Result<(), String> {
+    store.set_run_as_admin(id, on)?;
+    profile_changed(&store);
+    Ok(())
+}
+
 #[tauri::command]
 fn remove_manual_game(
     id: i64,
@@ -942,6 +957,7 @@ pub fn run() {
             art_url_base,
             add_manual_game,
             set_manual_executable,
+            set_manual_run_as_admin,
             remove_manual_game,
             toggle_favourite,
             toggle_fullscreen,
