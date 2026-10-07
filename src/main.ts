@@ -686,6 +686,10 @@ async function main(): Promise<void> {
     void reloadLibrary()
   }, () => osk.close())
 
+  // A UAC prompt has no equivalent on macOS or Linux, so "Run as
+  // administrator" only appears where pressing it would do something.
+  const { os: hostOs } = await hostInfo()
+
   const detail = createDetail({
     onPlay: () => void play_(grid.focused),
     onChanged: () => void reloadLibrary(),
@@ -696,6 +700,7 @@ async function main(): Promise<void> {
     // live, after this callback is wired up.
     onTextField: (field) => { if (wantsOsk(heldDevice)) osk.attach(field) },
     onTextFieldClosed: () => osk.close(),
+    supportsRunAsAdmin: hostOs === 'windows',
   })
 
   // Steam writes playtime into localconfig itself, so returning to the window

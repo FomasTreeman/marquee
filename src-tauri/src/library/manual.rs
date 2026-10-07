@@ -54,6 +54,7 @@ impl LibraryProvider for Manual<'_> {
                 favourite: false,
                 hidden: false,
                 art_app_id: None,
+                run_as_admin: m.run_as_admin,
             })
             .collect())
     }

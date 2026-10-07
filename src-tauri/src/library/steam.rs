@@ -325,6 +325,7 @@ impl Steam {
                     favourite: false,
                     hidden: false,
                     art_app_id: None,
+                    run_as_admin: false,
                 });
             }
         }
@@ -372,6 +373,7 @@ impl Steam {
             favourite: false,
             hidden: false,
             art_app_id: None,
+            run_as_admin: false,
         })
     }
 }
@@ -530,6 +532,7 @@ mod tests {
             favourite: false,
             hidden: false,
             art_app_id: None,
+            run_as_admin: false,
         }
     }
 

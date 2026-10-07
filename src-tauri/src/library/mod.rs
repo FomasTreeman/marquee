@@ -55,6 +55,11 @@ pub struct Game {
     /// and the only thing that decides which appid the art URLs are built on.
     #[serde(default)]
     pub art_app_id: Option<String>,
+    /// Launch elevated. Only meaningful for a manual game on Windows -- a
+    /// Steam game launches through Steam's own client, which decides this for
+    /// itself, so it is always false here. See `run::plan` and `run::start`.
+    #[serde(default)]
+    pub run_as_admin: bool,
 }
 
 /// What a provider reports after a scan.
