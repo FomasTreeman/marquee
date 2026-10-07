@@ -538,6 +538,10 @@ fn run(app: AppHandle, start: Instant, shared: Arc<Status>) {
                 EventType::Disconnected => {
                     // Saturating, because a disconnect can arrive for a pad
                     // that was already gone when we enumerated at startup.
+                    // `fetch_update` is deprecated in favour of `try_update`,
+                    // which is too new for the declared rust-version of 1.77;
+                    // CI's toolchain warns and `-D warnings` made that red.
+                    #[allow(deprecated)]
                     let _ =
                         shared
                             .connected
