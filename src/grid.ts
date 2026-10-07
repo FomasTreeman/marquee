@@ -3,6 +3,7 @@ import {
   firstVisibleIndex, glide, metrics, move as moveIndex, poolSize, positionOf,
   scrollToShow, topClearance, gapCoversEdges, imageAction, type Metrics,
 } from './grid-math'
+import { monogramFor } from './library'
 
 /**
  * Virtualised cover grid.
@@ -35,6 +36,11 @@ interface Slot {
   el: HTMLElement
   art: HTMLElement
   fallback: HTMLElement
+  /** The large faint initial behind the title -- see docs/PLAN.md §6's note on
+   *  the absolute last-case placeholder. Decorative only; the title is what
+   *  actually identifies the game. */
+  fallbackGlyph: HTMLElement
+  fallbackLabel: HTMLElement
   img: HTMLImageElement
   /** Bumped on every reassignment, so a slow decode for an assignment that
    *  has since been superseded cannot reveal the wrong game's art -- the
@@ -214,13 +220,21 @@ export function createGrid(
     // over a banner being accepted in the first place.
     const fallback = document.createElement('div')
     fallback.className = 'card-fallback'
+    const fallbackGlyph = document.createElement('div')
+    fallbackGlyph.className = 'card-fallback-glyph'
+    // Decorative: the title text beside it is what a screen reader should
+    // announce, not a single letter standing in for it.
+    fallbackGlyph.setAttribute('aria-hidden', 'true')
+    const fallbackLabel = document.createElement('div')
+    fallbackLabel.className = 'card-fallback-label'
+    fallback.append(fallbackGlyph, fallbackLabel)
     const ring = document.createElement('div')
     ring.className = 'card-ring'
     art.append(fallback, img)
     el.append(art, ring)
 
     const s: Slot = {
-      el, art, fallback, img,
+      el, art, fallback, fallbackGlyph, fallbackLabel, img,
       index: -1, transform: '', focus: false, visible: false, generation: 0, failed: undefined,
     }
     // Parked until it is given an item. A fresh slot has index -1 and no
@@ -286,7 +300,8 @@ export function createGrid(
     }
     if (s.index !== index) {
       s.el.style.setProperty('--card-tint', item.tint)
-      s.fallback.textContent = item.title
+      s.fallbackLabel.textContent = item.title
+      s.fallbackGlyph.textContent = monogramFor(item.title)
       const generation = ++s.generation
       const action = imageAction(s.img.getAttribute('src'), s.failed, item.art)
       if (action === 'load') {
@@ -478,7 +493,10 @@ export function createGrid(
       if (!item) return
       item.title = title
       const slot = slots.find((s) => s.index === index && s.visible)
-      if (slot) slot.fallback.textContent = title
+      if (slot) {
+        slot.fallbackLabel.textContent = title
+        slot.fallbackGlyph.textContent = monogramFor(title)
+      }
     },
     move(dx, dy) { setFocus(moveIndex(focused, dx, dy, m.cols, items.length)) },
     get focused() { return focused },

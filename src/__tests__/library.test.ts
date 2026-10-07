@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { artIdFor, coverFor, steamArtwork, tintFor } from '../library'
+import { artIdFor, coverFor, monogramFor, steamArtwork, tintFor } from '../library'
 
 /**
  * The artwork key is the single point where a game and its pictures are joined,
@@ -79,5 +79,35 @@ describe('tintFor', () => {
       expect(m, `no match for ${JSON.stringify(t)}`).not.toBeNull()
       expect(Number(m![1])).toBeLessThan(360)
     }
+  })
+})
+
+describe('monogramFor', () => {
+  it('takes the first letter, upper-cased', () => {
+    expect(monogramFor('Hollow Knight')).toBe('H')
+    expect(monogramFor('portal')).toBe('P')
+  })
+
+  it('ignores leading whitespace', () => {
+    expect(monogramFor('  Wardogs')).toBe('W')
+  })
+
+  it('takes a whole code point, not half a surrogate pair', () => {
+    // '🎮'.charAt(0) is an unpaired surrogate, which renders as a replacement
+    // glyph rather than a controller -- the exact failure a naive [0] index
+    // produces on an emoji title.
+    expect(monogramFor('🎮 Game')).toBe('🎮')
+  })
+
+  it('does not split a combining accent from its base letter', () => {
+    expect(monogramFor('Ōkami')).toBe('Ō')
+  })
+
+  it('falls back to a question mark for a title that is empty or blank', () => {
+    // A manual entry with no name yet, or metadata still arriving -- library.ts
+    // deliberately leaves `title` empty rather than a placeholder, so this is
+    // the one place that has to stand in for it without claiming a name.
+    expect(monogramFor('')).toBe('?')
+    expect(monogramFor('   ')).toBe('?')
   })
 })

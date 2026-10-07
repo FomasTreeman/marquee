@@ -133,9 +133,31 @@ html[data-background="blur"] .backdrop-img {
 }
 
 /* Shown until the cover arrives, and for good when there is none: a
-   deterministic tint plus the title, so a grid is readable while scrolling
-   before any artwork has loaded. */
+   deterministic tint, the title, and a large faint initial -- so the absolute
+   last case (no Steam cover, hero or wordmark at all; some early access
+   titles have none) reads as a designed card rather than a blank grey one. */
 .card-fallback {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(160deg, var(--card-tint), #0a0b0e 78%);
+}
+
+/* Centred behind the title, not in front of it -- a single letter is
+   decoration, and decoration winning a fight with the text that actually
+   identifies the game would make the card harder to read, not easier. */
+.card-fallback-glyph {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: calc(64px * var(--s));
+  font-weight: 600;
+  color: rgb(255 255 255 / 0.1);
+  user-select: none;
+}
+
+.card-fallback-label {
   position: absolute;
   inset: 0;
   display: flex;
@@ -144,7 +166,6 @@ html[data-background="blur"] .backdrop-img {
   font-size: 13px;
   line-height: 1.25;
   color: var(--fg2);
-  background: linear-gradient(160deg, var(--card-tint), #0a0b0e 78%);
 }
 
 /* --- focus ring ---------------------------------------------------
